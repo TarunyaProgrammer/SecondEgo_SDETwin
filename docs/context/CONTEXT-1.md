@@ -4,6 +4,18 @@ One important correction first: **we should not accidentally build “Second Sel
 
 The architecture therefore needs to optimize for the actual rubric: correctness, orchestration, context management, tools, efficiency, recovery, and technical quality. 
 
+## Current implementation note (September 2026)
+
+This document is the original architecture proposal and remains useful for
+rationale, but its proposed Python implementation stack is no longer the final
+engine direction. The production engine is being migrated to Rust under
+`engine-rs/`; Python is the verified compatibility/reference path until parity
+gates pass. The Rust design keeps the same contracts—state machine, provider
+boundary, indexing, bounded context, safe tools, transactions, verification,
+recovery, telemetry, and SQLite persistence—but makes Rust the authoritative
+runtime after cutover. Prefer `uv` only for the temporary Python reference path;
+use Cargo for the final engine.
+
 # 1. Project identity
 
 I suggest we call the repository:

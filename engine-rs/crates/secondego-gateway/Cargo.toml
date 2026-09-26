@@ -1,0 +1,15 @@
+[package]
+name = "secondego-gateway"
+version = "0.1.0"
+edition = "2024"
+description = "Loopback-only Rust gateway for the SecondEgo desktop observer"
+license = "MIT"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+secondego-core = { path = "../secondego-core" }
+secondego-model = { path = "../secondego-model" }
+secondego-runtime = { path = "../secondego-runtime" }
+uuid = { version = "1", features = ["v4", "serde"] }
+

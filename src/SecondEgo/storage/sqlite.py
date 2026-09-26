@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Sequence
 
 from SecondEgo.context.policy import EvidenceRecord
-from SecondEgo.core.events import EngineEvent
+from SecondEgo.core.events import EVENT_SCHEMA_VERSION, EngineEvent
 from SecondEgo.core.state import ExecutionState
 
 from .redaction import redact_sensitive
@@ -112,6 +112,7 @@ class SQLiteRunStore:
             "state": json.loads(run[5]),
             "events": [
                 {
+                    "schema_version": EVENT_SCHEMA_VERSION,
                     "event_type": event[0],
                     "phase": event[1],
                     "status": event[2],

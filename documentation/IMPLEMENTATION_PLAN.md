@@ -1,6 +1,6 @@
 # SecondEgo Implementation Plan
 
-Status: active implementation plan; headless runtime delivered; presentation boundary in progress
+Status: active implementation plan; Rust migration vertical slice delivered; evaluator cutover gated by parity
 
 This plan reconciles `docs/context/CONTEXT.md`, `docs/context/CONTEXT-1.md`, `docs/context/CONTEXT-2.md`, the repository `AGENTS.md`, and the hackathon scoring rubric supplied by the user.
 
@@ -8,11 +8,11 @@ This plan reconciles `docs/context/CONTEXT.md`, `docs/context/CONTEXT-1.md`, `do
 
 SecondEgo has three layers:
 
-1. **Core harness** — the Python system that independently understands an issue, explores a repository, plans, edits, verifies, recovers, and terminates with evidence.
+1. **Core harness** — the Rust system that independently understands an issue, explores a repository, plans, edits, verifies, recovers, and terminates with evidence. Python remains a verified compatibility/reference path during migration.
 2. **Desktop shell** — Electron/React UI that visualizes real engine events and provides bounded control. It is not authoritative for execution.
 3. **Local data** — SQLite for rebuildable repository metadata, execution state, telemetry, and reports.
 
-The headless core is the competition-critical product. The shell is added only after the core vertical slice works.
+The headless Rust core is the final competition-critical product. The shell is an observer and is added only after the core event boundary works.
 
 ElevenLabs, OpenCV, graph databases, vector databases, multi-agent swarms, and voice assistants are out of scope unless a later requirement makes them directly relevant. They do not improve the coding-agent problem by themselves.
 
@@ -256,7 +256,42 @@ boundary.
 - UI state is derived only from engine events;
 - the same fixture result is produced in headless and presentation modes.
 
-## 6. Evaluation proof plan
+## 6. Rust migration and cutover plan
+
+The final engine is Rust. Migration is staged because changing the evaluator
+default before parity would make failures harder to diagnose and would remove the
+known-good rollback path.
+
+```text
+Rust core contracts
+  -> repository index and explainable retrieval
+  -> bounded evidence context
+  -> provider boundary (scripted + Gemini)
+  -> safe tools and detached worktree transaction
+  -> verification and one bounded recovery cycle
+  -> SQLite report persistence
+  -> Rust CLI and loopback gateway
+  -> root Makefile cutover
+```
+
+Current Rust crates:
+
+- `secondego-core`: state machine, terminal statuses, versioned events, budgets;
+- `secondego-repository`: bounded scanner, Tree-sitter Python index, tests/imports/links, ranked retrieval;
+- `secondego-context`: source-linked ledger, stale evidence, packet budgets and omissions;
+- `secondego-model`: deterministic scripted provider and bounded Gemini REST adapter;
+- `secondego-tools`: path/command/file/search/Git policy and detached worktree transaction;
+- `secondego-verification`: command evidence and failure classification;
+- `secondego-runtime`: indexed plan/execute/verify/recover orchestration;
+- `secondego-storage`: local SQLite run/event persistence;
+- `secondego-cli`: replayable fixture and Gemini-backed Rust entry point.
+
+The Rust engine is exercised with `make rust-run` and `make rust-test`. The root
+`make run` remains Python until the parity gates pass: recovery fixture, dirty/non-
+Git/path escape/timeout safety cases, report/evidence parity, gateway integration,
+and clean-checkout evaluator commands.
+
+## 7. Evaluation proof plan
 
 ### Problem and user value — 20%
 
@@ -278,7 +313,7 @@ Use the sequence: issue → repository map → plan → edit → failure → dia
 
 Show provider abstraction, mock mode, bounded API cost, SQLite, local execution, redacted telemetry, and headless operation.
 
-## 7. Non-negotiable gates
+## 8. Non-negotiable gates
 
 The project is not ready for a judging demo until:
 
@@ -294,19 +329,20 @@ The project is not ready for a judging demo until:
 - the fixture repository can be reset;
 - the UI has no invented progress or fake agent activity.
 
-## 8. Current delivery status
+## 9. Current delivery status
 
 Milestones A, B, the first vertical slice, the transactional safety increment, and
 the first diagnosis-informed recovery loop are implemented. The presentation
-boundary is now in progress with 48 contract tests. The first localhost gateway
-and browser observer slice exists; the remaining competition-critical work is
-gateway integration testing, the final desktop observer, richer telemetry, and
-a realistic local evaluation fixture.
+boundary is now in progress with 51 Python tests plus the Rust workspace suite.
+The localhost gateway, browser fallback, Electron/React observer shell, Rust CLI,
+Rust gateway, and Rust recovery fixture now exist; remaining competition-critical
+work is cross-process integration testing, richer telemetry, packaging, broader
+language indexing, and a broader realistic evaluation fixture.
 
-## 9. Immediate next action
+## 10. Immediate next action
 
 The next implementation task is gateway integration testing: verify bounded
 requests, authentication, observer disconnects, and headless equivalence. After
-that passes, replace the dependency-free browser observer with the minimal
-React/Electron shell while preserving the same event contract. No voice,
-computer vision, graph database, or always-on service should be added.
+that passes, harden the React/Electron packaging and preserve the same event
+contract. No voice, computer vision, graph database, or always-on service should
+be added.

@@ -1,0 +1,20 @@
+[package]
+name = "secondego-runtime"
+version = "0.1.0"
+edition = "2024"
+description = "Bounded Rust orchestration runtime for SecondEgo"
+license = "MIT"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+secondego-context = { path = "../secondego-context" }
+secondego-core = { path = "../secondego-core" }
+secondego-model = { path = "../secondego-model" }
+secondego-repository = { path = "../secondego-repository" }
+secondego-tools = { path = "../secondego-tools" }
+secondego-verification = { path = "../secondego-verification" }
+
+[dev-dependencies]
+tempfile = "3"
+

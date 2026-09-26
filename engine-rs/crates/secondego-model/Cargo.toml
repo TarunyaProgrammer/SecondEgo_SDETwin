@@ -1,0 +1,13 @@
+[package]
+name = "secondego-model"
+version = "0.1.0"
+edition = "2024"
+description = "Provider-neutral structured model boundary for SecondEgo"
+license = "MIT"
+
+[dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+secondego-core = { path = "../secondego-core" }
+

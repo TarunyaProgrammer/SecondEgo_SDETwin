@@ -4,7 +4,7 @@
 
 This repository is **SecondEgo**: a local desktop coding-agent application whose core is an autonomous coding harness. The current design sources are [`CONTEXT-1.md`](docs/context/CONTEXT-1.md) and [`CONTEXT-2.md`](docs/context/CONTEXT-2.md). They describe the target architecture; they are not permission to implement product code or to assume that every proposed technology is final.
 
-The working architectural direction is a Python-based, model-provider-agnostic engine behind a desktop shell with:
+The working architectural direction is a Rust-based, model-provider-agnostic engine behind a desktop shell. During the staged migration, the existing Python runtime is a verified reference and compatibility path; it is not the final engine. The Rust engine must provide:
 
 - repository intelligence and focused context retrieval;
 - a hierarchical state machine for understand, explore, plan, execute, verify, diagnose, and recover;
@@ -12,7 +12,7 @@ The working architectural direction is a Python-based, model-provider-agnostic e
 - explicit state, bounded context, telemetry, and test-driven verification.
 - an Electron + React pixel-village interface that visualizes engine state rather than containing core agent logic;
 - SQLite for local, rebuildable execution state and repository metadata;
-- a local IPC/API boundary between the desktop UI and Python engine.
+- a local IPC/API boundary between the desktop UI and Rust engine.
 
 ## Scope discipline
 
@@ -42,7 +42,7 @@ Project-specific Antigravity skills live under [`.agent/skills/`](.agent/skills/
 - [`second-ego-context-management`](.agent/skills/second-ego-context-management/SKILL.md): context budgets, compression, retention, and evidence.
 - [`second-ego-orchestration`](.agent/skills/second-ego-orchestration/SKILL.md): state-machine execution, tool routing, verification, and recovery.
 - [`second-ego-desktop`](.agent/skills/second-ego-desktop/SKILL.md): desktop-shell boundaries and local IPC.
-- [`second-ego-python-engine`](.agent/skills/second-ego-python-engine/SKILL.md): Python engine structure and provider abstraction.
+- [`second-ego-python-engine`](.agent/skills/second-ego-python-engine/SKILL.md): engine boundaries and provider abstraction during migration; Rust is the final runtime.
 - [`second-ego-ui-state`](.agent/skills/second-ego-ui-state/SKILL.md): pixel-village state visualization and UI evidence.
 - [`second-ego-verification`](.agent/skills/second-ego-verification/SKILL.md): tests, diffs, telemetry, and termination evidence.
 - [`second-ego-security`](.agent/skills/second-ego-security/SKILL.md): local-tool security, secrets, permissions, and sandboxing.

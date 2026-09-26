@@ -8,3 +8,9 @@ build/
 *.db
 *.egg-info/
 telemetry/*.jsonl
+apps/desktop/node_modules/
+apps/desktop/dist/
+*.tsbuildinfo
+apps/desktop/vite.config.js
+apps/desktop/vite.config.d.ts
+engine-rs/target/

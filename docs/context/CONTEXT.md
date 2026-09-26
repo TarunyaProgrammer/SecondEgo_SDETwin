@@ -2,7 +2,10 @@
 
 ## Current status
 
-The repository now contains an early, headless implementation of the core harness. It is not yet the full desktop product.
+The repository contains a verified headless Python reference runtime and an
+executable staged Rust engine. The final engine direction is Rust; Python remains
+the compatibility/reference path until the Rust CLI, gateway, recovery fixtures,
+and evaluator contract reach parity.
 
 Implemented vertical slice:
 
@@ -18,11 +21,12 @@ Implemented vertical slice:
 - optional loopback-only observer gateway and browser UI that consume serialized engine events without adding model/tool calls;
 - redacted bounded telemetry and generated-file filtering at the transaction boundary;
 - SQLite schema version 1 for final run state, events, and evidence;
+- Rust crates for contracts, indexing, bounded context, model providers, tools/transactions, verification, runtime, storage, and CLI;
 - CLI execution and automated contract tests.
 
-Still unimplemented: Electron/React shell, packaging, broad language parsing, benchmark fixtures, and full telemetry/report schemas.
+Still unimplemented: desktop packaging/installer, broad language parsing, a broader benchmark suite, and full telemetry/report schemas. The first Electron/React observer shell and loopback gateway are now present.
 
-The approved next architecture increment is documented in
+The approved Rust migration and cutover sequence is documented in
 [`LCC_ARCHITECTURE.md`](LCC_ARCHITECTURE.md). It prioritizes transactional attempts,
 test- and failure-aware retrieval, bounded phase-specific context packets, and one
 diagnosis-informed recovery over UI work or additional infrastructure.
@@ -42,7 +46,7 @@ diagnosis-informed recovery over UI work or additional infrastructure.
 4. Prefer a small set of reliable tools over a large tool catalog.
 5. Treat context selection, compression, retention, and evidence as first-class concerns.
 6. Make termination explicit: success, justified failure, or blocked state.
-7. Keep the Electron/React pixel-village shell separate from the Python engine and keep the core runnable headlessly.
+7. Keep the Electron/React pixel-village shell separate from the Rust engine and keep the core runnable headlessly.
 8. Use SQLite for local execution state and rebuildable repository metadata before considering external infrastructure.
 9. Meet the standard evaluation contract through a root `Makefile` exposing `setup`, `run`, `test`, and `clean`.
 10. Read the evaluator-supplied credential only from `AI_API_KEY`; never persist or log it.
@@ -66,6 +70,7 @@ diagnosis-informed recovery over UI work or additional infrastructure.
 - Evaluation tasks, benchmark fixtures, and final telemetry/report schemas.
 - The transactional runtime currently requires a clean Git repository root with an initial commit; non-Git and dirty targets intentionally block mutation until a bounded journal fallback exists.
 - Desktop transport contract and Electron/React shell implementation.
+- Rust migration and cutover are tracked in [`RUST_MIGRATION_PLAN.md`](RUST_MIGRATION_PLAN.md); `make rust-run` exercises the Rust engine without changing the evaluator default yet.
 
 ## Change protocol
 

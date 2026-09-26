@@ -31,7 +31,7 @@ from SecondEgo.storage.redaction import redact_sensitive
 from SecondEgo.verification.contracts import FailureClass, VerificationResult
 from SecondEgo.verification.verifier import VerificationEngine
 from SecondEgo.cli import _proposal
-from SecondEgo.desktop.gateway import RunRecord
+from SecondEgo.desktop.gateway import RunRecord, RunRegistry
 
 
 def test_execution_state_snapshot_is_structured_and_bounded() -> None:
@@ -85,6 +85,26 @@ def test_gateway_run_record_exposes_incremental_versioned_events() -> None:
 
     assert snapshot["status"] == "RUNNING"
     assert snapshot["events"][0]["schema_version"] == 1
+
+
+def test_gateway_registry_validates_bounded_run_requests(tmp_path) -> None:
+    registry = RunRegistry()
+
+    with pytest.raises(ValueError, match="issue"):
+        registry.submit(repository=str(tmp_path), issue=" ")
+    with pytest.raises(ValueError, match="repository"):
+        registry.submit(repository=str(tmp_path / "missing"), issue="fix")
+
+
+def test_gateway_registry_accepts_valid_request_without_running_model(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(RunRegistry, "_run", lambda self, record: None)
+    registry = RunRegistry()
+
+    record = registry.submit(repository=str(tmp_path), issue="fix the issue", model="test-model")
+
+    assert registry.get(record.request_id) is record
+    assert record.status == "QUEUED"
+    assert record.model == "test-model"
 
 
 def test_context_budget_rejects_overflow() -> None:
@@ -415,10 +435,12 @@ def test_harness_engine_runs_edit_to_verified_completion(tmp_path) -> None:
     assert result.state.phase is Phase.VERIFY
     assert result.verification.passed is True
     assert "src/version.py" in result.state.changed_paths
+    assert any(event.event_type == "run.resources" for event in result.events)
     repository_evidence = next(item for item in result.evidence if item.reference == "repository:scan")
     assert "symbols=" in repository_evidence.summary
-    assert [event.event_type for event in result.events][-2:] == [
+    assert [event.event_type for event in result.events][-3:] == [
         "git.diff_collected",
+        "run.resources",
         "run.terminated",
     ]
     assert any(record.reference == "diff:final" for record in result.evidence)
@@ -781,6 +803,11 @@ def test_planner_requests_repair_after_observed_failure(tmp_path) -> None:
     assert result.state.status is TerminalStatus.COMPLETE
     assert result.state.resource_usage["model_calls"] == 2
     assert "diagnosis:failure" in {record.reference for record in result.evidence}
+    assert [
+        event.payload["call_type"]
+        for event in result.events
+        if event.event_type == "model.context_prepared"
+    ] == ["plan", "recovery"]
     assert (root / "value.txt").read_text() == "right\n"
     assert any(
         event.event_type == "state.changed" and event.payload.get("reason") == "apply diagnosis-informed repair plan"

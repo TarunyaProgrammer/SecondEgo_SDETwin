@@ -3,13 +3,15 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import mimetypes
+import os
 import secrets
 import threading
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 from uuid import uuid4
 
 from SecondEgo.app import build_engine, build_gemini_planner, build_resources
@@ -169,7 +171,13 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         if parsed.path == "/":
+            if self.gateway.react_build_available and not parsed.query:
+                self._send_redirect(f"/?token={quote(self.gateway.token)}")
+                return
             self._send_html(self.gateway.dashboard_html())
+            return
+        if self.gateway.react_build_available and parsed.path.startswith("/assets/"):
+            self._send_static_asset(parsed.path)
             return
         if not self._authorized():
             self._send_json({"error": "unauthorized"}, status=401)
@@ -244,16 +252,44 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
+    def _send_redirect(self, location: str) -> None:
+        self.send_response(302)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _send_static_asset(self, request_path: str) -> None:
+        relative = request_path.removeprefix("/assets/")
+        candidate = (self.gateway.react_dist / "assets" / relative).resolve()
+        assets_root = (self.gateway.react_dist / "assets").resolve()
+        if assets_root not in candidate.parents or not candidate.is_file():
+            self._send_json({"error": "asset not found"}, status=404)
+            return
+        body = candidate.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", mimetypes.guess_type(candidate.name)[0] or "application/octet-stream")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def log_message(self, format: str, *args: object) -> None:
         return
 
 
 class DesktopGateway:
     def __init__(self, *, host: str = "127.0.0.1", port: int = 8787) -> None:
-        self.token = secrets.token_urlsafe(24)
+        self.token = os.environ.get("SECONDEGO_UI_TOKEN", "").strip() or secrets.token_urlsafe(24)
         self.registry = RunRegistry()
         self.server = ThreadingHTTPServer((host, port), GatewayHandler)
         self.server.gateway = self  # type: ignore[attr-defined]
+
+    @property
+    def react_dist(self) -> Path:
+        return Path(__file__).resolve().parents[3] / "apps" / "desktop" / "dist"
+
+    @property
+    def react_build_available(self) -> bool:
+        return (self.react_dist / "index.html").is_file()
 
     @property
     def address(self) -> tuple[str, int]:
@@ -261,9 +297,9 @@ class DesktopGateway:
 
     def serve_forever(self) -> None:
         host, port = self.address
-        print(f"SecondEgo UI: http://{host}:{port}/")
-        print(f"SecondEgo UI token: {self.token}")
-        print("The UI is optional and observational; the Python engine remains authoritative.")
+        print(f"SecondEgo UI: http://{host}:{port}/", flush=True)
+        print(f"SecondEgo UI token: {self.token}", flush=True)
+        print("The UI is optional and observational; the Python engine remains authoritative.", flush=True)
         try:
             self.server.serve_forever()
         except KeyboardInterrupt:
@@ -272,6 +308,8 @@ class DesktopGateway:
             self.server.server_close()
 
     def dashboard_html(self) -> str:
+        if self.react_build_available:
+            return (self.react_dist / "index.html").read_text(encoding="utf-8")
         static_path = Path(__file__).with_name("static") / "index.html"
         html = static_path.read_text(encoding="utf-8")
         return html.replace("__SECOND_EGO_TOKEN__", self.token)

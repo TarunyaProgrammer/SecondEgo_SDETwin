@@ -22,6 +22,14 @@ class ActionPlan:
     recovery_actions: tuple[ActionProposal, ...] = ()
 
 
+@dataclass(frozen=True)
+class ModelCallTelemetry:
+    call_type: str
+    estimated_tokens: int
+    slot_usage: dict[str, int]
+    dropped_evidence: tuple[str, ...]
+
+
 class ModelPlanner:
     """Converts one bounded, structured model response into a validated execution plan."""
 
@@ -35,6 +43,7 @@ class ModelPlanner:
         self.provider = provider
         self.assembler = assembler
         self.resources = resources
+        self.last_call: ModelCallTelemetry | None = None
 
     async def create_plan(
         self,
@@ -47,6 +56,7 @@ class ModelPlanner:
             evidence=evidence,
             state=json.dumps(state.snapshot(), separators=(",", ":"), default=str),
         )
+        self._record_context("plan", packet)
         self.resources.record_model_call(packet.estimated_tokens)
         proposal = await self.provider.generate(
             packet.as_text(),
@@ -85,12 +95,22 @@ class ModelPlanner:
             evidence=recovery_evidence,
             state=json.dumps(state.snapshot(), separators=(",", ":"), default=str),
         )
+        self._record_context("recovery", packet)
         self.resources.record_model_call(packet.estimated_tokens)
         proposal = await self.provider.generate(
             packet.as_text(),
             context={"run_id": state.run_id, "phase": "DIAGNOSE"},
         )
         return _parse_recovery_actions(proposal)
+
+    def _record_context(self, call_type: str, packet: object) -> None:
+        # Keep this data structured and bounded; raw prompts are never retained.
+        self.last_call = ModelCallTelemetry(
+            call_type=call_type,
+            estimated_tokens=packet.estimated_tokens,
+            slot_usage=dict(packet.slot_usage),
+            dropped_evidence=tuple(packet.dropped_evidence),
+        )
 
 
 _PLAN_INSTRUCTION = """Return exactly one action named submit_plan. Its arguments must contain:

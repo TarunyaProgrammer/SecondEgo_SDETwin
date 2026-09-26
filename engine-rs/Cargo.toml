@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/secondego-core",
+    "crates/secondego-repository",
+    "crates/secondego-context",
+    "crates/secondego-model",
+    "crates/secondego-runtime",
+    "crates/secondego-cli",
+    "crates/secondego-storage",
+    "crates/secondego-gateway",
+    "crates/secondego-tools",
+    "crates/secondego-verification",
+]

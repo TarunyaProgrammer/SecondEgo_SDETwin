@@ -8,7 +8,7 @@ from SecondEgo.core.state import AcceptanceCriterion, ExecutionState, Phase, Ter
 from SecondEgo.core.events import EngineEvent, EventLog, EventSink
 from SecondEgo.core.state_machine import StateMachine
 from SecondEgo.model.base import ActionProposal
-from SecondEgo.model.planner import ModelPlanner, PlanValidationError
+from SecondEgo.model.planner import ModelCallTelemetry, ModelPlanner, PlanValidationError
 from SecondEgo.repository.index import RepositoryIndexer
 from SecondEgo.repository.index import RepositoryIndex
 from SecondEgo.repository.retrieval import RepositoryRetriever
@@ -128,6 +128,8 @@ class HarnessEngine:
                 terminal_status=TerminalStatus.FAILED,
                 terminal_reason=str(exc),
             )
+        finally:
+            self._record_model_context(planner, prepared)
         return await self._execute_planned_with_dynamic_recovery(
             prepared,
             actions=plan.actions,
@@ -333,6 +335,8 @@ class HarnessEngine:
                     terminal_status=TerminalStatus.FAILED,
                     terminal_reason=str(exc),
                 )
+            finally:
+                self._record_model_context(planner, prepared)
 
             events.append(machine.move(Phase.RECOVER, reason="apply diagnosis-informed repair plan")[1])
             active_router, active_verifier = self._begin_attempt(state, events)
@@ -640,6 +644,16 @@ class HarnessEngine:
         ledger = prepared.ledger
         events = prepared.events
         self._collect_final_diff(ledger, state, events)
+        state.resource_usage = self.resources.snapshot()
+        events.append(
+            EngineEvent(
+                run_id=state.run_id,
+                event_type="run.resources",
+                phase=state.phase.value,
+                status=state.status.value,
+                payload=state.resource_usage,
+            )
+        )
         events.append(
             machine.terminate(
                 terminal_status,
@@ -647,7 +661,6 @@ class HarnessEngine:
                 evidence_refs=terminal_evidence_refs,
             )
         )
-        state.resource_usage = self.resources.snapshot()
         result = EngineResult(
             state=state,
             verification=verification,
@@ -657,6 +670,43 @@ class HarnessEngine:
         if self.store is not None:
             self.store.save_run(result.state, result.events, result.evidence)
         return result
+
+    def _record_model_context(
+        self,
+        planner: ModelPlanner,
+        prepared: _PreparedRun,
+    ) -> None:
+        telemetry = planner.last_call
+        if telemetry is None:
+            return
+        reference = f"model:context:{telemetry.call_type}"
+        prepared.ledger.record(
+            EvidenceRecord(
+                reference=reference,
+                summary=(
+                    f"call_type={telemetry.call_type} estimated_tokens={telemetry.estimated_tokens} "
+                    f"slot_usage={telemetry.slot_usage} dropped_evidence={list(telemetry.dropped_evidence)}"
+                ),
+                source="context assembler",
+                importance=3,
+            )
+        )
+        prepared.state.evidence_refs.append(reference)
+        prepared.events.append(
+            EngineEvent(
+                run_id=prepared.state.run_id,
+                event_type="model.context_prepared",
+                phase=prepared.state.phase.value,
+                status=prepared.state.status.value,
+                evidence_ref=reference,
+                payload={
+                    "call_type": telemetry.call_type,
+                    "estimated_tokens": telemetry.estimated_tokens,
+                    "slot_usage": telemetry.slot_usage,
+                    "dropped_evidence": list(telemetry.dropped_evidence),
+                },
+            )
+        )
 
     def _execute_actions(
         self,
