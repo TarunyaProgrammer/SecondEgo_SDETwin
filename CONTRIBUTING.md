@@ -4,7 +4,7 @@ Thanks for considering a contribution to SecondEgo. The project is early-stage, 
 
 ## Before opening a change
 
-1. Read [`AGENTS.md`](AGENTS.md) and [`CONTEXT.md`](CONTEXT.md).
+1. Read [`AGENTS.md`](AGENTS.md) and [`CONTEXT.md`](docs/context/CONTEXT.md).
 2. Check existing issues and open work to avoid duplicating effort.
 3. For architectural changes, explain the problem, alternatives considered, and the evidence that justifies the added complexity.
 4. Do not include secrets, credentials, generated private data, or unrelated formatting changes.
@@ -27,4 +27,3 @@ Prefer provider abstraction, bounded context, explicit state transitions, narrow
 ## Code of conduct
 
 Participation is governed by [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
-

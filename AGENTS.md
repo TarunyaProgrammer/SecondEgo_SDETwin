@@ -2,7 +2,7 @@
 
 ## Project purpose
 
-This repository is **SecondEgo**: a local desktop coding-agent application whose core is an autonomous coding harness. The current design sources are [`CONTEXT-1.md`](CONTEXT-1.md) and [`CONTEXT-2.md`](CONTEXT-2.md). They describe the target architecture; they are not permission to implement product code or to assume that every proposed technology is final.
+This repository is **SecondEgo**: a local desktop coding-agent application whose core is an autonomous coding harness. The current design sources are [`CONTEXT-1.md`](docs/context/CONTEXT-1.md) and [`CONTEXT-2.md`](docs/context/CONTEXT-2.md). They describe the target architecture; they are not permission to implement product code or to assume that every proposed technology is final.
 
 The working architectural direction is a Python-based, model-provider-agnostic engine behind a desktop shell with:
 
@@ -17,8 +17,8 @@ The working architectural direction is a Python-based, model-provider-agnostic e
 ## Scope discipline
 
 - Do not add product or runtime code unless the user explicitly asks for implementation.
-- Treat `CONTEXT-1.md` as a design proposal. Re-check assumptions before turning it into interfaces or dependencies.
-- Treat `CONTEXT-2.md` as the product-shell proposal. SecondEgo is the product name; do not rename it to Forge or another working title.
+- Treat `docs/context/CONTEXT-1.md` as a design proposal. Re-check assumptions before turning it into interfaces or dependencies.
+- Treat `docs/context/CONTEXT-2.md` as the product-shell proposal. SecondEgo is the product name; do not rename it to Forge or another working title.
 - Prefer the smallest architecture that satisfies the evaluation rubric. Do not add services such as Neo4j, queues, or multi-agent layers without a demonstrated need.
 - Keep model access behind a provider interface. Never scatter provider-specific calls through orchestration code.
 - Keep repository changes reviewable and avoid unrelated formatting or dependency changes.
@@ -51,9 +51,10 @@ Use only the skill relevant to the task. These skills guide decisions; they do n
 
 ## Documentation map
 
-- [`CONTEXT.md`](CONTEXT.md): concise, current project context and decision log.
-- [`CONTEXT-1.md`](CONTEXT-1.md): initial architecture proposal and rationale.
-- [`CONTEXT-2.md`](CONTEXT-2.md): SecondEgo desktop product-shell and end-to-end experience proposal.
+- [`docs/context/CONTEXT.md`](docs/context/CONTEXT.md): concise, current project context and decision log.
+- [`docs/context/CONTEXT-1.md`](docs/context/CONTEXT-1.md): initial architecture proposal and rationale.
+- [`docs/context/CONTEXT-2.md`](docs/context/CONTEXT-2.md): SecondEgo desktop product-shell and end-to-end experience proposal.
+- [`docs/context/ContextSubmission.md`](docs/context/ContextSubmission.md): evaluator interface and submission requirements.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): contribution workflow and quality bar.
 - [`SECURITY.md`](SECURITY.md): vulnerability reporting and security expectations.
 - [`LICENSE`](LICENSE): MIT license.

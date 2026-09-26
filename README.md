@@ -8,7 +8,7 @@ SecondEgo is a local coding-agent application whose Python engine turns a founda
 
 The headless Python harness is implemented as an early vertical slice. It has an explicit state machine, safe workspace tools, context and resource budgets, Python repository indexing, structured plan validation, verification/recovery, SQLite evidence persistence, and a CLI. The Electron/React shell is not implemented yet.
 
-[`CONTEXT-1.md`](CONTEXT-1.md) contains the harness proposal, [`CONTEXT-2.md`](CONTEXT-2.md) contains the desktop product-shell proposal, and [`CONTEXT.md`](CONTEXT.md) records current decisions and open questions.
+[`CONTEXT-1.md`](docs/context/CONTEXT-1.md) contains the harness proposal, [`CONTEXT-2.md`](docs/context/CONTEXT-2.md) contains the desktop product-shell proposal, and [`CONTEXT.md`](docs/context/CONTEXT.md) records current decisions and open questions.
 
 ## Run the harness
 

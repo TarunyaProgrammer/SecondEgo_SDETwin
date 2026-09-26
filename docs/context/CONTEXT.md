@@ -16,6 +16,11 @@ Implemented vertical slice:
 
 Still unimplemented: Electron/React shell, packaging, broad language parsing, benchmark fixtures, and full telemetry/report schemas.
 
+The approved next architecture increment is documented in
+[`LCC_ARCHITECTURE.md`](LCC_ARCHITECTURE.md). It prioritizes transactional attempts,
+test- and failure-aware retrieval, bounded phase-specific context packets, and one
+diagnosis-informed recovery over UI work or additional infrastructure.
+
 ## Working identity
 
 - Product name: **SecondEgo — Autonomous Coding Agent Application**
@@ -57,3 +62,10 @@ Still unimplemented: Electron/React shell, packaging, broad language parsing, be
 ## Change protocol
 
 When a design decision changes, update this file with the decision and rationale. Keep detailed exploration in separate design notes instead of turning this file into a transcript.
+
+## Context map
+
+- [`CONTEXT-1.md`](CONTEXT-1.md): initial architecture proposal and rationale.
+- [`CONTEXT-2.md`](CONTEXT-2.md): desktop product-shell and end-to-end experience proposal.
+- [`LCC_ARCHITECTURE.md`](LCC_ARCHITECTURE.md): LCC evaluation runtime decision and implementation order.
+- [`ContextSubmission.md`](ContextSubmission.md): evaluator-provided submission requirements; do not commit credentials.

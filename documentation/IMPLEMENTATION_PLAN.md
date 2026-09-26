@@ -2,7 +2,7 @@
 
 Status: planning baseline
 
-This plan reconciles `CONTEXT.md`, `CONTEXT-1.md`, `CONTEXT-2.md`, the repository `AGENTS.md`, and the hackathon scoring rubric supplied by the user.
+This plan reconciles `docs/context/CONTEXT.md`, `docs/context/CONTEXT-1.md`, `docs/context/CONTEXT-2.md`, the repository `AGENTS.md`, and the hackathon scoring rubric supplied by the user.
 
 ## 1. Product boundary
 
