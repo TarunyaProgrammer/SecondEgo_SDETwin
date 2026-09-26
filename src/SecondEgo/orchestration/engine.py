@@ -14,6 +14,11 @@ from SecondEgo.repository.scanner import RepositoryScanner
 from SecondEgo.storage.sqlite import SQLiteRunStore
 from SecondEgo.tools.router import ToolRouter
 from SecondEgo.tools.git import GitTool
+from SecondEgo.tools.filesystem import FileTool
+from SecondEgo.tools.policy import WorkspacePolicy
+from SecondEgo.tools.runner import CommandRunner
+from SecondEgo.tools.search import SearchTool
+from SecondEgo.tools.transaction import GitAttemptTransaction, TransactionBlocked
 from SecondEgo.verification.contracts import FailureClass, VerificationResult
 from SecondEgo.verification.verifier import VerificationEngine
 
@@ -47,6 +52,7 @@ class HarnessEngine:
         resources: ResourceUsage,
         store: SQLiteRunStore | None = None,
         git: GitTool | None = None,
+        transaction: GitAttemptTransaction | None = None,
     ) -> None:
         self.scanner = scanner
         self.indexer = indexer or RepositoryIndexer(scanner.workspace, scanner=scanner)
@@ -55,6 +61,7 @@ class HarnessEngine:
         self.resources = resources
         self.store = store
         self.git = git or GitTool(router.runner)
+        self.transaction = transaction
 
     def run(
         self,
@@ -167,34 +174,114 @@ class HarnessEngine:
         terminal_status: TerminalStatus
         terminal_reason: str
         terminal_evidence_refs: tuple[str, ...] = ()
+        attempt_active = False
+        active_router = self.router
+        active_verifier = self.verifier
         try:
+            active_router, active_verifier = self._begin_attempt(state, events)
+            attempt_active = self.transaction is not None
             events.append(machine.move(Phase.EXECUTE, reason="dispatch planned actions")[1])
-            self._execute_actions(actions, ledger, state, events)
+            self._execute_actions(
+                actions,
+                ledger,
+                state,
+                events,
+                router=active_router,
+                track_changed_paths=self.transaction is None,
+            )
             events.append(machine.move(Phase.VERIFY, reason="run verification commands")[1])
-            verification, _ = self._verify(verification_commands, ledger, state, events)
+            verification, _ = self._verify(
+                verification_commands,
+                ledger,
+                state,
+                events,
+                verifier=active_verifier,
+            )
             if verification.passed:
                 terminal_status = TerminalStatus.COMPLETE
                 terminal_reason = "verification passed"
                 terminal_evidence_refs = verification.evidence_refs
+                self._finish_attempt(
+                    passed=True,
+                    ledger=ledger,
+                    state=state,
+                    events=events,
+                )
+                attempt_active = False
             elif recovery_actions:
+                self._finish_attempt(
+                    passed=False,
+                    ledger=ledger,
+                    state=state,
+                    events=events,
+                )
+                attempt_active = False
                 events.append(machine.move(Phase.DIAGNOSE, reason=verification.failure_summary or "verification failed")[1])
                 self.resources.record_retry()
                 events.append(machine.move(Phase.RECOVER, reason="recovery actions supplied")[1])
+                active_router, active_verifier = self._begin_attempt(state, events)
+                attempt_active = self.transaction is not None
                 events.append(machine.move(Phase.EXECUTE, reason="dispatch recovery actions")[1])
-                self._execute_actions(recovery_actions, ledger, state, events)
+                self._execute_actions(
+                    recovery_actions,
+                    ledger,
+                    state,
+                    events,
+                    router=active_router,
+                    track_changed_paths=self.transaction is None,
+                )
                 events.append(machine.move(Phase.VERIFY, reason="rerun verification commands")[1])
-                verification, _ = self._verify(verification_commands, ledger, state, events)
+                verification, _ = self._verify(
+                    verification_commands,
+                    ledger,
+                    state,
+                    events,
+                    verifier=active_verifier,
+                )
                 if verification.passed:
                     terminal_status = TerminalStatus.COMPLETE
                     terminal_reason = "verification passed after recovery"
                     terminal_evidence_refs = verification.evidence_refs
+                    self._finish_attempt(
+                        passed=True,
+                        ledger=ledger,
+                        state=state,
+                        events=events,
+                    )
+                    attempt_active = False
                 else:
                     terminal_status = TerminalStatus.FAILED
                     terminal_reason = verification.failure_summary or "verification failed after recovery"
+                    self._finish_attempt(
+                        passed=False,
+                        ledger=ledger,
+                        state=state,
+                        events=events,
+                    )
+                    attempt_active = False
             else:
                 terminal_status = TerminalStatus.FAILED
                 terminal_reason = verification.failure_summary or "verification failed"
+                self._finish_attempt(
+                    passed=False,
+                    ledger=ledger,
+                    state=state,
+                    events=events,
+                )
+                attempt_active = False
         except ResourceLimitExceeded as exc:
+            if attempt_active and self.transaction is not None:
+                self.transaction.abort()
+            terminal_status = TerminalStatus.BLOCKED
+            terminal_reason = str(exc)
+            verification = VerificationResult(
+                passed=False,
+                failure_class=FailureClass.ENVIRONMENT_FAILURE,
+                failure_summary=str(exc),
+            )
+        except TransactionBlocked as exc:
+            if attempt_active and self.transaction is not None:
+                self.transaction.abort()
             terminal_status = TerminalStatus.BLOCKED
             terminal_reason = str(exc)
             verification = VerificationResult(
@@ -203,6 +290,8 @@ class HarnessEngine:
                 failure_summary=str(exc),
             )
         except RuntimeError as exc:
+            if attempt_active and self.transaction is not None:
+                self.transaction.abort()
             terminal_status = TerminalStatus.FAILED
             terminal_reason = str(exc)
             verification = VerificationResult(
@@ -217,6 +306,78 @@ class HarnessEngine:
             terminal_reason=terminal_reason,
             terminal_evidence_refs=terminal_evidence_refs,
         )
+
+    def _begin_attempt(
+        self,
+        state: ExecutionState,
+        events: list[EngineEvent],
+    ) -> tuple[ToolRouter, VerificationEngine]:
+        if self.transaction is None:
+            return self.router, self.verifier
+        attempt_workspace = self.transaction.begin()
+        router, verifier = self._runtime_for(attempt_workspace)
+        events.append(
+            EngineEvent(
+                run_id=state.run_id,
+                event_type="transaction.started",
+                phase=state.phase.value,
+                status=state.status.value,
+                payload={"isolated": True},
+            )
+        )
+        return router, verifier
+
+    def _finish_attempt(
+        self,
+        *,
+        passed: bool,
+        ledger: EvidenceLedger,
+        state: ExecutionState,
+        events: list[EngineEvent],
+    ) -> None:
+        if self.transaction is None:
+            return
+        result = self.transaction.finish(passed=passed)
+        if result.transferred:
+            state.changed_paths.update(result.changed_paths)
+        reference = f"transaction:{'passed' if passed else 'discarded'}"
+        ledger.record(
+            EvidenceRecord(
+                reference=reference,
+                summary=result.reason,
+                source="git worktree transaction",
+                importance=4,
+            )
+        )
+        state.evidence_refs.append(reference)
+        events.append(
+            EngineEvent(
+                run_id=state.run_id,
+                event_type="transaction.finished",
+                phase=state.phase.value,
+                status=state.status.value,
+                evidence_ref=reference,
+                payload={
+                    "passed": result.passed,
+                    "transferred": result.transferred,
+                    "changed_paths": list(result.changed_paths),
+                },
+            )
+        )
+
+    def _runtime_for(
+        self,
+        workspace: WorkspacePolicy,
+    ) -> tuple[ToolRouter, VerificationEngine]:
+        runner = CommandRunner(workspace, self.router.runner.command_policy)
+        router = ToolRouter(
+            files=FileTool(workspace, max_file_bytes=self.router.files.max_file_bytes),
+            search=SearchTool(workspace, max_results=self.router.search.max_results),
+            runner=runner,
+            resources=self.resources,
+            git=GitTool(runner),
+        )
+        return router, VerificationEngine(runner)
 
     def _finalize(
         self,
@@ -256,9 +417,12 @@ class HarnessEngine:
         ledger: EvidenceLedger,
         state: ExecutionState,
         events: list[EngineEvent],
+        *,
+        router: ToolRouter,
+        track_changed_paths: bool,
     ) -> None:
         for index, proposal in enumerate(actions):
-            result = self.router.dispatch(proposal)
+            result = router.dispatch(proposal)
             reference = f"tool:{index}:{proposal.action}"
             summary = result.stderr if not result.success else result.stdout[:1_000]
             ledger.record(
@@ -269,7 +433,8 @@ class HarnessEngine:
                     importance=3 if not result.success else 2,
                 )
             )
-            state.changed_paths.update(result.changed_paths)
+            if track_changed_paths:
+                state.changed_paths.update(result.changed_paths)
             state.evidence_refs.append(reference)
             events.append(
                 EngineEvent(
@@ -296,8 +461,10 @@ class HarnessEngine:
         ledger: EvidenceLedger,
         state: ExecutionState,
         events: list[EngineEvent],
+        *,
+        verifier: VerificationEngine,
     ) -> tuple[VerificationResult, tuple[object, ...]]:
-        result, evidence = self.verifier.run(commands)
+        result, evidence = verifier.run(commands)
         for index, item in enumerate(evidence):
             ledger.record(
                 EvidenceRecord(
@@ -307,6 +474,22 @@ class HarnessEngine:
                     importance=4 if not item.success else 3,
                 )
             )
+        if result.failure_record is not None:
+            failure = result.failure_record
+            ledger.record(
+                EvidenceRecord(
+                    reference="verification:failure",
+                    summary=(
+                        f"class={failure.failure_class.value} "
+                        f"tests={list(failure.failing_tests)} "
+                        f"locations={list(failure.error_locations)} "
+                        f"fingerprint={failure.fingerprint or 'none'}"
+                    ),
+                    source="verification failure parser",
+                    importance=5,
+                )
+            )
+            state.evidence_refs.append("verification:failure")
         events.append(
             EngineEvent(
                 run_id=state.run_id,

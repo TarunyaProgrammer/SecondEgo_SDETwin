@@ -1,9 +1,10 @@
 from dataclasses import dataclass
+import re
 from typing import Sequence
 
 from SecondEgo.tools.runner import CommandRunner
 
-from .contracts import FailureClass, VerificationResult
+from .contracts import FailureClass, FailureRecord, VerificationResult
 
 
 @dataclass(frozen=True)
@@ -43,12 +44,14 @@ class VerificationEngine:
                 )
             )
             if not result.success:
+                failure_class = _classify_failure(output)
                 return (
                     VerificationResult(
                         passed=False,
                         commands=tuple(" ".join(item.command) for item in evidence),
-                        failure_class=_classify_failure(output),
+                        failure_class=failure_class,
                         failure_summary=output[:1_000] or "verification command failed",
+                        failure_record=_build_failure_record(failure_class, output),
                     ),
                     tuple(evidence),
                 )
@@ -76,3 +79,22 @@ def _classify_failure(output: str) -> FailureClass:
         return FailureClass.TEST_FAILURE
     return FailureClass.UNKNOWN
 
+
+def _build_failure_record(failure_class: FailureClass, output: str) -> FailureRecord:
+    failing_tests = tuple(
+        dict.fromkeys(match.group(1) for match in re.finditer(r"(?:FAILED|ERROR)\s+([^\s]+)", output))
+    )
+    locations = tuple(
+        dict.fromkeys(
+            f"{match.group(1)}:{match.group(2)}"
+            for match in re.finditer(r"([A-Za-z0-9_./-]+\.(?:py|js|ts|tsx|jsx)):(\d+)", output)
+        )
+    )
+    first_line = next((line.strip() for line in output.splitlines() if line.strip()), None)
+    return FailureRecord(
+        failure_class=failure_class,
+        summary=output[:1_000] or "verification command failed",
+        failing_tests=failing_tests[:20],
+        error_locations=locations[:20],
+        fingerprint=first_line[:240] if first_line else None,
+    )

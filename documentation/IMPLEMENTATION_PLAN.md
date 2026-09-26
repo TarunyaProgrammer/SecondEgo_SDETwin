@@ -1,6 +1,6 @@
 # SecondEgo Implementation Plan
 
-Status: planning baseline
+Status: active implementation plan; transaction milestone delivered
 
 This plan reconciles `docs/context/CONTEXT.md`, `docs/context/CONTEXT-1.md`, `docs/context/CONTEXT-2.md`, the repository `AGENTS.md`, and the hackathon scoring rubric supplied by the user.
 
@@ -149,6 +149,16 @@ Exit condition: the core can execute a mocked state transition sequence without 
 
 Exit condition: a fixture repository can be inspected, edited, tested, and reported safely.
 
+### Milestone B.5 — Transactional attempts (delivered)
+
+- clean Git-root preflight;
+- detached linked worktree per attempt;
+- discard failed attempts;
+- transfer only verified tracked and new-file changes;
+- explicit transaction evidence and blocked behavior.
+
+Exit condition: contract tests prove failure rollback, passing transfer, and recovery from a clean baseline.
+
 ### Milestone C — First vertical slice
 
 ```text
@@ -240,6 +250,16 @@ The project is not ready for a judging demo until:
 - the fixture repository can be reset;
 - the UI has no invented progress or fake agent activity.
 
-## 8. Immediate next action
+## 8. Current delivery status
 
-The next implementation task is Milestone A: create the Python package and typed contracts for state, events, provider actions, tool results, verification, and termination. No UI, voice, computer vision, graph database, or packaging work should begin before that contract passes tests.
+Milestones A, B, the first vertical slice, and the transactional safety increment are
+implemented. The current test suite has 34 passing contract tests. The remaining
+competition-critical work is structured failure diagnosis, test-topology retrieval,
+phase-specific context packets, and a realistic local evaluation fixture.
+
+## 9. Immediate next action
+
+The next implementation task is Milestone E: replace pre-written recovery actions
+with a classified failure record, targeted retrieval refresh, and one structured
+diagnosis-informed repair plan. No UI, voice, computer vision, graph database, or
+packaging work should begin before that loop passes fixture tests.

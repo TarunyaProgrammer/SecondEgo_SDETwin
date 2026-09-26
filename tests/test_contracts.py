@@ -1,5 +1,6 @@
 import pytest
 import asyncio
+import subprocess
 
 from SecondEgo.context.assembler import ContextAssembler
 from SecondEgo.context.ledger import EvidenceLedger
@@ -13,6 +14,7 @@ from SecondEgo.tools.policy import CommandPolicy, PolicyViolation, WorkspacePoli
 from SecondEgo.tools.router import ToolRouter
 from SecondEgo.tools.runner import CommandRunner
 from SecondEgo.tools.search import SearchTool
+from SecondEgo.tools.transaction import GitAttemptTransaction
 from SecondEgo.model.base import ActionProposal
 from SecondEgo.model.gemini import GeminiProvider, ProviderConfigurationError
 from SecondEgo.model.planner import ModelPlanner, PlanValidationError
@@ -236,6 +238,21 @@ def test_verifier_returns_test_failure_evidence(tmp_path) -> None:
     assert evidence[0].success is False
 
 
+def test_verifier_extracts_structured_failure_record(tmp_path) -> None:
+    runner = CommandRunner(WorkspacePolicy(tmp_path))
+    result, _ = VerificationEngine(runner).run(
+        ((
+            "python3",
+            "-c",
+            "print('FAILED tests/test_auth.py::test_login - AssertionError at tests/auth.py:17'); raise SystemExit(1)",
+        ),)
+    )
+
+    assert result.failure_record is not None
+    assert result.failure_record.failing_tests == ("tests/test_auth.py::test_login",)
+    assert result.failure_record.error_locations == ("tests/auth.py:17",)
+
+
 def test_harness_engine_runs_edit_to_verified_completion(tmp_path) -> None:
     workspace = WorkspacePolicy(tmp_path)
     resources = ResourceUsage(ResourceBudget(max_tool_calls=10, max_retries=1))
@@ -313,6 +330,80 @@ def test_harness_engine_recovers_from_failed_verification(tmp_path) -> None:
     assert result.state.status is TerminalStatus.COMPLETE
     assert result.verification.passed is True
     assert result.state.resource_usage["retries"] == 1
+
+
+def _git_fixture(tmp_path):
+    root = tmp_path / "evaluation-repo"
+    root.mkdir()
+    subprocess.run(("git", "init", "-q"), cwd=root, check=True)
+    subprocess.run(("git", "config", "user.email", "test@example.com"), cwd=root, check=True)
+    subprocess.run(("git", "config", "user.name", "SecondEgo Test"), cwd=root, check=True)
+    FileTool(WorkspacePolicy(root)).write("value.txt", "baseline\n")
+    subprocess.run(("git", "add", "value.txt"), cwd=root, check=True)
+    subprocess.run(("git", "-c", "commit.gpgSign=false", "commit", "-qm", "baseline"), cwd=root, check=True)
+    return root
+
+
+def test_git_transaction_discards_failed_attempt_without_touching_target(tmp_path) -> None:
+    root = _git_fixture(tmp_path)
+    base = WorkspacePolicy(root)
+    transaction = GitAttemptTransaction(base)
+
+    attempt = transaction.begin()
+    FileTool(attempt).write("value.txt", "failed\n")
+    result = transaction.finish(passed=False)
+
+    assert result.transferred is False
+    assert (root / "value.txt").read_text() == "baseline\n"
+    assert transaction.active is False
+
+
+def test_git_transaction_transfers_verified_tracked_and_new_files(tmp_path) -> None:
+    root = _git_fixture(tmp_path)
+    base = WorkspacePolicy(root)
+    transaction = GitAttemptTransaction(base)
+
+    attempt = transaction.begin()
+    FileTool(attempt).write("value.txt", "verified\n")
+    FileTool(attempt).write("src/new.py", "VALUE = 1\n")
+    result = transaction.finish(passed=True)
+
+    assert result.transferred is True
+    assert set(result.changed_paths) == {"src/new.py", "value.txt"}
+    assert (root / "value.txt").read_text() == "verified\n"
+    assert (root / "src/new.py").read_text() == "VALUE = 1\n"
+
+
+def test_transactional_engine_discards_failed_attempt_before_recovery(tmp_path) -> None:
+    root = _git_fixture(tmp_path)
+    workspace = WorkspacePolicy(root)
+    resources = ResourceUsage(ResourceBudget(max_tool_calls=20, max_retries=1))
+    runner = CommandRunner(workspace)
+    engine = HarnessEngine(
+        scanner=RepositoryScanner(workspace),
+        router=ToolRouter(
+            files=FileTool(workspace),
+            search=SearchTool(workspace),
+            runner=runner,
+            resources=resources,
+        ),
+        verifier=VerificationEngine(runner),
+        resources=resources,
+        transaction=GitAttemptTransaction(workspace),
+    )
+
+    result = engine.run(
+        task="write the verified value",
+        acceptance_criteria=(AcceptanceCriterion("value is verified"),),
+        actions=(ActionProposal("edit_file", {"path": "value.txt", "content": "wrong\n"}),),
+        verification_commands=(("python3", "-c", "from pathlib import Path; assert Path('value.txt').read_text() == 'right\\n'"),),
+        recovery_actions=(ActionProposal("edit_file", {"path": "value.txt", "content": "right\n"}),),
+    )
+
+    assert result.state.status is TerminalStatus.COMPLETE
+    assert (root / "value.txt").read_text() == "right\n"
+    transaction_events = [event for event in result.events if event.event_type == "transaction.finished"]
+    assert [event.payload["transferred"] for event in transaction_events] == [False, True]
 
 
 def test_sqlite_store_persists_run_events_and_evidence(tmp_path) -> None:

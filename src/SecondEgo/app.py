@@ -12,6 +12,7 @@ from SecondEgo.tools.policy import WorkspacePolicy
 from SecondEgo.tools.router import ToolRouter
 from SecondEgo.tools.runner import CommandRunner
 from SecondEgo.tools.search import SearchTool
+from SecondEgo.tools.transaction import GitAttemptTransaction
 from SecondEgo.verification.verifier import VerificationEngine
 from SecondEgo.context.assembler import ContextAssembler
 from SecondEgo.context.policy import ContextBudget
@@ -22,6 +23,7 @@ def build_engine(
     *,
     resources: ResourceUsage,
     state_db: Path | None = None,
+    transactional: bool = True,
 ) -> HarnessEngine:
     workspace = WorkspacePolicy(repository)
     runner = CommandRunner(workspace)
@@ -39,6 +41,7 @@ def build_engine(
         resources=resources,
         store=SQLiteRunStore(state_db) if state_db else None,
         git=git,
+        transaction=GitAttemptTransaction(workspace) if transactional else None,
     )
 
 

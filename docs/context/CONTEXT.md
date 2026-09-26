@@ -11,6 +11,7 @@ Implemented vertical slice:
 - context budgets, source-linked evidence ledger, and run-level resource budgets;
 - Python AST repository indexing with lexical fallback retrieval;
 - deterministic and optional Gemini-backed structured planning;
+- isolated Git worktree attempts that discard failures and transfer only verified diffs;
 - SQLite schema version 1 for final run state, events, and evidence;
 - CLI execution and automated contract tests.
 
@@ -57,6 +58,7 @@ diagnosis-informed recovery over UI work or additional infrastructure.
 - Supported repository languages beyond Python AST extraction; unsupported languages fall back to structural/lexical retrieval.
 - Exact evaluation tool-permission policy and sandbox boundary.
 - Evaluation tasks, benchmark fixtures, and final telemetry/report schemas.
+- The transactional runtime currently requires a clean Git repository root with an initial commit; non-Git and dirty targets intentionally block mutation until a bounded journal fallback exists.
 - Desktop transport contract and Electron/React shell implementation.
 
 ## Change protocol
@@ -68,4 +70,5 @@ When a design decision changes, update this file with the decision and rationale
 - [`CONTEXT-1.md`](CONTEXT-1.md): initial architecture proposal and rationale.
 - [`CONTEXT-2.md`](CONTEXT-2.md): desktop product-shell and end-to-end experience proposal.
 - [`LCC_ARCHITECTURE.md`](LCC_ARCHITECTURE.md): LCC evaluation runtime decision and implementation order.
+- [`LCC_EVALUATION_MODEL.md`](LCC_EVALUATION_MODEL.md): evaluator/repository separation and local evaluation workflow notes.
 - [`ContextSubmission.md`](ContextSubmission.md): evaluator-provided submission requirements; do not commit credentials.

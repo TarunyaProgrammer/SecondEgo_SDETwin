@@ -55,6 +55,7 @@ Use only the skill relevant to the task. These skills guide decisions; they do n
 - [`docs/context/CONTEXT-1.md`](docs/context/CONTEXT-1.md): initial architecture proposal and rationale.
 - [`docs/context/CONTEXT-2.md`](docs/context/CONTEXT-2.md): SecondEgo desktop product-shell and end-to-end experience proposal.
 - [`docs/context/ContextSubmission.md`](docs/context/ContextSubmission.md): evaluator interface and submission requirements.
+- [`docs/context/LCC_EVALUATION_MODEL.md`](docs/context/LCC_EVALUATION_MODEL.md): evaluator/repository separation and local evaluation workflow notes.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): contribution workflow and quality bar.
 - [`SECURITY.md`](SECURITY.md): vulnerability reporting and security expectations.
 - [`LICENSE`](LICENSE): MIT license.
