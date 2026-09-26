@@ -10,6 +10,11 @@ from SecondEgo.core.events import EngineEvent
 from SecondEgo.repository.source import RepositorySourceError, resolve_repository
 from SecondEgo.lifecycle import collect_garbage
 
+CORAL = "38;2;238;101;71"
+PARCHEMENT = "38;2;255;241;216"
+PEACH = "38;2;255;185;156"
+MUTED = "38;2;166;131;119"
+
 
 def _print_event(event: EngineEvent) -> None:
     icon = {"state.changed": "·", "tool.completed": "→", "verification.completed": "✓", "run.terminated": "■"}.get(event.event_type, "·")
@@ -32,22 +37,22 @@ def _banner() -> None:
         " ███████║███████╗╚██████╗╚██████╔╝██║ ╚████║██████╔╝    ███████╗╚██████╔╝╚██████╔╝",
         " ╚══════╝╚══════╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝╚═════╝     ╚══════╝ ╚═════╝  ╚═════╝ ",
     ):
-        print(_paint("33", line))
+        print(_paint(CORAL, line))
     print()
-    print(_paint("33", "╭─ SECOND EGO · VERIFIED CODING HARNESS ───────────────────────────────╮"))
-    print(_paint("33", "│  understand  ›  explore  ›  plan  ›  execute  ›  verify              │"))
-    print(_paint("33", "│  local-first repository intelligence with bounded, inspectable runs   │"))
-    print(_paint("33", "╰───────────────────────────────────────────────────────────────────────╯"))
-    print(f"  {_paint('90', 'PYTHON COMPATIBILITY / INTERACTIVE')}  Type Ctrl-C to cancel.\n")
+    print(_paint(CORAL, "╭─ SECOND EGO · VERIFIED CODING HARNESS ───────────────────────────────╮"))
+    print(_paint(PARCHEMENT, "│  understand  ›  explore  ›  plan  ›  execute  ›  verify              │"))
+    print(_paint(PEACH, "│  local-first repository intelligence with bounded, inspectable runs   │"))
+    print(_paint(CORAL, "╰───────────────────────────────────────────────────────────────────────╯"))
+    print(f"  {_paint(MUTED, 'PYTHON COMPATIBILITY / INTERACTIVE')}  Type Ctrl-C to cancel.\n")
 
 
 def _read_multiline_issue() -> str:
-    print(_paint("33", "Mission / issue"))
-    print(_paint("90", "  Paste or type the complete task. Finish with a line containing .done (Ctrl-D also works)."))
+    print(_paint(CORAL, "Mission / issue"))
+    print(_paint(MUTED, "  Paste or type the complete task. Finish with a line containing .done (Ctrl-D also works)."))
     lines: list[str] = []
     while True:
         try:
-            line = input(f"  {_paint('33', '│')} ")
+            line = input(f"  {_paint(CORAL, '│')} ")
         except EOFError:
             break
         if line.strip() == ".done":
@@ -59,10 +64,10 @@ def _read_multiline_issue() -> str:
 def main() -> int:
     gc = collect_garbage()
     if gc.deleted:
-        print(f"  {_paint('90', f'garbage collector reclaimed {gc.deleted} stale temp directories')}")
+        print(f"  {_paint(MUTED, f'garbage collector reclaimed {gc.deleted} stale temp directories')}")
     presentation_mode = configured_presentation_mode()
     _banner()
-    repository_text = input(_paint("36", "Repository path or GitHub URL › ")).strip() or "."
+    repository_text = input(_paint(PEACH, "Repository path or GitHub URL › ")).strip() or "."
     issue = _read_multiline_issue()
     if not issue:
         print("No issue supplied; exiting without an agent run.")
@@ -70,7 +75,7 @@ def main() -> int:
     try:
         repository = resolve_repository(repository_text)
         if repository.cloned:
-            print(f"  {_paint('32', '✓')} cloned repository to {repository.root}")
+            print(f"  {_paint(PARCHEMENT, '✓')} cloned repository to {repository.root}")
         engine = build_engine(
             repository.root,
             resources=build_resources(),
@@ -89,7 +94,7 @@ def main() -> int:
                 planner=build_model_planner(engine.resources, configured_model()),
             )
         )
-        print(f"\n  {_paint('90', 'RUN COMPLETE')}  {result.state.status.value}  ·  {result.state.phase.value}")
+        print(f"\n  {_paint(PARCHEMENT, 'RUN COMPLETE')}  {result.state.status.value}  ·  {result.state.phase.value}")
         print(
             json.dumps(
                 {

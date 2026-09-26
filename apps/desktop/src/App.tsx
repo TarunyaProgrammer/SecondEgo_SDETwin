@@ -153,10 +153,17 @@ function App() {
         <section className="village-panel">
           <header><span className="kicker">The working village</span><h2>{activePhase || "Ready when you are"}</h2><p>{label(latest)}</p></header>
           <div className="village-map" aria-label="Visualized engine phase activity">
+            <div className="village-sky" aria-hidden="true"><i /><b /><em /></div>
             <div className="map-path path-a" /><div className="map-path path-b" /><div className="map-gate" aria-hidden="true" />
-            <div className="place place-index"><i />Index house</div><div className="place place-workshop"><i />Workshop</div><div className="place place-lab"><i />Test lab</div><div className="place place-archive"><i />Archive</div>
+            <div className="village-plaza" aria-hidden="true"><i /><b /></div>
+            <div className="tree tree-one" aria-hidden="true"><i /><b /></div><div className="tree tree-two" aria-hidden="true"><i /><b /></div><div className="tree tree-three" aria-hidden="true"><i /><b /></div>
+            <div className="garden garden-one" aria-hidden="true"><i /><b /><em /></div><div className="garden garden-two" aria-hidden="true"><i /><b /><em /></div>
+            <div className="place place-index"><span className="chimney" /><span className="roof" /><span className="house"><i /><b /></span><small>Index house</small></div>
+            <div className="place place-workshop"><span className="chimney" /><span className="roof" /><span className="house"><i /><b /></span><small>Workshop</small></div>
+            <div className="place place-lab"><span className="chimney" /><span className="roof" /><span className="house"><i /><b /></span><small>Test lab</small></div>
+            <div className="place place-archive"><span className="chimney" /><span className="roof" /><span className="house"><i /><b /></span><small>Archive</small></div>
             {workers.map((worker) => <WorkerSprite key={worker.phase} worker={worker} state={workerState(worker.phase)} />)}
-            <div className="map-key"><span><i className="active-dot" />active</span><span><i className="done-dot" />visited</span><span><i className="idle-dot" />idle</span></div>
+            <div className="map-key"><span><i className="active-dot" />active task</span><span><i className="done-dot" />visited</span><span><i className="idle-dot" />ambient only</span></div>
           </div>
         </section>
 

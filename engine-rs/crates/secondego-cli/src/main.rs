@@ -7,6 +7,11 @@ use secondego_core::ActionProposal;
 use secondego_model::{ConfiguredProvider, ScriptedProvider};
 use secondego_runtime::{RustEngine, collect_garbage, resolve_repository};
 
+const CORAL: &str = "38;2;238;101;71";
+const PARCHEMENT: &str = "38;2;255;241;216";
+const PEACH: &str = "38;2;255;185;156";
+const MUTED: &str = "38;2;166;131;119";
+
 fn main() {
     let arguments: Vec<String> = env::args().skip(1).collect();
     let gc = collect_garbage();
@@ -140,7 +145,7 @@ fn value(arguments: &[String], name: &str) -> Option<String> {
 }
 
 fn prompt(label: &str) -> String {
-    print!("{} ", paint("36", &format!("{label} ›")));
+    print!("{} ", paint(PEACH, &format!("{label} ›")));
     let _ = io::stdout().flush();
     let mut value = String::new();
     if io::stdin().read_line(&mut value).is_err() {
@@ -151,17 +156,17 @@ fn prompt(label: &str) -> String {
 
 fn prompt_multiline() -> String {
     println!();
-    println!("{}", paint("33", "Mission / issue"));
+    println!("{}", paint(CORAL, "Mission / issue"));
     println!(
         "  {}",
         paint(
-            "90",
+            MUTED,
             "Paste or type the complete task. Finish with a line containing .done (Ctrl-D also works)."
         )
     );
     let mut lines = Vec::new();
     loop {
-        print!("  {} ", paint("33", "│"));
+        print!("  {} ", paint(CORAL, "│"));
         let _ = io::stdout().flush();
         let mut line = String::new();
         match io::stdin().read_line(&mut line) {
@@ -188,7 +193,8 @@ fn install_cancel_handler() {
 }
 
 extern "C" fn handle_sigint(_: libc::c_int) {
-    const MESSAGE: &[u8] = b"\n  Goodbye for now - the village is resting.\n";
+    const MESSAGE: &[u8] =
+        b"\n  \x1b[38;2;255;185;156mGoodbye for now - the village is resting.\x1b[0m\n";
     unsafe {
         libc::write(libc::STDERR_FILENO, MESSAGE.as_ptr().cast(), MESSAGE.len());
         libc::_exit(130);
@@ -199,7 +205,7 @@ fn print_goodbye(message: &str) {
     println!();
     println!(
         "  {}",
-        paint("35", &format!("✦ Goodbye for now — {message}"))
+        paint(PEACH, &format!("Goodbye for now — {message}"))
     );
 }
 
@@ -213,40 +219,40 @@ fn print_banner() {
         " ███████║███████╗╚██████╗╚██████╔╝██║ ╚████║██████╔╝    ███████╗╚██████╔╝╚██████╔╝",
         " ╚══════╝╚══════╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝╚═════╝     ╚══════╝ ╚═════╝  ╚═════╝ ",
     ] {
-        println!("{}", paint("33", line));
+        println!("{}", paint(CORAL, line));
     }
     println!();
     println!(
         "{}",
         paint(
-            "33",
+            CORAL,
             "╭─ SECOND EGO · VERIFIED CODING HARNESS ───────────────────────────────╮"
         )
     );
     println!(
         "{}",
         paint(
-            "33",
+            PARCHEMENT,
             "│  understand  ›  explore  ›  plan  ›  execute  ›  verify              │"
         )
     );
     println!(
         "{}",
         paint(
-            "33",
+            PEACH,
             "│  local-first repository intelligence with bounded, inspectable runs   │"
         )
     );
     println!(
         "{}",
         paint(
-            "33",
+            CORAL,
             "╰───────────────────────────────────────────────────────────────────────╯"
         )
     );
     println!(
         "  {}  Type Ctrl-C to cancel.\n",
-        paint("90", "RUST ENGINE / INTERACTIVE")
+        paint(MUTED, "RUST ENGINE / INTERACTIVE")
     );
 }
 
@@ -259,33 +265,33 @@ fn print_run_card(root: &std::path::Path, cloned: bool) {
     println!(
         "{}",
         paint(
-            "36",
+            CORAL,
             "╭─ RUN CONFIG ─────────────────────────────────────────────────────────╮"
         )
     );
     println!(
         "{}",
         paint(
-            "36",
+            PEACH,
             &format!("│  ENGINE   Rust state machine + provider boundary                       │")
         )
     );
-    println!("{}", paint("36", &format!("│  SOURCE   {source:<61}│")));
+    println!("{}", paint(PEACH, &format!("│  SOURCE   {source:<61}│")));
     println!(
         "{}",
-        paint("36", &format!("│  ROOT     {:<61}│", root.display()))
+        paint(PEACH, &format!("│  ROOT     {:<61}│", root.display()))
     );
     println!(
         "{}",
         paint(
-            "36",
+            CORAL,
             "│  OUTPUT   live evidence + final JSON report                           │"
         )
     );
     println!(
         "{}",
         paint(
-            "36",
+            CORAL,
             "╰───────────────────────────────────────────────────────────────────────╯"
         )
     );
@@ -300,8 +306,8 @@ fn print_live_event(event: &secondego_core::EngineEvent) {
     };
     println!(
         "  {} {:<10} {}",
-        paint("32", icon),
-        paint("90", &format!("{:?}", event.phase)),
+        paint(CORAL, icon),
+        paint(MUTED, &format!("{:?}", event.phase)),
         event.event_type
     );
 }
@@ -313,9 +319,9 @@ fn print_result_card(report: &secondego_runtime::RunReport) {
         "FAILED"
     };
     let color = if report.verification_passed {
-        "32"
+        PARCHEMENT
     } else {
-        "31"
+        CORAL
     };
     println!();
     println!(
@@ -349,7 +355,7 @@ fn print_result_card(report: &secondego_runtime::RunReport) {
     );
     println!(
         "  {}",
-        paint("90", "Machine-readable report follows below.")
+        paint(MUTED, "Machine-readable report follows below.")
     );
 }
 
