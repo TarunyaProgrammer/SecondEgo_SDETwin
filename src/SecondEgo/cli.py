@@ -14,6 +14,7 @@ from SecondEgo.tools.router import ToolRouter
 from SecondEgo.tools.runner import CommandRunner
 from SecondEgo.tools.search import SearchTool
 from SecondEgo.verification.verifier import VerificationEngine
+from SecondEgo.storage.sqlite import SQLiteRunStore
 
 
 def main() -> int:
@@ -24,6 +25,7 @@ def main() -> int:
     parser.add_argument("--plan", required=True, type=Path, help="JSON plan with actions and verification_commands")
     parser.add_argument("--max-tool-calls", type=int, default=80)
     parser.add_argument("--max-retries", type=int, default=6)
+    parser.add_argument("--state-db", type=Path, help="optional SQLite path for run state and evidence")
     arguments = parser.parse_args()
     if arguments.solve != "solve":
         parser.error("the first argument must be 'solve'")
@@ -47,6 +49,7 @@ def main() -> int:
         ),
         verifier=VerificationEngine(runner),
         resources=resources,
+        store=SQLiteRunStore(arguments.state_db) if arguments.state_db else None,
     )
     result = engine.run(
         task=arguments.issue,

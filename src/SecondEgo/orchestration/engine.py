@@ -11,6 +11,7 @@ from SecondEgo.core.state_machine import StateMachine
 from SecondEgo.model.base import ActionProposal
 from SecondEgo.repository.index import RepositoryIndexer
 from SecondEgo.repository.scanner import RepositoryScanner
+from SecondEgo.storage.sqlite import SQLiteRunStore
 from SecondEgo.tools.router import ToolRouter
 from SecondEgo.verification.contracts import FailureClass, VerificationResult
 from SecondEgo.verification.verifier import VerificationEngine
@@ -20,7 +21,7 @@ from SecondEgo.verification.verifier import VerificationEngine
 class EngineResult:
     state: ExecutionState
     verification: VerificationResult
-    events: tuple[object, ...]
+    events: tuple[EngineEvent, ...]
     evidence: tuple[EvidenceRecord, ...]
 
 
@@ -35,12 +36,14 @@ class HarnessEngine:
         router: ToolRouter,
         verifier: VerificationEngine,
         resources: ResourceUsage,
+        store: SQLiteRunStore | None = None,
     ) -> None:
         self.scanner = scanner
         self.indexer = indexer or RepositoryIndexer(scanner.workspace, scanner=scanner)
         self.router = router
         self.verifier = verifier
         self.resources = resources
+        self.store = store
 
     def run(
         self,
@@ -59,7 +62,7 @@ class HarnessEngine:
         )
         machine = StateMachine(state)
         ledger = EvidenceLedger()
-        events: list[object] = []
+        events: list[EngineEvent] = []
         try:
             events.append(machine.move(Phase.UNDERSTAND, reason="task accepted")[1])
             events.append(machine.move(Phase.EXPLORE, reason="structural repository scan")[1])
@@ -127,19 +130,22 @@ class HarnessEngine:
                 failure_summary=str(exc),
             )
         state.resource_usage = self.resources.snapshot()
-        return EngineResult(
+        result = EngineResult(
             state=state,
             verification=verification,
             events=tuple(events),
             evidence=tuple(ledger.active()),
         )
+        if self.store is not None:
+            self.store.save_run(result.state, result.events, result.evidence)
+        return result
 
     def _execute_actions(
         self,
         actions: tuple[ActionProposal, ...],
         ledger: EvidenceLedger,
         state: ExecutionState,
-        events: list[object],
+        events: list[EngineEvent],
     ) -> None:
         for index, proposal in enumerate(actions):
             result = self.router.dispatch(proposal)
@@ -179,7 +185,7 @@ class HarnessEngine:
         commands: tuple[tuple[str, ...], ...],
         ledger: EvidenceLedger,
         state: ExecutionState,
-        events: list[object],
+        events: list[EngineEvent],
     ) -> tuple[VerificationResult, tuple[object, ...]]:
         result, evidence = self.verifier.run(commands)
         for index, item in enumerate(evidence):

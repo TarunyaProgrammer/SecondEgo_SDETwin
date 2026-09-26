@@ -16,6 +16,7 @@ from SecondEgo.orchestration.engine import HarnessEngine
 from SecondEgo.repository.scanner import RepositoryScanner
 from SecondEgo.repository.index import RepositoryIndexer
 from SecondEgo.repository.retrieval import RepositoryRetriever
+from SecondEgo.storage.sqlite import SQLiteRunStore
 from SecondEgo.verification.contracts import FailureClass, VerificationResult
 from SecondEgo.verification.verifier import VerificationEngine
 from SecondEgo.cli import _proposal
@@ -292,6 +293,40 @@ def test_harness_engine_recovers_from_failed_verification(tmp_path) -> None:
     assert result.state.status is TerminalStatus.COMPLETE
     assert result.verification.passed is True
     assert result.state.resource_usage["retries"] == 1
+
+
+def test_sqlite_store_persists_run_events_and_evidence(tmp_path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    workspace = WorkspacePolicy(root)
+    resources = ResourceUsage(ResourceBudget(max_tool_calls=10))
+    runner = CommandRunner(workspace)
+    store = SQLiteRunStore(tmp_path / "state" / "runs.db")
+    engine = HarnessEngine(
+        scanner=RepositoryScanner(workspace),
+        router=ToolRouter(
+            files=FileTool(workspace),
+            search=SearchTool(workspace),
+            runner=runner,
+            resources=resources,
+        ),
+        verifier=VerificationEngine(runner),
+        resources=resources,
+        store=store,
+    )
+
+    result = engine.run(
+        task="persist evidence",
+        acceptance_criteria=(),
+        actions=(),
+        verification_commands=(("python3", "-c", "assert True"),),
+    )
+    loaded = store.load_run(result.state.run_id)
+
+    assert loaded is not None
+    assert loaded["status"] == "COMPLETE"
+    assert loaded["events"][-1]["event_type"] == "run.terminated"
+    assert loaded["evidence"][0]["reference"] == "repository:scan"
 
 
 def test_cli_action_parser_rejects_malformed_plan_actions() -> None:
