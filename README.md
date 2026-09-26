@@ -43,6 +43,9 @@ AI_API_KEY=... PYTHONPATH=src python3 -m SecondEgo.cli solve \
 
 The engine does not send an API request when `AI_API_KEY` is missing. It terminates with explicit model-planning evidence instead. The root `Makefile` provides the evaluator interface: `make setup`, `make run`, `make test`, and `make clean`.
 
+[`evaluation/README.md`](evaluation/README.md) documents a separate target-repository
+rehearsal and includes a deliberately buggy pagination fixture.
+
 ## Design direction
 
 The proposed SecondEgo architecture uses a model-provider adapter, a repository intelligence layer, a stateful Python execution engine, local SQLite state, and a desktop shell:

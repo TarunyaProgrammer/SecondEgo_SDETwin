@@ -67,7 +67,13 @@ class VerificationEngine:
 
 def _classify_failure(output: str) -> FailureClass:
     normalized = output.casefold()
-    if "timed out" in normalized or "not found" in normalized or "no module named" in normalized:
+    if (
+        "timed out" in normalized
+        or "not found" in normalized
+        or "no module named" in normalized
+        or "could not start" in normalized
+        or "no such file or directory" in normalized
+    ):
         return FailureClass.ENVIRONMENT_FAILURE
     if "syntaxerror" in normalized or "syntax error" in normalized:
         return FailureClass.BUILD_FAILURE

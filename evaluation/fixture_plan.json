@@ -1,0 +1,19 @@
+{
+  "acceptance_criteria": [
+    "One-based pagination returns the requested page",
+    "Existing tests pass"
+  ],
+  "actions": [
+    {
+      "action": "edit_file",
+      "arguments": {
+        "path": "src/pagination.py",
+        "content": "def page_slice(items: list[str], page: int, page_size: int) -> list[str]:\n    \"\"\"Return one-based page contents.\"\"\"\n    if page < 1 or page_size < 1:\n        raise ValueError(\"page and page_size must be positive\")\n    start = (page - 1) * page_size\n    return items[start : start + page_size]\n"
+      },
+      "rationale": "The current implementation treats a one-based page as zero-based."
+    }
+  ],
+  "verification_commands": [
+    ["pytest", "-q"]
+  ]
+}

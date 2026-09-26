@@ -165,6 +165,14 @@ def test_command_runner_is_bounded_and_workspace_scoped(tmp_path) -> None:
     assert result.stdout.strip() == "ok"
 
 
+def test_command_runner_reports_missing_allowlisted_executable(tmp_path) -> None:
+    policy = CommandPolicy(frozenset({"definitely-missing"}))
+    result = CommandRunner(WorkspacePolicy(tmp_path), policy).run(("definitely-missing",))
+
+    assert result.success is False
+    assert "could not start" in result.stderr
+
+
 def test_file_tool_reads_and_writes_only_workspace_files(tmp_path) -> None:
     files = FileTool(WorkspacePolicy(tmp_path))
     written = files.write("src/example.py", "VALUE = 1\n")

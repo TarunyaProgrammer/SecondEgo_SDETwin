@@ -51,6 +51,12 @@ class CommandRunner:
             success = False
             exit_code = None
             truncated = False
+        except OSError as exc:
+            stdout = ""
+            stderr = f"command could not start: {exc}"
+            success = False
+            exit_code = None
+            truncated = False
         duration_ms = int((time.monotonic() - started) * 1000)
         stdout, stdout_truncated = _cap_output(stdout, self.command_policy.max_output_bytes)
         stderr, stderr_truncated = _cap_output(stderr, self.command_policy.max_output_bytes)

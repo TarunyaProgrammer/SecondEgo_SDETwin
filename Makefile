@@ -10,7 +10,7 @@ setup:
 
 run:
 	@test -n "$$AI_API_KEY" || (echo "AI_API_KEY must be set for evaluation"; exit 2)
-	$(VENV)/bin/secondego-tui
+	PATH="$(CURDIR)/$(VENV)/bin:$$PATH" $(VENV)/bin/secondego-tui
 
 test:
 	$(VENV)/bin/python -m pytest -q
