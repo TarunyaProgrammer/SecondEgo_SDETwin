@@ -8,10 +8,12 @@ requires-python = ">=3.12"
 secondego = "SecondEgo.cli:main"
 secondego-tui = "SecondEgo.tui:main"
 secondego-desktop = "SecondEgo.desktop.gateway:main"
+secondego-gestures = "SecondEgo.gesture.watcher:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 gemini = ["google-genai>=1.0"]
+gesture = ["opencv-python>=4.9", "mediapipe>=0.10"]
 
 [build-system]
 requires = ["setuptools>=68"]
