@@ -5,7 +5,7 @@ UI ?= off
 ENGINE ?= rust
 RUST_BIN ?= $(CURDIR)/engine-rs/target/release/secondego-cli
 
-.PHONY: setup run run-python ui desktop desktop-electron desktop-macos judge rust-check rust-test rust-build rust-build-release rust-run gc test clean
+.PHONY: setup run run-python discover help ui desktop desktop-electron desktop-macos judge rust-check rust-test rust-build rust-build-release rust-run gc test clean
 
 setup:
 	$(PYTHON) -m venv $(VENV)
@@ -42,6 +42,13 @@ judge:
 run-python:
 	@test -n "$$AI_API_KEY" || (echo "AI_API_KEY must be set for evaluation"; exit 2)
 	SECONDEGO_UI_MODE="$(UI_MODE)" PATH="$(CURDIR)/$(VENV)/bin:$$PATH" $(VENV)/bin/secondego-tui
+
+help: rust-build
+	"$(CURDIR)/engine-rs/target/debug/secondego-cli" --help
+
+discover: rust-build
+	@test -n "$(REPO)" || (echo "Usage: make discover REPO=/path/to/repository [LENSES=error,test,structural]"; exit 2)
+	"$(CURDIR)/engine-rs/target/debug/secondego-cli" discover --repo "$(REPO)" $(if $(LENSES),--lens "$(LENSES)",)
 
 desktop:
 	PATH="$(CURDIR)/$(VENV)/bin:$$PATH" $(VENV)/bin/secondego-desktop

@@ -300,6 +300,14 @@ def test_command_policy_rejects_unapproved_executable() -> None:
         policy.validate(("curl", "https://example.com"), 5)
 
 
+def test_command_policy_accepts_only_versioned_python3_interpreters() -> None:
+    policy = CommandPolicy.default()
+
+    assert policy.validate(("python3.14", "-m", "pytest"), 5)[0] == "python3.14"
+    with pytest.raises(PolicyViolation, match="allowlisted"):
+        policy.validate(("python-not-approved", "-m", "pytest"), 5)
+
+
 def test_command_runner_is_bounded_and_workspace_scoped(tmp_path) -> None:
     runner = CommandRunner(WorkspacePolicy(tmp_path))
     result = runner.run(("python3", "-c", "print('ok')"), cwd=".")

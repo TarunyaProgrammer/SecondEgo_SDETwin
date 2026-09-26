@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use secondego_core::ActionProposal;
 use secondego_model::{ConfiguredProvider, ScriptedProvider};
+use secondego_runtime::discovery::{DiscoveryLens, DiscoveryRequest, discover};
 use secondego_runtime::{RustEngine, collect_garbage, resolve_repository};
 
 const CORAL: &str = "38;2;238;101;71";
@@ -14,12 +15,30 @@ const MUTED: &str = "38;2;166;131;119";
 
 fn main() {
     let arguments: Vec<String> = env::args().skip(1).collect();
+    if arguments
+        .iter()
+        .any(|argument| argument == "--help" || argument == "-h")
+        || arguments.first().is_some_and(|argument| argument == "help")
+    {
+        print_help();
+        return;
+    }
     let gc = collect_garbage();
     if gc.deleted > 0 {
         eprintln!(
             "SecondEgo garbage collector: reclaimed {} stale temp directories",
             gc.deleted
         );
+    }
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == "discover")
+    {
+        if let Err(error) = run_discovery(&arguments[1..]) {
+            eprintln!("SecondEgo discovery failed: {error}");
+            std::process::exit(1);
+        }
+        return;
     }
     let interactive = arguments.iter().any(|argument| argument == "--interactive");
     if interactive {
@@ -71,6 +90,70 @@ fn main() {
         eprintln!("SecondEgo failed: {error}");
         std::process::exit(1);
     }
+}
+
+fn run_discovery(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let workspace = value(arguments, "--workspace")
+        .or_else(|| value(arguments, "--repo"))
+        .or_else(|| env::var("SECONDEGO_REPOSITORY").ok())
+        .unwrap_or_else(|| ".".into());
+    let resolved = resolve_repository(&workspace)?;
+    let lenses = value(arguments, "--lens")
+        .map(|value| {
+            value
+                .split(',')
+                .filter_map(DiscoveryLens::parse)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let max_findings = value(arguments, "--max-findings")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(20);
+    let report = discover(
+        &resolved.root,
+        DiscoveryRequest {
+            lenses,
+            max_findings,
+        },
+    )?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
+}
+
+fn print_help() {
+    println!("SecondEgo — bounded local coding harness");
+    println!();
+    println!("COMMANDS");
+    println!("  secondego --interactive                 Run the verified task-fixing harness");
+    println!("  secondego --workspace PATH --task TEXT   Run a non-interactive task");
+    println!("  secondego discover --repo PATH           Scan a repository without modifying it");
+    println!("  secondego help                           Show this command guide");
+    println!();
+    println!("DISCOVERY SHOWCASE");
+    println!("  cargo run --manifest-path engine-rs/Cargo.toml -p secondego-cli -- \\");
+    println!("    discover --repo evaluation/discovery_fixture_repo --lens error,test,structural");
+    println!();
+    println!("DISCOVERY OPTIONS");
+    println!("  --repo PATH | --workspace PATH           Local repository to inspect");
+    println!("  --lens LIST                              error,test,structural (comma-separated)");
+    println!(
+        "  --max-findings N                         Cap the report at N findings (default: 20)"
+    );
+    println!();
+    println!("SAFETY");
+    println!(
+        "  Discovery is read-only: it indexes, ranks, and reports evidence-backed candidates."
+    );
+    println!("  It does not edit files, run arbitrary commands, or transfer diffs.");
+    println!();
+    println!("SHOWCASE PLAN");
+    println!("  1. Run the fixture command above and show the two deliberate findings.");
+    println!("  2. Point it at a small target repository with one known swallowed exception.");
+    println!("  3. Compare --lens error with --lens test,structural.");
+    println!(
+        "  4. Explain each finding through its path, line range, confidence, and verification plan."
+    );
+    println!("  5. Re-run and show the target Git diff is unchanged.");
 }
 
 fn run_scripted(

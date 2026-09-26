@@ -33,12 +33,34 @@ Run the regression suite separately:
 make test
 ```
 
+To inspect a repository without changing it, use the read-only discovery mode:
+
+```bash
+make help
+make discover REPO=evaluation/discovery_fixture_repo
+```
+
+The discovery report includes the indexed repository counts, phase events,
+finding kind, source path and line range, confidence, and a bounded
+verification plan. Available lenses are `error`, `test`, and `structural`:
+
+```bash
+make discover REPO=/path/to/repository LENSES=error,test,structural
+```
+
+Discovery is intentionally separate from the default task-fixing run. It does
+not call the model, execute arbitrary commands, edit files, or transfer diffs.
+The fixture under `evaluation/discovery_fixture_repo` is the recommended
+judge/demo path because it contains two deliberate, inspectable signals.
+
 The required Makefile interface is:
 
 | Command | Purpose |
 | --- | --- |
 | `make setup` | Create the Python environment, install dependencies, and build the Rust CLI and gateway. |
 | `make run` | Launch the default Rust evaluation harness. |
+| `make help` | Show the CLI commands and the discovery showcase plan. |
+| `make discover REPO=...` | Run read-only issue discovery against a repository. |
 | `make judge` | Run setup and then launch the same headless harness in one command. |
 | `make test` | Run the Python contract/evaluation tests. |
 | `make clean` | Remove generated Python/build artifacts. |

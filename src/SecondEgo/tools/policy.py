@@ -1,4 +1,5 @@
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -61,11 +62,14 @@ class CommandPolicy:
         if not normalized or not normalized[0].strip():
             raise PolicyViolation("command must contain an executable")
         executable = os.path.basename(normalized[0])
-        if executable not in self.allowed_executables:
+        is_versioned_python3 = (
+            "python3" in self.allowed_executables
+            and re.fullmatch(r"python3(?:\.\d+)+", executable) is not None
+        )
+        if executable not in self.allowed_executables and not is_versioned_python3:
             raise PolicyViolation(f"executable is not allowlisted: {executable}")
         if timeout_seconds <= 0 or timeout_seconds > self.max_timeout_seconds:
             raise PolicyViolation("command timeout exceeds policy")
         if any("\x00" in argument for argument in normalized):
             raise PolicyViolation("command arguments cannot contain NUL bytes")
         return normalized
-

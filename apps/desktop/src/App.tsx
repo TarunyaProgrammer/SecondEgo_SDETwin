@@ -8,6 +8,8 @@ const defaultGateway =
   "http://127.0.0.1:8787";
 
 type Worker = { phase: string; name: string; role: string; position: string; tone: string };
+type WorkerState = "idle" | "active" | "done" | "error";
+type Facility = { id: string; label: string; detail: string; phases: string[]; position: string };
 
 const workers: Worker[] = [
   { phase: "UNDERSTAND", name: "Mira", role: "Cartographer", position: "worker-understand", tone: "aqua" },
@@ -16,6 +18,13 @@ const workers: Worker[] = [
   { phase: "EXECUTE", name: "Kade", role: "Builder", position: "worker-execute", tone: "coral" },
   { phase: "VERIFY", name: "Vela", role: "Inspector", position: "worker-verify", tone: "mint" },
   { phase: "RECOVER", name: "Sera", role: "Medic", position: "worker-recover", tone: "gold" },
+];
+
+const facilities: Facility[] = [
+  { id: "index", label: "Repository index", detail: "understand · explore", phases: ["UNDERSTAND", "EXPLORE"], position: "place-index" },
+  { id: "workshop", label: "Workshop", detail: "plan · execute", phases: ["PLAN", "EXECUTE"], position: "place-workshop" },
+  { id: "lab", label: "Test lab", detail: "verify", phases: ["VERIFY"], position: "place-lab" },
+  { id: "archive", label: "Recovery bay", detail: "recover", phases: ["RECOVER"], position: "place-archive" },
 ];
 
 function initialToken(): string {
@@ -30,7 +39,7 @@ function time(value: string): string {
   return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-function WorkerSprite({ worker, state }: { worker: Worker; state: "idle" | "active" | "done" }) {
+function WorkerSprite({ worker, state }: { worker: Worker; state: WorkerState }) {
   return (
     <div className={`worker ${worker.position} ${state}`}>
       <span className="worker-pulse" aria-hidden="true" />
@@ -117,10 +126,23 @@ function App() {
   const activePhase = latest?.phase || "";
   const complete = Boolean(run?.result || run?.error);
   const verification = run?.result?.verification;
+  const activeWorker = workers.find((worker) => worker.phase === activePhase);
+  const statusTone = run?.error ? "error" : verification?.passed ? "success" : busy ? "active" : "idle";
+  const statusLabel = run?.error ? "needs recovery" : verification?.passed ? "verified" : busy ? "running" : run?.status || "ready";
+  const resourceUsage = run?.result?.resource_usage;
+  const usage = (key: string) => resourceUsage?.[key] ?? null;
 
-  function workerState(phase: string): "idle" | "active" | "done" {
+  function workerState(phase: string): WorkerState {
+    if (activePhase === phase && run?.error) return "error";
     if (activePhase === phase) return complete ? "done" : "active";
     return run?.events.some((event) => event.phase === phase) ? "done" : "idle";
+  }
+
+  function facilityState(facility: Facility): WorkerState {
+    const states = facility.phases.map(workerState);
+    if (states.includes("error")) return "error";
+    if (states.includes("active")) return "active";
+    return states.includes("done") ? "done" : "idle";
   }
 
   return (
@@ -136,43 +158,47 @@ function App() {
 
       <section className="command-surface">
         <button className="notch-trigger" type="button" onClick={() => setNotchOpen((open) => !open)} aria-expanded={notchOpen}>
-          <span className="trigger-mark" aria-hidden="true" /><span>{notchOpen ? "Close mission control" : "Open mission control"}</span><small>{run ? `run ${run.request_id.slice(0, 6)}` : "headless by default"}</small>
+          <span className="trigger-mark" aria-hidden="true" /><span>{notchOpen ? "SecondEgo / Mission control" : "Open mission control"}</span><small className={statusTone}>{run ? statusLabel : "headless"}</small>
         </button>
-        {notchOpen && <form className="mission-form" onSubmit={submit}>
-          <div className="mission-copy"><span className="kicker">Mission control</span><h1>Give your second self<br />one clear task.</h1><p>SecondEgo plans, changes, and verifies the target repository in a bounded worktree.</p></div>
+       {notchOpen && <form className="mission-form" onSubmit={submit}>
+          <div className="mission-copy"><h1>What would you<br />like to make?</h1><p>Give SecondEgo a repository and a goal. Its plan, changes, and proof stay in view.</p></div>
           <div className="mission-inputs">
             <label>Repository<input id="repository-input" value={repository} onChange={(event) => setRepository(event.target.value)} placeholder="/path/to/repository or https://github.com/owner/repo" autoComplete="url" required /></label>
             <label>Task<textarea value={issue} onChange={(event) => setIssue(event.target.value)} placeholder="Describe the change and how it should be verified." required /></label>
           </div>
-          <div className="mission-actions"><button className="primary-action" disabled={busy}>{busy ? "Working…" : "Start verified run"}</button><span>{busy ? "The village is reporting live." : "No hidden agent actions."}</span>{error && <p role="alert">{error}</p>}</div>
+          <div className="mission-actions"><button className="primary-action" disabled={busy}>{busy ? <span className="button-spinner" aria-hidden="true" /> : <svg aria-hidden="true" viewBox="0 0 16 16"><path d="m5 3 7 5-7 5Z" /></svg>}<span>{busy ? "Initializing" : "Start a run"}</span></button><span>{busy ? "Live engine signals will appear below." : "Autonomous · verified workspace"}</span>{error && <p role="alert">{error}</p>}</div>
           <details className="connection"><summary>Local connection</summary><label>Gateway URL<input value={gateway} onChange={(event) => setGateway(event.target.value)} /></label><label>Gateway token<input type="password" value={token} onChange={(event) => setToken(event.target.value)} required /></label></details>
         </form>}
       </section>
 
       <section className="workspace">
         <section className="village-panel">
-          <header><span className="kicker">The working village</span><h2>{activePhase || "Ready when you are"}</h2><p>{label(latest)}</p></header>
-          <div className="village-map" aria-label="Visualized engine phase activity">
-            <div className="village-sky" aria-hidden="true"><i /><b /><em /></div>
-            <div className="map-path path-a" /><div className="map-path path-b" /><div className="map-gate" aria-hidden="true" />
-            <div className="village-plaza" aria-hidden="true"><i /><b /></div>
-            <div className="tree tree-one" aria-hidden="true"><i /><b /></div><div className="tree tree-two" aria-hidden="true"><i /><b /></div><div className="tree tree-three" aria-hidden="true"><i /><b /></div>
-            <div className="garden garden-one" aria-hidden="true"><i /><b /><em /></div><div className="garden garden-two" aria-hidden="true"><i /><b /><em /></div>
-            <div className="place place-index"><span className="chimney" /><span className="roof" /><span className="house"><i /><b /></span><small>Index house</small></div>
-            <div className="place place-workshop"><span className="chimney" /><span className="roof" /><span className="house"><i /><b /></span><small>Workshop</small></div>
-            <div className="place place-lab"><span className="chimney" /><span className="roof" /><span className="house"><i /><b /></span><small>Test lab</small></div>
-            <div className="place place-archive"><span className="chimney" /><span className="roof" /><span className="house"><i /><b /></span><small>Archive</small></div>
+          <header><h2>{activePhase ? `${activePhase.toLowerCase()} in progress` : "The village is ready"}</h2><p>{latest ? label(latest) : "Your workers will light up as the run unfolds."}</p></header>
+          <div className={`village-map ${activePhase ? "is-active" : "is-resting"}`} aria-label="Visualized engine phase activity">
+            <div className="phase-rail" aria-label="Execution pipeline">
+              {workers.map((worker, index) => <span className={workerState(worker.phase)} key={worker.phase}><b>{String(index + 1).padStart(2, "0")}</b><i /><small>{worker.phase}</small></span>)}
+            </div>
+            <div className="map-link link-index-workshop" aria-hidden="true" /><div className="map-link link-workshop-lab" aria-hidden="true" /><div className="map-link link-workshop-archive" aria-hidden="true" />
+            {facilities.map((facility) => <div className={`place ${facility.position} ${facilityState(facility)}`} key={facility.id}><span className="roof" /><span className="house"><i /><b /></span><small>{facility.label}</small><em>{facility.detail}</em></div>)}
             {workers.map((worker) => <WorkerSprite key={worker.phase} worker={worker} state={workerState(worker.phase)} />)}
-            <div className="map-key"><span><i className="active-dot" />active task</span><span><i className="done-dot" />visited</span><span><i className="idle-dot" />ambient only</span></div>
+            {activePhase && <div className="data-packet" aria-label={`${activePhase.toLowerCase()} data moving through the execution map`} />}
+            <div className="map-key"><span><i className="active-dot" />active</span><span><i className="done-dot" />complete</span><span><i className="idle-dot" />queued</span></div>
           </div>
         </section>
 
-        <aside className="run-panel">
-          <span className="kicker">Run state</span><strong className={verification?.passed ? "passed" : ""}>{run?.status || "standby"}</strong>
-          <p className="run-task">{run?.issue || "Open mission control to submit a repository task."}</p>
-          <div className="signal"><span>Latest signal</span><b>{latest ? `${time(latest.timestamp)} · ${label(latest)}` : "No engine signal"}</b></div>
-          <ol>{workers.map((worker) => <li className={workerState(worker.phase)} key={worker.phase}><i /> <span>{worker.phase}</span><small>{worker.name} · {worker.role}</small></li>)}</ol>
-          <p className="run-note">This view is evidence-led: it never invents activity or completion.</p>
+        <aside className={`run-panel ${statusTone}`}>
+          <div className="run-heading"><span className="kicker">Run state</span><strong><i />{statusLabel}</strong></div>
+          <dl className="run-metrics">
+            <div><dt>Current phase</dt><dd>{activePhase || "—"}</dd></div>
+            <div><dt>Current agent</dt><dd>{activeWorker ? activeWorker.name : "—"}</dd></div>
+            <div><dt>Engine events</dt><dd>{run?.events.length ?? 0}</dd></div>
+            <div><dt>Changed files</dt><dd>{run?.result ? run.result.changed_paths.length : "—"}</dd></div>
+            <div><dt>Tool calls</dt><dd>{usage("tool_calls") ?? "—"}</dd></div>
+            <div><dt>Model calls</dt><dd>{usage("model_calls") ?? "—"}</dd></div>
+          </dl>
+          <div className="signal"><span>Latest signal</span><b>{latest ? `${time(latest.timestamp)} · ${label(latest)}` : "No signals yet — the village is ready."}</b></div>
+          <ol>{workers.map((worker, index) => <li className={workerState(worker.phase)} key={worker.phase}><i>{workerState(worker.phase) === "done" ? "✓" : workerState(worker.phase) === "active" ? "●" : workerState(worker.phase) === "error" ? "!" : "○"}</i><span><b>{String(index + 1).padStart(2, "0")} {worker.phase}</b><small>{worker.name} · {worker.role}</small></span></li>)}</ol>
+          <p className="run-note">Only engine-backed telemetry appears here.</p>
         </aside>
       </section>
 

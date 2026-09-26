@@ -14,6 +14,8 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+pub mod discovery;
+
 const MAX_CLONE_BYTES: u64 = 1_000_000_000;
 
 #[derive(Debug)]
