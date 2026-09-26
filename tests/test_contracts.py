@@ -75,7 +75,8 @@ def test_evidence_ledger_retains_source_linked_active_evidence() -> None:
     ledger.mark_stale("old")
 
     assert [record.reference for record in ledger.active()] == ["test-1"]
-    assert ledger.snapshot()[1]["stale"] is True
+    snapshot = {record["reference"]: record for record in ledger.snapshot()}
+    assert snapshot["old"]["stale"] is True
 
 
 def test_resource_usage_rejects_budget_overrun_before_recording() -> None:
