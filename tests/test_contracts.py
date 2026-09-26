@@ -626,6 +626,47 @@ def test_harness_engine_executes_validated_provider_plan(tmp_path) -> None:
     assert "provider.txt" in result.state.changed_paths
 
 
+def test_harness_engine_converts_provider_transport_error_to_terminal_evidence(tmp_path) -> None:
+    class FailingProvider:
+        async def generate(self, prompt: str, *, context: dict[str, object]) -> ActionProposal:
+            raise ConnectionError("network details must not escape the run")
+
+        async def count_tokens(self, text: str) -> int:
+            return 1
+
+    workspace = WorkspacePolicy(tmp_path)
+    resources = ResourceUsage(ResourceBudget(max_model_calls=1, max_tool_calls=5))
+    runner = CommandRunner(workspace)
+    engine = HarnessEngine(
+        scanner=RepositoryScanner(workspace),
+        router=ToolRouter(
+            files=FileTool(workspace),
+            search=SearchTool(workspace),
+            runner=runner,
+            resources=resources,
+        ),
+        verifier=VerificationEngine(runner),
+        resources=resources,
+    )
+    planner = ModelPlanner(
+        provider=FailingProvider(),
+        assembler=ContextAssembler(ContextBudget(24_000, 4_000, 2_000, 12_000, 3_000, 3_000)),
+        resources=resources,
+    )
+
+    result = asyncio.run(
+        engine.run_with_planner(
+            task="provider failure test",
+            acceptance_criteria=(),
+            planner=planner,
+        )
+    )
+
+    assert result.state.status is TerminalStatus.FAILED
+    assert result.verification.failure_class is FailureClass.MODEL_PLANNING_FAILURE
+    assert "ConnectionError" in (result.verification.failure_summary or "")
+
+
 def test_planner_requests_repair_after_observed_failure(tmp_path) -> None:
     root = _git_fixture(tmp_path)
     workspace = WorkspacePolicy(root)

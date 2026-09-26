@@ -114,11 +114,11 @@ class HarnessEngine:
                 terminal_status=TerminalStatus.BLOCKED,
                 terminal_reason=str(exc),
             )
-        except (PlanValidationError, RuntimeError) as exc:
+        except Exception as exc:
             verification = VerificationResult(
                 passed=False,
                 failure_class=FailureClass.MODEL_PLANNING_FAILURE,
-                failure_summary=str(exc),
+                failure_summary=f"{type(exc).__name__}: {str(exc)[:500]}",
             )
             return self._finalize(
                 prepared,

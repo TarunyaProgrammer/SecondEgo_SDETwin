@@ -14,6 +14,7 @@ Implemented vertical slice:
 - isolated Git worktree attempts that discard failures and transfer only verified diffs;
 - structured verification failure records and diagnosis-informed model recovery;
 - ranked task and failure retrieval with bounded, redacted source excerpts in planner context;
+- provider transport failures converted into bounded terminal evidence instead of TUI crashes;
 - redacted bounded telemetry and generated-file filtering at the transaction boundary;
 - SQLite schema version 1 for final run state, events, and evidence;
 - CLI execution and automated contract tests.

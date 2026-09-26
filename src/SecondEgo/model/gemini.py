@@ -48,15 +48,22 @@ class GeminiProvider:
                 "Gemini support requires the optional dependency: pip install '.[gemini]'"
             ) from exc
 
-        client = genai.Client(api_key=key)
-        response = client.models.generate_content(
-            model=self.model,
-            contents=prompt,
-            config={
-                "response_mime_type": "application/json",
-                "response_schema": _ACTION_SCHEMA,
-            },
-        )
+        try:
+            client = genai.Client(api_key=key)
+            response = client.models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config={
+                    "response_mime_type": "application/json",
+                    "response_schema": _ACTION_SCHEMA,
+                },
+            )
+        except Exception as exc:
+            # Transport/library failures must become bounded run evidence; exception
+            # text can contain URLs, request details, or provider-sensitive values.
+            raise ProviderConfigurationError(
+                f"Gemini request failed: {type(exc).__name__}"
+            ) from exc
         try:
             data = json.loads(response.text)
         except (TypeError, json.JSONDecodeError) as exc:
