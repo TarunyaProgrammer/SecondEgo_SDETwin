@@ -2,7 +2,19 @@
 
 ## Current status
 
-This repository contains project guidance and an initial architecture proposal. Product/runtime implementation has not started.
+The repository now contains an early, headless implementation of the core harness. It is not yet the full desktop product.
+
+Implemented vertical slice:
+
+- typed state machine with verification, bounded recovery, and explicit termination;
+- workspace-bounded files, search, commands, Git evidence, and tool routing;
+- context budgets, source-linked evidence ledger, and run-level resource budgets;
+- Python AST repository indexing with lexical fallback retrieval;
+- deterministic and optional Gemini-backed structured planning;
+- SQLite schema version 1 for final run state, events, and evidence;
+- CLI execution and automated contract tests.
+
+Still unimplemented: Electron/React shell, packaging, broad language parsing, benchmark fixtures, and full telemetry/report schemas.
 
 ## Working identity
 
@@ -24,11 +36,12 @@ This repository contains project guidance and an initial architecture proposal. 
 
 ## Decisions still open
 
-- Exact model/provider API and token-counting implementation.
-- Python package layout and persistence schema.
-- Supported repository languages and parser coverage.
-- Tool permission model and sandbox boundary.
-- Evaluation tasks, benchmark fixtures, and telemetry format.
+- Evaluation-required Gemini model identifier and API configuration. The adapter defaults to `gemini-3.8-flash` but is configurable; model calls remain behind `ModelProvider`.
+- Provider-native token counting. The current preflight budget uses a deterministic local estimate to avoid a separate paid request.
+- Supported repository languages beyond Python AST extraction; unsupported languages fall back to structural/lexical retrieval.
+- Exact evaluation tool-permission policy and sandbox boundary.
+- Evaluation tasks, benchmark fixtures, and final telemetry/report schemas.
+- Desktop transport contract and Electron/React shell implementation.
 
 ## Change protocol
 

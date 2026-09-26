@@ -2,11 +2,46 @@
 
 > A coding harness built for reliable autonomous software engineering.
 
-SecondEgo is a local desktop application whose Python engine turns a foundation model into a reliable software engineer through repository intelligence, structured planning, adaptive tool orchestration, bounded context management, failure recovery, and test-driven verification. An Electron + React pixel-village shell visualizes the engine; it does not replace it.
+SecondEgo is a local coding-agent application whose Python engine turns a foundation model into a reliable software engineer through repository intelligence, structured planning, adaptive tool orchestration, bounded context management, failure recovery, and test-driven verification. The planned Electron + React pixel-village shell will visualize the engine; it will not replace it.
 
 ## Status
 
-This repository is currently in the architecture and project-scaffolding phase. The implementation has not started. [`CONTEXT-1.md`](CONTEXT-1.md) contains the harness proposal, [`CONTEXT-2.md`](CONTEXT-2.md) contains the desktop product-shell proposal, and [`CONTEXT.md`](CONTEXT.md) records current decisions and open questions.
+The headless Python harness is implemented as an early vertical slice. It has an explicit state machine, safe workspace tools, context and resource budgets, Python repository indexing, structured plan validation, verification/recovery, SQLite evidence persistence, and a CLI. The Electron/React shell is not implemented yet.
+
+[`CONTEXT-1.md`](CONTEXT-1.md) contains the harness proposal, [`CONTEXT-2.md`](CONTEXT-2.md) contains the desktop product-shell proposal, and [`CONTEXT.md`](CONTEXT.md) records current decisions and open questions.
+
+## Run the harness
+
+Create an isolated environment and install the deterministic/test path:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e '.[dev]'
+.venv/bin/python -m pytest -q
+```
+
+Run a replayable JSON plan:
+
+```bash
+PYTHONPATH=src python3 -m SecondEgo.cli solve \
+  --repo /path/to/repository \
+  --issue "Fix authentication timeout handling" \
+  --plan plan.json \
+  --state-db /path/to/secondego-runs.db
+```
+
+For provider-backed planning, install the optional Gemini dependency, set `GEMINI_API_KEY` in the environment, and select a model explicitly if the evaluation requires one:
+
+```bash
+.venv/bin/pip install -e '.[dev,gemini]'
+GEMINI_API_KEY=... PYTHONPATH=src python3 -m SecondEgo.cli solve \
+  --repo /path/to/repository \
+  --issue "Fix authentication timeout handling" \
+  --gemini \
+  --model gemini-3.8-flash
+```
+
+The engine does not send an API request when `GEMINI_API_KEY` is missing. It terminates with explicit model-planning evidence instead.
 
 ## Design direction
 
@@ -19,6 +54,13 @@ task → understand → explore → plan → execute → verify
 ```
 
 The design favors a derived repository knowledge graph backed by lightweight local storage over premature distributed infrastructure. It also favors a small set of reliable tools over a large catalog of weakly validated tools.
+
+## Current scope
+
+- Python AST symbol/import extraction is implemented; other languages currently use structural and lexical fallback only.
+- SQLite schema version 1 persists compact final run state, events, and evidence.
+- The model is required to return a structured plan, which is validated before tools execute it.
+- The desktop shell, package distribution, full benchmark suite, and richer multi-language parsing remain planned work.
 
 ## Repository guidance
 
