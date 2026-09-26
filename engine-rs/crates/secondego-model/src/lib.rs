@@ -86,7 +86,10 @@ pub struct GeminiProvider {
 impl Default for GeminiProvider {
     fn default() -> Self {
         Self {
-            model: "gemini-3.8-flash".into(),
+            model: std::env::var("SECONDEGO_MODEL")
+                .ok()
+                .filter(|model| !model.trim().is_empty())
+                .unwrap_or_else(|| "gemini-3.8-flash".into()),
             api_key: None,
             timeout: Duration::from_secs(60),
         }

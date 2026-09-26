@@ -1,4 +1,4 @@
-const { app, BrowserWindow } = require("electron");
+const { app, BrowserWindow, ipcMain, screen } = require("electron");
 const { randomBytes } = require("node:crypto");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
@@ -8,28 +8,83 @@ const devUrl = process.env.SECONDEGO_DESKTOP_URL;
 const gatewayPort = Number(process.env.SECONDEGO_GATEWAY_PORT || 8787);
 let gatewayProcess;
 let mainWindow;
+const notchMode = process.platform === "darwin" && process.env.SECONDEGO_DESKTOP_MODE !== "window";
+
+const NOTCH_SIZE = {
+  closed: { width: 236, height: 38 },
+  open: { width: 920, height: 820 },
+};
+
+function notchBounds(expanded) {
+  const display = screen.getPrimaryDisplay();
+  const size = expanded ? NOTCH_SIZE.open : NOTCH_SIZE.closed;
+  return {
+    x: Math.round(display.bounds.x + (display.bounds.width - size.width) / 2),
+    y: display.bounds.y,
+    width: size.width,
+    height: size.height,
+  };
+}
 
 function createWindow(token) {
+  const initialBounds = notchMode ? notchBounds(false) : { width: 1440, height: 960 };
   mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 960,
-    minWidth: 980,
-    minHeight: 680,
-    backgroundColor: "#0b0f14",
+    ...initialBounds,
+    ...(notchMode
+      ? {
+          frame: false,
+          transparent: true,
+          backgroundColor: "#00000000",
+          hasShadow: false,
+          resizable: false,
+          movable: false,
+          minimizable: false,
+          maximizable: false,
+          fullscreenable: false,
+          skipTaskbar: true,
+          alwaysOnTop: true,
+          visibleOnAllWorkspaces: true,
+          titleBarStyle: "hidden",
+        }
+      : {
+          minWidth: 980,
+          minHeight: 680,
+          backgroundColor: "#0b0f14",
+        }),
     webPreferences: {
+      preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
     },
   });
 
-  const query = token ? `?token=${encodeURIComponent(token)}` : "";
-  if (devUrl) {
-    mainWindow.loadURL(`${devUrl}${query}`);
-  } else {
-    mainWindow.loadFile(path.join(__dirname, "..", "dist", "index.html"), { search: query });
+  if (notchMode) {
+    mainWindow.setAlwaysOnTop(true, "floating");
+    mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   }
+
+  const query = new URLSearchParams({
+    ...(token ? { token } : {}),
+    ...(notchMode ? { notch: "1" } : {}),
+  }).toString();
+  if (devUrl) {
+    mainWindow.loadURL(`${devUrl}${query ? `?${query}` : ""}`);
+  } else {
+    mainWindow.loadFile(path.join(__dirname, "..", "dist", "index.html"), { search: query ? `?${query}` : "" });
+  }
+
+  mainWindow.once("ready-to-show", () => {
+    if (notchMode) mainWindow.showInactive();
+    else mainWindow.show();
+  });
 }
+
+ipcMain.handle("secondego:notch-expanded", (_event, expanded) => {
+  if (!notchMode || !mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.setBounds(notchBounds(Boolean(expanded)), true);
+  if (expanded) mainWindow.showInactive();
+});
 
 function startGateway() {
   const repoRoot = path.join(__dirname, "..", "..", "..");
@@ -78,7 +133,13 @@ function startGateway() {
 }
 
 app.whenReady().then(() => {
+  if (notchMode && app.dock) app.dock.hide();
   startGateway();
+  if (notchMode) {
+    screen.on("display-metrics-changed", () => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setBounds(notchBounds(false));
+    });
+  }
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow("");
   });

@@ -6,6 +6,7 @@ description = "Evaluator-facing Rust CLI for SecondEgo"
 license = "MIT"
 
 [dependencies]
+libc = "0.2"
 serde_json = "1"
 secondego-core = { path = "../secondego-core" }
 secondego-model = { path = "../secondego-model" }

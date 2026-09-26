@@ -18,6 +18,7 @@ from SecondEgo.app import build_engine, build_gemini_planner, build_resources
 from SecondEgo.config import configured_model
 from SecondEgo.core.events import EngineEvent
 from SecondEgo.core.state import AcceptanceCriterion
+from SecondEgo.repository.source import RepositorySourceError, resolve_repository, validate_repository_source
 from SecondEgo.storage.redaction import redact_sensitive
 
 
@@ -33,6 +34,7 @@ class RunRecord:
     repository: str
     issue: str
     model: str
+    source_repository: str | None = None
     status: str = "QUEUED"
     events: list[dict[str, Any]] = field(default_factory=list)
     result: dict[str, Any] | None = None
@@ -53,6 +55,7 @@ class RunRecord:
             return {
                 "request_id": self.request_id,
                 "repository": self.repository,
+                "source_repository": self.source_repository,
                 "issue": self.issue,
                 "model": self.model,
                 "status": self.status,
@@ -73,22 +76,23 @@ class RunRegistry:
         repository_value = repository.strip()
         issue_value = issue.strip()
         if not repository_value or len(repository_value) > MAX_REPOSITORY_CHARS:
-            raise ValueError("repository must be a non-empty path within the request limit")
+            raise ValueError("repository must be a non-empty path or HTTPS GitHub URL within the request limit")
+        try:
+            validate_repository_source(repository_value)
+        except RepositorySourceError as exc:
+            raise ValueError(str(exc)) from exc
         if not issue_value or len(issue_value) > MAX_ISSUE_CHARS:
             raise ValueError("issue must be non-empty and within the request limit")
         model_value = (model or configured_model()).strip()
         if len(model_value) > MAX_MODEL_CHARS:
             raise ValueError("model identifier exceeds the request limit")
 
-        root = Path(repository_value).expanduser().resolve()
-        if not root.is_dir():
-            raise ValueError("repository must be an existing directory")
-
         record = RunRecord(
             request_id=str(uuid4()),
-            repository=str(root),
+            repository=repository_value,
             issue=issue_value,
             model=model_value or configured_model(),
+            source_repository=repository_value,
         )
         with self._lock:
             self._runs[record.request_id] = record
@@ -101,8 +105,11 @@ class RunRegistry:
 
     def _run(self, record: RunRecord) -> None:
         try:
+            resolved = resolve_repository(record.repository)
+            with record.lock:
+                record.repository = str(resolved.root)
             engine = build_engine(
-                Path(record.repository),
+                resolved.root,
                 resources=build_resources(),
                 event_sink=record.add_event,
             )
@@ -122,7 +129,7 @@ class RunRegistry:
             # Keep gateway failures bounded and free of provider URLs or secrets.
             with record.lock:
                 record.status = "FAILED"
-                record.error = f"{type(exc).__name__}: {str(exc)[:500]}"
+                record.error = f"{type(exc).__name__}: {redact_sensitive(str(exc))[:500]}"
 
 
 def _result_payload(result: Any) -> dict[str, Any]:
@@ -231,6 +238,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
             {"request_id": record.request_id, "status": record.status}, status=202
         )
 
+    def do_OPTIONS(self) -> None:  # noqa: N802
+        # Browser preflight requests do not carry the application token. The
+        # actual GET/POST remains authenticated in do_GET/do_POST.
+        self.send_response(204)
+        self._send_cors_headers()
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _authorized(self) -> bool:
         return secrets.compare_digest(
             self.headers.get("X-SecondEgo-Token", ""), self.gateway.token
@@ -240,6 +255,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         body = json.dumps(value, separators=(",", ":"), default=str).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
+        self._send_cors_headers()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -248,6 +264,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         encoded = body.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        self._send_cors_headers()
         self.send_header("Content-Length", str(len(encoded)))
         self.end_headers()
         self.wfile.write(encoded)
@@ -255,6 +272,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def _send_redirect(self, location: str) -> None:
         self.send_response(302)
         self.send_header("Location", location)
+        self._send_cors_headers()
         self.send_header("Content-Length", "0")
         self.end_headers()
 
@@ -268,12 +286,18 @@ class GatewayHandler(BaseHTTPRequestHandler):
         body = candidate.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", mimetypes.guess_type(candidate.name)[0] or "application/octet-stream")
+        self._send_cors_headers()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
     def log_message(self, format: str, *args: object) -> None:
         return
+
+    def _send_cors_headers(self) -> None:
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-SecondEgo-Token")
 
 
 class DesktopGateway:

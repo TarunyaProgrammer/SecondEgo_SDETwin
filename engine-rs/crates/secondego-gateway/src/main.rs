@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use secondego_core::EngineEvent;
 use secondego_model::GeminiProvider;
-use secondego_runtime::{RunReport, RustEngine};
+use secondego_runtime::{RunReport, RustEngine, resolve_repository, validate_repository_source};
 use uuid::Uuid;
 
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
@@ -50,6 +50,11 @@ fn handle(
 ) -> std::io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     let request = read_request(&mut stream)?;
+    // CORS preflight requests intentionally carry no application token. They
+    // only ask whether the renderer may send the authenticated request.
+    if request.method == "OPTIONS" {
+        return respond(&mut stream, 204, serde_json::json!({}));
+    }
     if request.headers.get("x-secondego-token").map(String::as_str) != Some(token) {
         return respond(
             &mut stream,
@@ -81,22 +86,19 @@ fn create_run(
     if let Err(error) = validate_start_request(&request) {
         return respond(stream, 400, serde_json::json!({"error":error}));
     }
-    let repository = match std::path::Path::new(&request.repository).canonicalize() {
-        Ok(path) if path.is_dir() => path.to_string_lossy().into_owned(),
-        _ => {
-            return respond(
-                stream,
-                400,
-                serde_json::json!({"error":"repository must be an existing directory"}),
-            );
-        }
-    };
-    let model = request.model.unwrap_or_else(|| "gemini-3.8-flash".into());
+    if let Err(error) = validate_repository_source(&request.repository) {
+        return respond(stream, 400, serde_json::json!({"error":error.to_string()}));
+    }
+    let model = request
+        .model
+        .filter(|model| !model.trim().is_empty())
+        .or_else(|| env::var("SECONDEGO_MODEL").ok())
+        .unwrap_or_else(|| "gemini-3.8-flash".into());
     let id = Uuid::new_v4();
     runs.lock().unwrap().insert(
         id,
         RunRecord {
-            repository: repository.clone(),
+            repository: request.repository.clone(),
             issue: request.issue.clone(),
             model: model.clone(),
             status: "QUEUED".into(),
@@ -106,11 +108,23 @@ fn create_run(
         },
     );
     let runs_for_thread = runs.clone();
-    let record_repository = repository.clone();
+    let record_repository = request.repository.clone();
     let record_issue = request.issue.clone();
     let record_model = model.clone();
     let event_runs = runs.clone();
     thread::spawn(move || {
+        let resolved = match resolve_repository(&record_repository) {
+            Ok(value) => value,
+            Err(error) => {
+                if let Ok(mut all_runs) = runs_for_thread.lock() {
+                    if let Some(record) = all_runs.get_mut(&id) {
+                        record.status = "FAILED".into();
+                        record.error = Some(error.to_string());
+                    }
+                }
+                return;
+            }
+        };
         let mut provider = GeminiProvider::default();
         provider.model = model;
         let event_sink = move |event: &EngineEvent| {
@@ -126,7 +140,7 @@ fn create_run(
             }
         };
         let mut engine = RustEngine::new(provider).with_event_sink(event_sink);
-        let result = engine.run(request.issue, repository);
+        let result = engine.run(request.issue, resolved.root.clone());
         let events = runs_for_thread
             .lock()
             .ok()
@@ -134,7 +148,7 @@ fn create_run(
             .unwrap_or_default();
         let record = match result {
             Ok(report) => RunRecord {
-                repository: record_repository.clone(),
+                repository: resolved.root.to_string_lossy().into_owned(),
                 issue: record_issue.clone(),
                 model: record_model.clone(),
                 status: "COMPLETE".into(),
@@ -295,9 +309,14 @@ fn read_request(stream: &mut TcpStream) -> std::io::Result<Request> {
 }
 
 fn respond(stream: &mut TcpStream, status: u16, body: serde_json::Value) -> std::io::Result<()> {
-    let data = serde_json::to_vec(&body)
-        .unwrap_or_else(|_| b"{\"error\":\"serialization failed\"}".to_vec());
+    let data = if status == 204 {
+        Vec::new()
+    } else {
+        serde_json::to_vec(&body)
+            .unwrap_or_else(|_| b"{\"error\":\"serialization failed\"}".to_vec())
+    };
     let reason = match status {
+        204 => "No Content",
         200 => "OK",
         202 => "Accepted",
         400 => "Bad Request",
@@ -307,7 +326,7 @@ fn respond(stream: &mut TcpStream, status: u16, body: serde_json::Value) -> std:
     };
     write!(
         stream,
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, X-SecondEgo-Token\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         data.len()
     )?;
     stream.write_all(&data)

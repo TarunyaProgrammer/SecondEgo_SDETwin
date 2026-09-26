@@ -38,3 +38,11 @@ export type RunView = {
   result: RunResult | null;
   error: string | null;
 };
+
+declare global {
+  interface Window {
+    secondEgoWindow?: {
+      setExpanded: (expanded: boolean) => Promise<void>;
+    };
+  }
+}

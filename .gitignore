@@ -10,6 +10,7 @@ build/
 telemetry/*.jsonl
 apps/desktop/node_modules/
 apps/desktop/dist/
+apps/desktop/native/.build/
 *.tsbuildinfo
 apps/desktop/vite.config.js
 apps/desktop/vite.config.d.ts

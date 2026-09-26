@@ -19,6 +19,7 @@ Implemented vertical slice:
 - ranked task and failure retrieval with bounded, redacted source excerpts in planner context;
 - provider transport failures converted into bounded terminal evidence instead of TUI crashes;
 - optional loopback-only observer gateway and browser UI that consume serialized engine events without adding model/tool calls;
+- local path and public HTTPS GitHub source acquisition with bounded shallow clones;
 - redacted bounded telemetry and generated-file filtering at the transaction boundary;
 - SQLite schema version 1 for final run state, events, and evidence;
 - Rust crates for contracts, indexing, bounded context, model providers, tools/transactions, verification, runtime, storage, and CLI;
@@ -50,7 +51,7 @@ diagnosis-informed recovery over UI work or additional infrastructure.
 8. Use SQLite for local execution state and rebuildable repository metadata before considering external infrastructure.
 9. Meet the standard evaluation contract through a root `Makefile` exposing `setup`, `run`, `test`, and `clean`; `run` now defaults to Rust and `ENGINE=python` is an explicit compatibility switch.
 10. Read the evaluator-supplied credential only from `AI_API_KEY`; never persist or log it.
-11. Keep the evaluation path text-only. `make run` launches the terminal UI, which collects a repository path and issue before starting one autonomous run.
+11. Keep the evaluation path text-only. `make run` launches the terminal UI, which collects a local repository path or public HTTPS GitHub URL and issue before starting one autonomous run.
 12. Keep presentation optional. `make run` defaults to `UI_MODE=headless`; `UI_MODE=events` or CLI `--ui` only observes compact engine events and must not add model calls, tool calls, or engine decisions.
 
 ## Evaluation interface
@@ -69,6 +70,7 @@ diagnosis-informed recovery over UI work or additional infrastructure.
 - Exact evaluation tool-permission policy and sandbox boundary.
 - Evaluation tasks, benchmark fixtures, and final telemetry/report schemas.
 - The transactional runtime currently requires a clean Git repository root with an initial commit; non-Git and dirty targets intentionally block mutation until a bounded journal fallback exists.
+- Remote repositories are acquired as bounded shallow clones in a temporary local directory. SQLite records run state/evidence and may later catalog clone lifecycle metadata; it does not store repository contents.
 - Desktop transport contract and Electron/React shell implementation.
 - Rust migration and cutover are tracked in [`RUST_MIGRATION_PLAN.md`](RUST_MIGRATION_PLAN.md); `make run` now exercises Rust by default and `make rust-run` remains the explicit development entry point.
 

@@ -10,7 +10,231 @@ use secondego_tools::{
 };
 use secondego_verification::{VerificationEngine, VerificationResult};
 use std::path::Path;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+const MAX_CLONE_BYTES: u64 = 1_000_000_000;
+
+#[derive(Debug, Clone)]
+pub struct ResolvedRepository {
+    pub source: String,
+    pub root: std::path::PathBuf,
+    pub cloned: bool,
+}
+
+/// Resolve a local path or acquire a bounded shallow clone of a public GitHub repository.
+pub fn resolve_repository(source: impl AsRef<str>) -> Result<ResolvedRepository, RuntimeError> {
+    let value = source.as_ref().trim();
+    if value.is_empty() {
+        return Err(RuntimeError::Repository(
+            "repository path or GitHub URL is required".into(),
+        ));
+    }
+    if let Some(path) = github_path(value)? {
+        let target = unique_clone_target(&path.1)?;
+        let clone_root = target.parent().map(std::path::Path::to_path_buf);
+        let clone_url = format!("https://github.com/{}/{}.git", path.0, path.1);
+        let mut child = Command::new("git")
+            .args([
+                "-c",
+                "core.hooksPath=/dev/null",
+                "clone",
+                "--depth",
+                "1",
+                "--no-tags",
+                "--single-branch",
+                &clone_url,
+            ])
+            .arg(&target)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| {
+                RuntimeError::Repository(format!("could not start git clone: {error}"))
+            })?;
+        let deadline = Instant::now() + Duration::from_secs(180);
+        loop {
+            if let Some(status) = child
+                .try_wait()
+                .map_err(|error| RuntimeError::Repository(format!("git clone failed: {error}")))?
+            {
+                if !status.success() {
+                    let output = child.wait_with_output().map_err(|error| {
+                        RuntimeError::Repository(format!("git clone failed: {error}"))
+                    })?;
+                    let detail = String::from_utf8_lossy(&output.stderr)
+                        .lines()
+                        .last()
+                        .unwrap_or("git clone failed")
+                        .chars()
+                        .take(300)
+                        .collect::<String>();
+                    if let Some(root) = &clone_root {
+                        let _ = std::fs::remove_dir_all(root);
+                    }
+                    return Err(RuntimeError::Repository(format!(
+                        "GitHub clone failed: {detail}"
+                    )));
+                }
+                break;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                if let Some(root) = &clone_root {
+                    let _ = std::fs::remove_dir_all(root);
+                }
+                return Err(RuntimeError::Repository(
+                    "GitHub clone timed out after 180 seconds".into(),
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        if !target.join(".git").is_dir() {
+            if let Some(root) = &clone_root {
+                let _ = std::fs::remove_dir_all(root);
+            }
+            return Err(RuntimeError::Repository(
+                "GitHub clone did not produce a Git repository".into(),
+            ));
+        }
+        if directory_size(&target)? > MAX_CLONE_BYTES {
+            if let Some(root) = &clone_root {
+                let _ = std::fs::remove_dir_all(root);
+            }
+            return Err(RuntimeError::Repository(
+                "cloned repository exceeds the 1 GB safety limit".into(),
+            ));
+        }
+        return Ok(ResolvedRepository {
+            source: value.into(),
+            root: target,
+            cloned: true,
+        });
+    }
+    if value.contains("://") {
+        return Err(RuntimeError::Repository(
+            "only HTTPS GitHub repository URLs are supported".into(),
+        ));
+    }
+    let root = std::path::PathBuf::from(value)
+        .canonicalize()
+        .map_err(|error| RuntimeError::Repository(error.to_string()))?;
+    if !root.is_dir() {
+        return Err(RuntimeError::Repository(
+            "repository is not an existing directory".into(),
+        ));
+    }
+    Ok(ResolvedRepository {
+        source: value.into(),
+        root,
+        cloned: false,
+    })
+}
+
+/// Validate a repository input without acquiring a remote clone.
+pub fn validate_repository_source(source: impl AsRef<str>) -> Result<(), RuntimeError> {
+    let value = source.as_ref().trim();
+    if value.is_empty() {
+        return Err(RuntimeError::Repository(
+            "repository path or GitHub URL is required".into(),
+        ));
+    }
+    if github_path(value)?.is_some() {
+        return Ok(());
+    }
+    if value.contains("://") {
+        return Err(RuntimeError::Repository(
+            "only HTTPS GitHub repository URLs are supported".into(),
+        ));
+    }
+    let root = std::path::PathBuf::from(value)
+        .canonicalize()
+        .map_err(|error| RuntimeError::Repository(error.to_string()))?;
+    if !root.is_dir() {
+        return Err(RuntimeError::Repository(
+            "repository is not an existing directory".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn github_path(value: &str) -> Result<Option<(String, String)>, RuntimeError> {
+    let Some(path) = value
+        .strip_prefix("https://github.com/")
+        .or_else(|| value.strip_prefix("https://www.github.com/"))
+    else {
+        return Ok(None);
+    };
+    if value.contains('@') || value.contains('?') || value.contains('#') {
+        return Err(RuntimeError::Repository(
+            "GitHub URL must not contain credentials or query parameters".into(),
+        ));
+    }
+    let parts: Vec<_> = path.trim_matches('/').split('/').collect();
+    if parts.len() != 2
+        || parts
+            .iter()
+            .any(|part| part.is_empty() || *part == "." || *part == "..")
+    {
+        return Err(RuntimeError::Repository(
+            "GitHub URL must have the form https://github.com/owner/repository".into(),
+        ));
+    }
+    let repository = parts[1].strip_suffix(".git").unwrap_or(parts[1]);
+    if repository.is_empty() {
+        return Err(RuntimeError::Repository(
+            "GitHub URL contains an invalid repository".into(),
+        ));
+    }
+    Ok(Some((parts[0].into(), repository.into())))
+}
+
+fn unique_clone_target(repository: &str) -> Result<std::path::PathBuf, RuntimeError> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| RuntimeError::Repository(error.to_string()))?
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "secondego-remote-{}-{timestamp}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).map_err(|error| {
+        RuntimeError::Repository(format!("could not create clone directory: {error}"))
+    })?;
+    Ok(root.join(repository))
+}
+
+fn directory_size(root: &Path) -> Result<u64, RuntimeError> {
+    let mut total = 0_u64;
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(directory)
+            .map_err(|error| RuntimeError::Repository(error.to_string()))?
+        {
+            let entry = entry.map_err(|error| RuntimeError::Repository(error.to_string()))?;
+            let file_type = entry
+                .file_type()
+                .map_err(|error| RuntimeError::Repository(error.to_string()))?;
+            if file_type.is_dir() {
+                pending.push(entry.path());
+            } else if file_type.is_file() {
+                total = total.saturating_add(
+                    entry
+                        .metadata()
+                        .map_err(|error| RuntimeError::Repository(error.to_string()))?
+                        .len(),
+                );
+                if total > MAX_CLONE_BYTES {
+                    return Ok(total);
+                }
+            }
+        }
+    }
+    Ok(total)
+}
 
 #[derive(Debug)]
 pub enum RuntimeError {
@@ -25,7 +249,15 @@ pub enum RuntimeError {
 
 impl std::fmt::Display for RuntimeError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "{self:?}")
+        match self {
+            Self::Repository(message)
+            | Self::Context(message)
+            | Self::Plan(message)
+            | Self::State(message)
+            | Self::Transaction(message) => formatter.write_str(message),
+            Self::Provider(error) => error.fmt(formatter),
+            Self::Tool(error) => error.fmt(formatter),
+        }
     }
 }
 

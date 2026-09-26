@@ -4,7 +4,7 @@ UI_MODE ?= headless
 ENGINE ?= rust
 RUST_BIN ?= $(CURDIR)/engine-rs/target/release/secondego-cli
 
-.PHONY: setup run run-python desktop desktop-electron rust-check rust-test rust-build rust-build-release rust-run test clean
+.PHONY: setup run run-python desktop desktop-electron desktop-macos rust-check rust-test rust-build rust-build-release rust-run test clean
 
 setup:
 	$(PYTHON) -m venv $(VENV)
@@ -16,10 +16,14 @@ run:
 	@if [ "$(ENGINE)" = "python" ]; then \
 		test -n "$$AI_API_KEY" || (echo "AI_API_KEY must be set for evaluation"; exit 2); \
 		SECONDEGO_UI_MODE="$(UI_MODE)" PATH="$(CURDIR)/$(VENV)/bin:$$PATH" $(VENV)/bin/secondego-tui; \
+		code=$$?; \
 	else \
-		test -x "$(RUST_BIN)" || cargo build --manifest-path engine-rs/Cargo.toml --release -p secondego-cli -p secondego-gateway; \
+		$(MAKE) rust-build-release || exit $$?; \
 		"$(RUST_BIN)" --interactive $(if $(filter events,$(UI_MODE)),--ui events,); \
-	fi
+		code=$$?; \
+	fi; \
+	if [ "$$code" -eq 130 ]; then exit 0; fi; \
+	exit "$$code"
 
 run-python:
 	@test -n "$$AI_API_KEY" || (echo "AI_API_KEY must be set for evaluation"; exit 2)
@@ -29,7 +33,25 @@ desktop:
 	PATH="$(CURDIR)/$(VENV)/bin:$$PATH" $(VENV)/bin/secondego-desktop
 
 desktop-electron: rust-build
-	npm --prefix apps/desktop run desktop
+	@if [ "$(shell uname -s)" = "Darwin" ]; then \
+		$(MAKE) desktop-macos; \
+	else \
+		npm --prefix apps/desktop run desktop; \
+	fi
+
+desktop-macos:
+	npm --prefix apps/desktop run build
+	mkdir -p apps/desktop/native/.build/SecondEgo.app/Contents/MacOS
+	swiftc -target "$(shell uname -m)-apple-macosx11.0" -framework Cocoa -framework WebKit -O -o apps/desktop/native/.build/SecondEgo.app/Contents/MacOS/SecondEgo apps/desktop/native/SecondEgo.swift
+	cp apps/desktop/native/Info.plist apps/desktop/native/.build/SecondEgo.app/Contents/Info.plist
+	@port="$${SECONDEGO_GATEWAY_PORT:-$$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')}"; \
+	cleanup() { pid="$$(lsof -tiTCP:"$$port" -sTCP:LISTEN 2>/dev/null | head -1)"; if [ -n "$$pid" ]; then kill "$$pid" 2>/dev/null || true; fi; }; \
+	on_signal() { cleanup; exit 130; }; \
+	trap cleanup EXIT; trap on_signal INT TERM; \
+	SECONDEGO_ROOT="$(CURDIR)" SECONDEGO_GATEWAY_PORT="$$port" apps/desktop/native/.build/SecondEgo.app/Contents/MacOS/SecondEgo; \
+	code=$$?; \
+	if [ "$$code" -eq 130 ]; then exit 0; fi; \
+	exit "$$code"
 
 rust-check:
 	cargo check --manifest-path engine-rs/Cargo.toml

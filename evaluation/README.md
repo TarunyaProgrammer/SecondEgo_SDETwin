@@ -15,7 +15,7 @@ git -C "$TARGET_DIR" config user.email evaluation@example.com
 git -C "$TARGET_DIR" config user.name "SecondEgo Evaluation"
 git -C "$TARGET_DIR" add .
 git -C "$TARGET_DIR" -c commit.gpgSign=false commit -qm baseline
-.venv/bin/secondego solve \
+PATH="$(pwd)/.venv/bin:$PATH" .venv/bin/secondego solve \
   --repo "$TARGET_DIR" \
   --issue "Fix pagination so page 1 returns the first page and page 2 returns the second page." \
   --plan evaluation/fixture_plan.json

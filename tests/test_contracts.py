@@ -1,6 +1,7 @@
 import pytest
 import asyncio
 import subprocess
+from pathlib import Path
 
 from SecondEgo.context.assembler import ContextAssembler
 from SecondEgo.context.ledger import EvidenceLedger
@@ -26,6 +27,7 @@ from SecondEgo.orchestration.engine import HarnessEngine
 from SecondEgo.repository.scanner import RepositoryScanner
 from SecondEgo.repository.index import RepositoryIndexer
 from SecondEgo.repository.retrieval import RepositoryRetriever
+from SecondEgo.repository.source import RepositorySourceError, resolve_repository
 from SecondEgo.storage.sqlite import SQLiteRunStore
 from SecondEgo.storage.redaction import redact_sensitive
 from SecondEgo.verification.contracts import FailureClass, VerificationResult
@@ -93,7 +95,40 @@ def test_gateway_registry_validates_bounded_run_requests(tmp_path) -> None:
     with pytest.raises(ValueError, match="issue"):
         registry.submit(repository=str(tmp_path), issue=" ")
     with pytest.raises(ValueError, match="repository"):
-        registry.submit(repository=str(tmp_path / "missing"), issue="fix")
+        registry.submit(repository="file:///tmp/not-supported", issue="fix")
+
+
+def test_repository_source_accepts_local_directory(tmp_path) -> None:
+    resolved = resolve_repository(tmp_path)
+
+    assert resolved.root == tmp_path.resolve()
+    assert resolved.cloned is False
+
+
+def test_repository_source_rejects_unsafe_remote_forms() -> None:
+    with pytest.raises(RepositorySourceError, match="credentials"):
+        resolve_repository("https://user:secret@github.com/org/repo")
+    with pytest.raises(RepositorySourceError, match="only HTTPS GitHub"):
+        resolve_repository("git@github.com:org/repo.git")
+
+
+def test_repository_source_shallow_clones_github_url(monkeypatch) -> None:
+    import SecondEgo.repository.source as source
+    calls = []
+
+    def fake_run(arguments, **kwargs):
+        calls.append(arguments)
+        target = Path(arguments[-1])
+        (target / ".git").mkdir(parents=True)
+        return subprocess.CompletedProcess(arguments, 0, "", "")
+
+    monkeypatch.setattr(source.subprocess, "run", fake_run)
+    resolved = resolve_repository("https://github.com/example/project")
+
+    assert resolved.cloned is True
+    assert resolved.root.name == "project"
+    assert "--depth" in calls[0]
+    assert "--no-tags" in calls[0]
 
 
 def test_gateway_registry_accepts_valid_request_without_running_model(monkeypatch, tmp_path) -> None:
