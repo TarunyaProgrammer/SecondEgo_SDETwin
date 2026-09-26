@@ -173,17 +173,22 @@ impl RepositoryIndex {
         let mut module_to_file = BTreeMap::new();
         for path in &self.snapshot.files {
             if let Some(module) = path.strip_suffix(".py") {
-                let dotted = module.replace('/', ".").trim_end_matches(".__init__").to_owned();
+                let dotted = module
+                    .replace('/', ".")
+                    .trim_end_matches(".__init__")
+                    .to_owned();
                 module_to_file.insert(dotted.clone(), path.clone());
                 if let Some(base) = dotted.split('.').last() {
-                    module_to_file.entry(base.to_owned()).or_insert_with(|| path.clone());
+                    module_to_file
+                        .entry(base.to_owned())
+                        .or_insert_with(|| path.clone());
                 }
             }
         }
 
         let scored_files: Vec<(String, i32)> = scores
             .iter()
-            .filter(|(_, &score)| score >= 3)
+            .filter(|&(_, &score)| score >= 3)
             .map(|(path, &score)| (path.clone(), score))
             .collect();
 
@@ -627,7 +632,10 @@ mod tests {
         let index = RepositoryIndexer::new(directory.path()).build().unwrap();
         let ranked = index.rank("validate_token", 8, false);
         let caller = ranked.iter().find(|item| item.path == "src/caller.py");
-        assert!(caller.is_some(), "caller file should be ranked via import propagation");
+        assert!(
+            caller.is_some(),
+            "caller file should be ranked via import propagation"
+        );
         assert!(
             caller
                 .unwrap()
@@ -637,4 +645,3 @@ mod tests {
         );
     }
 }
-

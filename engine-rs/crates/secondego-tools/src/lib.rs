@@ -492,7 +492,9 @@ impl ToolRouter {
                 arguments
                     .get("content")
                     .and_then(|value| value.as_str())
-                    .ok_or_else(|| PolicyError::UnsupportedAction("file content required".into()))?,
+                    .ok_or_else(|| {
+                        PolicyError::UnsupportedAction("file content required".into())
+                    })?,
             )),
             "search_code" => Ok(ToolResult {
                 tool: "search_code".into(),
