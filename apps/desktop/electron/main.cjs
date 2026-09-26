@@ -1,6 +1,7 @@
 const { app, BrowserWindow } = require("electron");
 const { randomBytes } = require("node:crypto");
 const { spawn } = require("node:child_process");
+const fs = require("node:fs");
 const path = require("node:path");
 
 const devUrl = process.env.SECONDEGO_DESKTOP_URL;
@@ -32,29 +33,45 @@ function createWindow(token) {
 
 function startGateway() {
   const repoRoot = path.join(__dirname, "..", "..", "..");
-  const python = process.env.SECONDEGO_PYTHON || path.join(repoRoot, ".venv", "bin", "python");
   const token = randomBytes(24).toString("base64url");
-  gatewayProcess = spawn(python, ["-m", "SecondEgo.desktop.gateway", "--host", "127.0.0.1", "--port", String(gatewayPort)], {
+  const rustCandidates = [
+    process.env.SECONDEGO_GATEWAY_BINARY,
+    path.join(repoRoot, "engine-rs", "target", "release", "secondego-gateway"),
+    path.join(repoRoot, "engine-rs", "target", "debug", "secondego-gateway"),
+  ].filter(Boolean);
+  const rustGateway = rustCandidates.find((candidate) => fs.existsSync(candidate));
+  const python = process.env.SECONDEGO_PYTHON || path.join(repoRoot, ".venv", "bin", "python");
+  const command = rustGateway || python;
+  const args = rustGateway ? [] : ["-m", "SecondEgo.desktop.gateway", "--host", "127.0.0.1", "--port", String(gatewayPort)];
+  gatewayProcess = spawn(command, args, {
     cwd: repoRoot,
     env: {
       ...process.env,
       PYTHONPATH: [path.join(repoRoot, "src"), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
       SECONDEGO_UI_TOKEN: token,
+      SECONDEGO_GATEWAY_PORT: String(gatewayPort),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let announced = false;
-  gatewayProcess.stdout.on("data", (data) => {
-    if (!announced && data.toString().includes("SecondEgo UI:")) {
+  const announce = () => {
+    if (!announced) {
       announced = true;
       createWindow(token);
     }
+  };
+  gatewayProcess.stdout.on("data", (data) => {
+    if (data.toString().includes("SecondEgo UI:")) announce();
   });
   gatewayProcess.stderr.on("data", (data) => console.error(data.toString().trim()));
   gatewayProcess.on("error", (error) => {
     console.error(`Could not start SecondEgo gateway: ${error.message}`);
-    if (!announced) createWindow("");
+    announce();
   });
+  // Rust reports readiness on stderr and Python reports it on stdout. The window
+  // is observational and can safely retry health/run requests while either
+  // process finishes binding its loopback socket.
+  setTimeout(announce, 250);
   gatewayProcess.on("exit", () => {
     if (app.isReady() && mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
   });

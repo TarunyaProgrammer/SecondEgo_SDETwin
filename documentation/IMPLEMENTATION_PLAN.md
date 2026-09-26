@@ -341,8 +341,9 @@ language indexing, and a broader realistic evaluation fixture.
 
 ## 10. Immediate next action
 
-The next implementation task is gateway integration testing: verify bounded
-requests, authentication, observer disconnects, and headless equivalence. After
-that passes, harden the React/Electron packaging and preserve the same event
-contract. No voice, computer vision, graph database, or always-on service should
-be added.
+The Rust gateway contract is now covered by bounded-request, result-shape, auth,
+and loopback health checks; the Rust pagination fixture and observer build also
+pass. The next cutover task is a full Electron run against a real provider or
+replayable provider fixture, followed by switching the root evaluator commands to
+Rust only after clean-checkout parity is demonstrated. No voice, computer vision,
+graph database, or always-on service should be added.

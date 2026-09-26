@@ -2,7 +2,7 @@ PYTHON ?= python3
 VENV ?= .venv
 UI_MODE ?= headless
 
-.PHONY: setup run desktop rust-check rust-test rust-build rust-run test clean
+.PHONY: setup run desktop desktop-electron rust-check rust-test rust-build rust-run test clean
 
 setup:
 	$(PYTHON) -m venv $(VENV)
@@ -15,6 +15,9 @@ run:
 
 desktop:
 	PATH="$(CURDIR)/$(VENV)/bin:$$PATH" $(VENV)/bin/secondego-desktop
+
+desktop-electron: rust-build
+	npm --prefix apps/desktop run desktop
 
 rust-check:
 	cargo check --manifest-path engine-rs/Cargo.toml

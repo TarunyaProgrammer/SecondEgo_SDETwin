@@ -1,11 +1,11 @@
 # LCC Architecture — Deterministic Coding Runtime
 
-**Status:** approved implementation target for the next harness slice
+**Status:** approved implementation target; Rust migration is the final runtime direction
 **Scope:** the text-only, Makefile-evaluated harness. The Electron product shell is out of scope until this runtime is reliable.
 
 ## Critical assessment
 
-The current implementation is a credible vertical slice: explicit phases, bounded tools, Python AST indexing, a context ledger, verification, one recovery route, SQLite run state, and a provider boundary. It is not yet a competitive coding harness.
+The current implementation is a credible vertical slice: explicit phases, bounded tools, Rust/Python reference parity in progress, repository indexing, a context ledger, verification, one recovery route, SQLite run state, and a provider boundary. The Rust workspace now owns the executable migration path; the Python runtime is retained only until evaluator parity is proven.
 
 The main flaw is architectural: the model produces one broad plan before execution. A test failure then consumes a pre-written recovery action list, rather than causing an evidence-driven diagnosis and a new repair decision. Retrieval is lexical/Python-symbol based, not test- or failure-aware. Failed attempts can alter the target workspace. Those are reliability failures, not missing polish.
 

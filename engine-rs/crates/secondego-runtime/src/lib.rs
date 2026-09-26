@@ -8,8 +8,9 @@ use secondego_tools::{
     CommandPolicy, CommandRunner, FileTool, GitAttemptTransaction, PolicyError, SearchTool,
     ToolResult, ToolRouter, WorkspacePolicy,
 };
-use secondego_verification::VerificationEngine;
+use secondego_verification::{VerificationEngine, VerificationResult};
 use std::path::Path;
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub enum RuntimeError {
@@ -42,6 +43,9 @@ pub struct ActionPlan {
 pub struct RunReport {
     pub state: ExecutionState,
     pub events: Vec<EngineEvent>,
+    pub verification: VerificationResult,
+    pub evidence: Vec<EvidenceRecord>,
+    pub resource_usage: std::collections::BTreeMap<String, u64>,
     pub verification_passed: bool,
     pub changed_paths: Vec<String>,
     pub tool_results: Vec<ToolResult>,
@@ -55,6 +59,7 @@ pub struct RustEngine<P: ModelProvider> {
     pub context: ContextAssembler,
     pub resources: ResourceUsage,
     pub max_actions: usize,
+    pub event_sink: Option<Arc<dyn Fn(&EngineEvent) + Send + Sync>>,
 }
 
 impl<P: ModelProvider> RustEngine<P> {
@@ -72,7 +77,13 @@ impl<P: ModelProvider> RustEngine<P> {
             .expect("static context budget is valid"),
             resources: ResourceUsage::new(ResourceBudget::default()),
             max_actions: 32,
+            event_sink: None,
         }
+    }
+
+    pub fn with_event_sink(mut self, sink: impl Fn(&EngineEvent) + Send + Sync + 'static) -> Self {
+        self.event_sink = Some(Arc::new(sink));
+        self
     }
 
     pub fn run(
@@ -89,7 +100,8 @@ impl<P: ModelProvider> RustEngine<P> {
         let mut ledger = EvidenceLedger::default();
         let mut tools_used = Vec::new();
 
-        events.push(
+        self.append_event(
+            &mut events,
             machine
                 .move_to(Phase::Understand, "initialize bounded execution")
                 .map_err(|error| RuntimeError::State(error.to_string()))?,
@@ -109,7 +121,8 @@ impl<P: ModelProvider> RustEngine<P> {
             "repository index",
             5,
         ));
-        events.push(
+        self.append_event(
+            &mut events,
             machine
                 .move_to(Phase::Explore, "build repository index before planning")
                 .map_err(|error| RuntimeError::State(error.to_string()))?,
@@ -123,7 +136,8 @@ impl<P: ModelProvider> RustEngine<P> {
                 4,
             ));
         }
-        events.push(
+        self.append_event(
+            &mut events,
             machine
                 .move_to(Phase::Plan, "assemble focused indexed context")
                 .map_err(|error| RuntimeError::State(error.to_string()))?,
@@ -161,7 +175,8 @@ impl<P: ModelProvider> RustEngine<P> {
             );
         }
 
-        events.push(
+        self.append_event(
+            &mut events,
             machine
                 .move_to(
                     Phase::Execute,
@@ -196,7 +211,8 @@ impl<P: ModelProvider> RustEngine<P> {
             let _ = transaction.finish(false);
             return self.terminate_error(&mut machine, &mut events, error);
         }
-        events.push(
+        self.append_event(
+            &mut events,
             machine
                 .move_to(Phase::Verify, "run bounded verification commands")
                 .map_err(|error| RuntimeError::State(error.to_string()))?,
@@ -211,7 +227,8 @@ impl<P: ModelProvider> RustEngine<P> {
         }
         let mut verification = verifier.run(&plan.verification_commands);
         if !verification.passed && !plan.recovery_actions.is_empty() {
-            events.push(
+            self.append_event(
+                &mut events,
                 machine
                     .move_to(
                         Phase::Diagnose,
@@ -222,7 +239,8 @@ impl<P: ModelProvider> RustEngine<P> {
             self.resources.record_retry().map_err(|error| {
                 RuntimeError::Tool(PolicyError::UnsupportedAction(error.to_string()))
             })?;
-            events.push(
+            self.append_event(
+                &mut events,
                 machine
                     .move_to(Phase::Recover, "apply one bounded, model-proposed repair")
                     .map_err(|error| RuntimeError::State(error.to_string()))?,
@@ -236,12 +254,14 @@ impl<P: ModelProvider> RustEngine<P> {
                 let _ = transaction.finish(false);
                 return self.terminate_error(&mut machine, &mut events, error);
             }
-            events.push(
+            self.append_event(
+                &mut events,
                 machine
                     .move_to(Phase::Execute, "re-run verification after recovery")
                     .map_err(|error| RuntimeError::State(error.to_string()))?,
             );
-            events.push(
+            self.append_event(
+                &mut events,
                 machine
                     .move_to(Phase::Verify, "confirm recovery result")
                     .map_err(|error| RuntimeError::State(error.to_string()))?,
@@ -266,10 +286,13 @@ impl<P: ModelProvider> RustEngine<P> {
                         .as_deref()
                         .unwrap_or("verification failed"),
                 )
-                .map(|event| events.push(event));
+                .map(|event| self.append_event(&mut events, event));
             return Ok(RunReport {
                 state: machine.state,
                 events,
+                verification: verification.clone(),
+                evidence: ledger.snapshot(),
+                resource_usage: self.resources.snapshot(),
                 verification_passed: false,
                 changed_paths: transfer.changed_paths,
                 tool_results: tools_used,
@@ -278,7 +301,8 @@ impl<P: ModelProvider> RustEngine<P> {
                 index_parser_failures: index.parser_failures.len(),
             });
         }
-        events.push(
+        self.append_event(
+            &mut events,
             machine
                 .terminate(
                     TerminalStatus::Complete,
@@ -289,6 +313,9 @@ impl<P: ModelProvider> RustEngine<P> {
         Ok(RunReport {
             state: machine.state,
             events,
+            verification: verification.clone(),
+            evidence: ledger.snapshot(),
+            resource_usage: self.resources.snapshot(),
             verification_passed: true,
             changed_paths: transfer.changed_paths,
             tool_results: tools_used,
@@ -306,8 +333,15 @@ impl<P: ModelProvider> RustEngine<P> {
     ) -> Result<T, RuntimeError> {
         let _ = machine
             .terminate(TerminalStatus::Failed, &error.to_string())
-            .map(|event| events.push(event));
+            .map(|event| self.append_event(events, event));
         Err(error)
+    }
+
+    fn append_event(&self, events: &mut Vec<EngineEvent>, event: EngineEvent) {
+        if let Some(sink) = &self.event_sink {
+            sink(&event);
+        }
+        events.push(event);
     }
 }
 
@@ -432,6 +466,7 @@ mod tests {
     use super::*;
     use secondego_model::ScriptedProvider;
     use std::process::Command;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn scripted_plan_executes_in_worktree_and_transfers_only_after_verification() {
@@ -448,7 +483,15 @@ mod tests {
             arguments: serde_json::json!({"actions":[{"action":"edit_file","arguments":{"path":"value.py","content":"VALUE = 2\n"},"rationale":"update value"}],"verification_commands":[["python3","-c","from pathlib import Path; assert Path('value.py').read_text() == 'VALUE = 2\\n'"]] }),
             rationale: "plan".into(),
         };
-        let mut engine = RustEngine::new(ScriptedProvider::new(vec![proposal]));
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let observed_for_sink = observed.clone();
+        let mut engine =
+            RustEngine::new(ScriptedProvider::new(vec![proposal])).with_event_sink(move |event| {
+                observed_for_sink
+                    .lock()
+                    .unwrap()
+                    .push(event.event_type.clone());
+            });
         let report = engine.run("update value", root.path()).unwrap();
         assert!(report.verification_passed);
         assert_eq!(
@@ -456,6 +499,7 @@ mod tests {
             "VALUE = 2\n"
         );
         assert_eq!(report.state.status, TerminalStatus::Complete);
+        assert_eq!(observed.lock().unwrap().len(), report.events.len());
     }
 
     #[test]
@@ -486,7 +530,7 @@ mod tests {
                     .payload
                     .get("current_phase")
                     .and_then(|value| value.as_str())
-                    == Some("Recover")
+                    == Some("RECOVER")
         }));
     }
 

@@ -4,6 +4,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use secondego_core::EngineEvent;
 use secondego_model::GeminiProvider;
@@ -14,15 +15,24 @@ const MAX_REQUEST_BYTES: usize = 64 * 1024;
 
 #[derive(Clone)]
 struct RunRecord {
+    repository: String,
+    issue: String,
+    model: String,
+    status: String,
+    events: Vec<EngineEvent>,
     report: Option<RunReport>,
     error: Option<String>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let token = env::var("SECONDEGO_UI_TOKEN").unwrap_or_else(|_| "local-development-token".into());
-    let listener = TcpListener::bind(("127.0.0.1", 8787))?;
+    let port = env::var("SECONDEGO_GATEWAY_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(8787);
+    let listener = TcpListener::bind(("127.0.0.1", port))?;
     let runs: Arc<Mutex<HashMap<Uuid, RunRecord>>> = Arc::new(Mutex::new(HashMap::new()));
-    eprintln!("SecondEgo Rust gateway listening on http://127.0.0.1:8787");
+    eprintln!("SecondEgo Rust gateway listening on http://127.0.0.1:{port}");
     for stream in listener.incoming().flatten() {
         let token = token.clone();
         let runs = runs.clone();
@@ -38,6 +48,7 @@ fn handle(
     token: &str,
     runs: &Arc<Mutex<HashMap<Uuid, RunRecord>>>,
 ) -> std::io::Result<()> {
+    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     let request = read_request(&mut stream)?;
     if request.headers.get("x-secondego-token").map(String::as_str) != Some(token) {
         return respond(
@@ -47,13 +58,13 @@ fn handle(
         );
     }
     match (request.method.as_str(), request.path.as_str()) {
-        ("GET", "/health") => respond(
+        ("GET", "/api/health") => respond(
             &mut stream,
             200,
-            serde_json::json!({"ok":true,"engine":"rust"}),
+            serde_json::json!({"ok":true,"api_version":1,"engine":"rust"}),
         ),
-        ("POST", "/runs") => create_run(&mut stream, request.body, runs),
-        ("GET", path) if path.starts_with("/runs/") => get_run(&mut stream, path, runs),
+        ("POST", "/api/runs") => create_run(&mut stream, request.body, runs),
+        ("GET", path) if path.starts_with("/api/runs/") => get_run(&mut stream, path, runs),
         _ => respond(&mut stream, 404, serde_json::json!({"error":"not found"})),
     }
 }
@@ -67,31 +78,76 @@ fn create_run(
         Ok(value) => value,
         Err(_) => return respond(stream, 400, serde_json::json!({"error":"invalid request"})),
     };
-    if request.task.trim().is_empty() || request.workspace.trim().is_empty() {
-        return respond(
-            stream,
-            400,
-            serde_json::json!({"error":"task and workspace are required"}),
-        );
+    if let Err(error) = validate_start_request(&request) {
+        return respond(stream, 400, serde_json::json!({"error":error}));
     }
+    let repository = match std::path::Path::new(&request.repository).canonicalize() {
+        Ok(path) if path.is_dir() => path.to_string_lossy().into_owned(),
+        _ => {
+            return respond(
+                stream,
+                400,
+                serde_json::json!({"error":"repository must be an existing directory"}),
+            );
+        }
+    };
+    let model = request.model.unwrap_or_else(|| "gemini-3.8-flash".into());
     let id = Uuid::new_v4();
     runs.lock().unwrap().insert(
         id,
         RunRecord {
+            repository: repository.clone(),
+            issue: request.issue.clone(),
+            model: model.clone(),
+            status: "QUEUED".into(),
+            events: Vec::new(),
             report: None,
             error: None,
         },
     );
     let runs_for_thread = runs.clone();
+    let record_repository = repository.clone();
+    let record_issue = request.issue.clone();
+    let record_model = model.clone();
+    let event_runs = runs.clone();
     thread::spawn(move || {
-        let mut engine = RustEngine::new(GeminiProvider::default());
-        let result = engine.run(request.task, request.workspace);
+        let mut provider = GeminiProvider::default();
+        provider.model = model;
+        let event_sink = move |event: &EngineEvent| {
+            if let Ok(mut all_runs) = event_runs.lock() {
+                if let Some(record) = all_runs.get_mut(&id) {
+                    record.events.push(event.clone());
+                    record.status = if event.status.is_terminal() {
+                        "COMPLETE".into()
+                    } else {
+                        "RUNNING".into()
+                    };
+                }
+            }
+        };
+        let mut engine = RustEngine::new(provider).with_event_sink(event_sink);
+        let result = engine.run(request.issue, repository);
+        let events = runs_for_thread
+            .lock()
+            .ok()
+            .and_then(|all_runs| all_runs.get(&id).map(|record| record.events.clone()))
+            .unwrap_or_default();
         let record = match result {
             Ok(report) => RunRecord {
+                repository: record_repository.clone(),
+                issue: record_issue.clone(),
+                model: record_model.clone(),
+                status: "COMPLETE".into(),
+                events,
                 report: Some(report),
                 error: None,
             },
             Err(error) => RunRecord {
+                repository: record_repository,
+                issue: record_issue,
+                model: record_model,
+                status: "FAILED".into(),
+                events,
                 report: None,
                 error: Some(error.to_string()),
             },
@@ -103,7 +159,7 @@ fn create_run(
     respond(
         stream,
         202,
-        serde_json::json!({"run_id":id,"status":"running"}),
+        serde_json::json!({"request_id":id,"status":"QUEUED"}),
     )
 }
 
@@ -112,50 +168,63 @@ fn get_run(
     path: &str,
     runs: &Arc<Mutex<HashMap<Uuid, RunRecord>>>,
 ) -> std::io::Result<()> {
-    let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
-    let Ok(id) = parts.get(1).unwrap_or(&"").parse::<Uuid>() else {
+    let route_path = path.split('?').next().unwrap_or(path);
+    let parts: Vec<_> = route_path.trim_start_matches('/').split('/').collect();
+    let Ok(id) = parts.get(2).unwrap_or(&"").parse::<Uuid>() else {
         return respond(stream, 400, serde_json::json!({"error":"invalid run id"}));
     };
     let Some(record) = runs.lock().unwrap().get(&id).cloned() else {
         return respond(stream, 404, serde_json::json!({"error":"run not found"}));
     };
-    if parts.get(2).copied() == Some("events") {
-        let events: Vec<EngineEvent> = record
-            .report
-            .as_ref()
-            .map(|report| report.events.clone())
-            .unwrap_or_default();
-        return respond(
-            stream,
-            200,
-            serde_json::json!({"run_id":id,"events":events}),
-        );
-    }
-    if let Some(error) = record.error {
-        return respond(
-            stream,
-            200,
-            serde_json::json!({"run_id":id,"status":"failed","error":error}),
-        );
-    }
-    if let Some(report) = record.report {
-        return respond(
-            stream,
-            200,
-            serde_json::json!({"run_id":id,"status":"complete","report":report}),
-        );
-    }
+    let offset = path
+        .split_once('?')
+        .and_then(|(_, query)| {
+            query
+                .split('&')
+                .find_map(|item| item.strip_prefix("offset="))
+                .and_then(|value| value.parse::<usize>().ok())
+        })
+        .unwrap_or(0);
+    let events: Vec<EngineEvent> = record.events.iter().skip(offset).cloned().collect();
+    let result = record.report.as_ref().map(result_payload);
     respond(
         stream,
         200,
-        serde_json::json!({"run_id":id,"status":"running"}),
+        serde_json::json!({"request_id":id,"repository":record.repository,"issue":record.issue,"model":record.model,"status":record.status,"events":events,"result":result,"error":record.error}),
     )
 }
 
 #[derive(serde::Deserialize)]
 struct StartRequest {
-    task: String,
-    workspace: String,
+    repository: String,
+    issue: String,
+    model: Option<String>,
+}
+
+fn validate_start_request(request: &StartRequest) -> Result<(), &'static str> {
+    if request.issue.trim().is_empty() || request.repository.trim().is_empty() {
+        return Err("issue and repository are required");
+    }
+    if request.issue.chars().count() > 12_000 || request.repository.chars().count() > 4_096 {
+        return Err("request exceeds field limits");
+    }
+    if request.model.as_deref().unwrap_or_default().chars().count() > 256 {
+        return Err("model identifier exceeds field limits");
+    }
+    Ok(())
+}
+
+fn result_payload(report: &RunReport) -> serde_json::Value {
+    serde_json::json!({
+        "run_id": report.state.run_id,
+        "status": serde_json::to_value(report.state.status).unwrap_or_else(|_| serde_json::json!("FAILED")),
+        "phase": serde_json::to_value(report.state.phase).unwrap_or_else(|_| serde_json::json!("VERIFY")),
+        "termination_reason": report.state.termination_reason,
+        "changed_paths": report.changed_paths,
+        "resource_usage": report.resource_usage,
+        "verification": report.verification,
+        "evidence": report.evidence,
+    })
 }
 
 struct Request {
@@ -242,4 +311,91 @@ fn respond(stream: &mut TcpStream, status: u16, body: serde_json::Value) -> std:
         data.len()
     )?;
     stream.write_all(&data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use secondego_core::ExecutionState;
+    use secondego_verification::{FailureClass, VerificationResult};
+
+    #[test]
+    fn gateway_rejects_empty_and_oversized_start_requests() {
+        assert!(
+            validate_start_request(&StartRequest {
+                repository: "".into(),
+                issue: "task".into(),
+                model: None
+            })
+            .is_err()
+        );
+        assert!(
+            validate_start_request(&StartRequest {
+                repository: "/tmp/repo".into(),
+                issue: "x".repeat(12_001),
+                model: None
+            })
+            .is_err()
+        );
+        assert!(
+            validate_start_request(&StartRequest {
+                repository: "/tmp/repo".into(),
+                issue: "task".into(),
+                model: Some("x".repeat(257))
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn gateway_accepts_the_renderer_request_shape() {
+        assert!(
+            validate_start_request(&StartRequest {
+                repository: "/tmp/repo".into(),
+                issue: "fix pagination".into(),
+                model: Some("gemini-3.8-flash".into())
+            })
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn result_payload_preserves_the_renderer_contract() {
+        let mut state = ExecutionState::new("task", "/tmp/repo");
+        state.status = secondego_core::TerminalStatus::Complete;
+        state.termination_reason = Some("verified".into());
+        let report = RunReport {
+            state,
+            events: Vec::new(),
+            verification: VerificationResult {
+                passed: true,
+                commands: vec!["pytest -q".into()],
+                passed_tests: 1,
+                failed_tests: 0,
+                failure_class: FailureClass::None,
+                failure_summary: None,
+                failure_record: None,
+                evidence: Vec::new(),
+            },
+            evidence: Vec::new(),
+            resource_usage: std::collections::BTreeMap::new(),
+            verification_passed: true,
+            changed_paths: vec!["src/example.py".into()],
+            tool_results: Vec::new(),
+            index_files: 1,
+            index_symbols: 1,
+            index_parser_failures: 0,
+        };
+        let payload = result_payload(&report);
+        assert!(payload.get("run_id").is_some());
+        assert!(
+            payload
+                .get("verification")
+                .and_then(|value| value.get("passed"))
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+        );
+        assert!(payload.get("changed_paths").is_some());
+        assert!(payload.get("evidence").is_some());
+    }
 }

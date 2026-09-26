@@ -111,6 +111,6 @@ Until then, Python remains a reference and rollback path, not the final engine.
 `cargo test --manifest-path engine-rs/Cargo.toml` covers the Rust workspace,
 including an end-to-end scripted plan that proves indexed context, isolated edit,
 verification, and verified diff transfer. `make rust-run` exposes the CLI. The
-remaining cutover blockers are gateway-to-renderer integration, broader language
-indexing, explicit report/evidence parity with the Python reference, and switching
-the root evaluator commands only after those checks pass.
+remaining cutover blockers are a full Electron run against the Rust gateway,
+broader language indexing, explicit report/evidence parity with the Python
+reference, and switching the root evaluator commands only after those checks pass.

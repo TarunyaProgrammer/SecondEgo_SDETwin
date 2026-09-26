@@ -5,6 +5,7 @@ use secondego_tools::{CommandRunner, ToolResult};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
 pub enum FailureClass {
     None,
     TestFailure,

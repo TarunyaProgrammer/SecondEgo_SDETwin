@@ -989,6 +989,7 @@ dependencies = [
  "secondego-core",
  "secondego-model",
  "secondego-runtime",
+ "secondego-verification",
  "serde",
  "serde_json",
  "uuid",

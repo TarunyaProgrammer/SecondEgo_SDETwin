@@ -1,5 +1,15 @@
 Yes. The confusion is because I described the **engine** first and the **product shell** second. Let's separate them.
 
+## Current implementation note
+
+This is the original desktop-shell proposal. The final engine direction is now
+Rust under `engine-rs/`; the Python engine described below is retained as the
+verified compatibility/reference path during cutover. Electron/React remains an
+observer: it consumes the versioned `/api/runs` event contract, while the Rust
+gateway owns execution, permissions, tools, verification, recovery, and
+termination. The Python gateway is only an explicit fallback when a Rust gateway
+binary is unavailable.
+
 ## What we are actually making
 
 We are making **a local desktop coding-agent application whose core is a Python autonomous coding harness**.

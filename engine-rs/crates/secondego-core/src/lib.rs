@@ -19,6 +19,7 @@ pub enum PresentationMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
 pub enum Phase {
     Initialize,
     Understand,
@@ -48,6 +49,7 @@ impl Phase {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
 pub enum TerminalStatus {
     Running,
     Complete,

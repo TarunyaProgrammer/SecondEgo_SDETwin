@@ -57,6 +57,9 @@ It binds to loopback, displays a per-process token, and submits work through the
 local engine gateway. The Electron/React shell consumes the same event boundary
 while the Rust gateway cutover is completed.
 
+For the Rust-backed Electron shell, use `make desktop-electron`; it builds the
+Rust gateway first and the Electron process prefers that binary automatically.
+
 [`evaluation/README.md`](evaluation/README.md) documents a separate target-repository
 rehearsal and includes a deliberately buggy pagination fixture.
 
