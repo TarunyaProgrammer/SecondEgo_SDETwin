@@ -39,10 +39,38 @@ export type RunView = {
   error: string | null;
 };
 
+export type GestureActionType =
+  | "expand_notch"
+  | "collapse_notch"
+  | "start_run"
+  | "cancel_run"
+  | "focus_input"
+  | "scroll_up"
+  | "scroll_down";
+
+export type GestureEvent = {
+  gesture: string;
+  action: GestureActionType;
+  confidence: number;
+  label: string;
+  hand?: string;
+  timestamp: string;
+};
+
+export type GestureState = {
+  enabled: boolean;
+  active: boolean;
+  lastGesture: GestureEvent | null;
+  cameraActive: boolean;
+  error: string | null;
+};
+
 declare global {
   interface Window {
     secondEgoWindow?: {
       setExpanded: (expanded: boolean) => Promise<void>;
+      onGesture?: (callback: (event: GestureEvent) => void) => () => void;
     };
   }
 }
+

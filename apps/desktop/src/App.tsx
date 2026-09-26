@@ -1,6 +1,8 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import logoUrl from "./assets/secondego-logo.png";
-import type { EngineEvent, RunView } from "./types";
+import { GestureIndicator } from "./components/GestureIndicator";
+import { useGestureControl } from "./hooks/useGestureControl";
+import type { EngineEvent, GestureActionType, GestureEvent, RunView } from "./types";
 
 const defaultGateway =
   new URLSearchParams(window.location.search).get("gateway") ||
@@ -61,6 +63,61 @@ function App() {
   const [notchOpen, setNotchOpen] = useState(!notchMode);
   const offsetRef = useRef(0);
   const api = useMemo(() => gateway.replace(/\/$/, ""), [gateway]);
+
+  const handleGestureAction = (action: GestureActionType, _event: GestureEvent) => {
+    switch (action) {
+      case "expand_notch":
+        setNotchOpen(true);
+        break;
+      case "collapse_notch":
+        setNotchOpen(false);
+        break;
+      case "focus_input":
+        setNotchOpen(true);
+        window.setTimeout(() => {
+          document.getElementById("repository-input")?.focus();
+        }, 120);
+        break;
+      case "start_run":
+        if (repository && issue && !busy) {
+          const form = document.querySelector(".mission-form") as HTMLFormElement | null;
+          if (form) {
+            form.requestSubmit();
+          }
+        } else {
+          setNotchOpen(true);
+          window.setTimeout(() => {
+            if (!repository) {
+              document.getElementById("repository-input")?.focus();
+            } else {
+              document.querySelector<HTMLTextAreaElement>(".mission-inputs textarea")?.focus();
+            }
+          }, 120);
+        }
+        break;
+      case "cancel_run":
+        if (busy) {
+          setBusy(false);
+          setError("Run paused/cancelled via gesture");
+        } else {
+          setNotchOpen(false);
+        }
+        break;
+      case "scroll_up":
+        document.querySelector(".village-map")?.scrollBy({ top: -80, behavior: "smooth" });
+        break;
+      case "scroll_down":
+        document.querySelector(".village-map")?.scrollBy({ top: 80, behavior: "smooth" });
+        break;
+    }
+  };
+
+  const gestureControl = useGestureControl({
+    notchMode,
+    gatewayUrl: api,
+    token,
+    onAction: handleGestureAction,
+  });
 
   useEffect(() => {
     document.body.classList.toggle("notch-mode", notchMode);
@@ -160,6 +217,20 @@ function App() {
         <button className="notch-trigger" type="button" onClick={() => setNotchOpen((open) => !open)} aria-expanded={notchOpen}>
           <span className="trigger-mark" aria-hidden="true" /><span>{notchOpen ? "SecondEgo / Mission control" : "Open mission control"}</span><small className={statusTone}>{run ? statusLabel : "headless"}</small>
         </button>
+        {notchMode && (
+          <div className="notch-gesture-anchor">
+            <GestureIndicator
+              enabled={gestureControl.enabled}
+              active={gestureControl.active}
+              lastGesture={gestureControl.lastGesture}
+              cameraActive={gestureControl.cameraActive}
+              error={gestureControl.error}
+              onToggle={gestureControl.toggleEnabled}
+              onTriggerManual={gestureControl.triggerManualGesture}
+              onOpenNotch={() => setNotchOpen(true)}
+            />
+          </div>
+        )}
        {notchOpen && <form className="mission-form" onSubmit={submit}>
           <div className="mission-copy"><h1>What would you<br />like to make?</h1><p>Give SecondEgo a repository and a goal. Its plan, changes, and proof stay in view.</p></div>
           <div className="mission-inputs">
