@@ -484,15 +484,15 @@ impl ToolRouter {
                     .and_then(|value| value.as_str())
                     .ok_or_else(|| PolicyError::UnsupportedAction("read_file path".into()))?,
             )),
-            "edit_file" => Ok(self.files.write(
+            "edit_file" | "write_file" => Ok(self.files.write(
                 arguments
                     .get("path")
                     .and_then(|value| value.as_str())
-                    .ok_or_else(|| PolicyError::UnsupportedAction("edit_file path".into()))?,
+                    .ok_or_else(|| PolicyError::UnsupportedAction("file path required".into()))?,
                 arguments
                     .get("content")
                     .and_then(|value| value.as_str())
-                    .ok_or_else(|| PolicyError::UnsupportedAction("edit_file content".into()))?,
+                    .ok_or_else(|| PolicyError::UnsupportedAction("file content required".into()))?,
             )),
             "search_code" => Ok(ToolResult {
                 tool: "search_code".into(),

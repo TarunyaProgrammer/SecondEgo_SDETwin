@@ -40,7 +40,7 @@ class ToolRouter:
         match action:
             case "read_file":
                 return self.files.read(_required_string(arguments, "path"))
-            case "edit_file":
+            case "edit_file" | "write_file":
                 return self.files.write(
                     _required_string(arguments, "path"),
                     _required_string(arguments, "content"),

@@ -62,6 +62,26 @@ class RepositoryRetriever:
                 for target_path in target_paths:
                     reasons.setdefault(target_path, []).append("linked-from-failure-test")
 
+        # Multi-file dependency & blast radius propagation across import graph
+        module_to_file: dict[str, str] = {}
+        for path in index.snapshot.files:
+            if path.endswith(".py"):
+                module = path[:-3].replace("/", ".").removesuffix(".__init__")
+                module_to_file[module] = path
+                base = module.split(".")[-1]
+                module_to_file.setdefault(base, path)
+
+        scored_paths = [p for p, s in scores.items() if s >= 3]
+        for scored_path in scored_paths:
+            for edge in index.imports:
+                target_file = module_to_file.get(edge.module)
+                if target_file == scored_path and edge.source_path != scored_path:
+                    scores[edge.source_path] = scores.get(edge.source_path, 0) + 4
+                    reasons.setdefault(edge.source_path, []).append(f"importer-of:{scored_path}")
+                elif edge.source_path == scored_path and target_file and target_file != scored_path:
+                    scores[target_file] = scores.get(target_file, 0) + 3
+                    reasons.setdefault(target_file, []).append(f"dependency-of:{scored_path}")
+
         ranked = [
             RankedFile(
                 path=path,
