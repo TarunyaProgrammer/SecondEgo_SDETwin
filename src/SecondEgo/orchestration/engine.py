@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from pathlib import Path
 from uuid import uuid4
 
 from SecondEgo.context.ledger import EvidenceLedger
@@ -9,6 +8,7 @@ from SecondEgo.core.state import AcceptanceCriterion, ExecutionState, Phase, Ter
 from SecondEgo.core.events import EngineEvent
 from SecondEgo.core.state_machine import StateMachine
 from SecondEgo.model.base import ActionProposal
+from SecondEgo.model.planner import ModelPlanner, PlanValidationError
 from SecondEgo.repository.index import RepositoryIndexer
 from SecondEgo.repository.scanner import RepositoryScanner
 from SecondEgo.storage.sqlite import SQLiteRunStore
@@ -24,6 +24,14 @@ class EngineResult:
     verification: VerificationResult
     events: tuple[EngineEvent, ...]
     evidence: tuple[EvidenceRecord, ...]
+
+
+@dataclass
+class _PreparedRun:
+    state: ExecutionState
+    machine: StateMachine
+    ledger: EvidenceLedger
+    events: list[EngineEvent]
 
 
 class HarnessEngine:
@@ -57,6 +65,66 @@ class HarnessEngine:
         verification_commands: tuple[tuple[str, ...], ...],
         recovery_actions: tuple[ActionProposal, ...] = (),
     ) -> EngineResult:
+        prepared = self._prepare_run(task, acceptance_criteria)
+        prepared.events.append(
+            prepared.machine.move(Phase.PLAN, reason="actions supplied by planner")[1]
+        )
+        return self._execute_plan(
+            prepared,
+            actions=actions,
+            verification_commands=verification_commands,
+            recovery_actions=recovery_actions,
+        )
+
+    async def run_with_planner(
+        self,
+        *,
+        task: str,
+        acceptance_criteria: tuple[AcceptanceCriterion, ...],
+        planner: ModelPlanner,
+    ) -> EngineResult:
+        prepared = self._prepare_run(task, acceptance_criteria)
+        prepared.events.append(
+            prepared.machine.move(Phase.PLAN, reason="request structured model plan")[1]
+        )
+        try:
+            plan = await planner.create_plan(prepared.state, prepared.ledger.active())
+        except ResourceLimitExceeded as exc:
+            verification = VerificationResult(
+                passed=False,
+                failure_class=FailureClass.ENVIRONMENT_FAILURE,
+                failure_summary=str(exc),
+            )
+            return self._finalize(
+                prepared,
+                verification=verification,
+                terminal_status=TerminalStatus.BLOCKED,
+                terminal_reason=str(exc),
+            )
+        except (PlanValidationError, RuntimeError) as exc:
+            verification = VerificationResult(
+                passed=False,
+                failure_class=FailureClass.MODEL_PLANNING_FAILURE,
+                failure_summary=str(exc),
+            )
+            return self._finalize(
+                prepared,
+                verification=verification,
+                terminal_status=TerminalStatus.FAILED,
+                terminal_reason=str(exc),
+            )
+        return self._execute_plan(
+            prepared,
+            actions=plan.actions,
+            verification_commands=plan.verification_commands,
+            recovery_actions=plan.recovery_actions,
+        )
+
+    def _prepare_run(
+        self,
+        task: str,
+        acceptance_criteria: tuple[AcceptanceCriterion, ...],
+    ) -> _PreparedRun:
         state = ExecutionState(
             run_id=str(uuid4()),
             task=task,
@@ -66,27 +134,40 @@ class HarnessEngine:
         machine = StateMachine(state)
         ledger = EvidenceLedger()
         events: list[EngineEvent] = []
+        events.append(machine.move(Phase.UNDERSTAND, reason="task accepted")[1])
+        events.append(machine.move(Phase.EXPLORE, reason="structural repository scan")[1])
+        index = self.indexer.build()
+        snapshot = index.snapshot
+        ledger.record(
+            EvidenceRecord(
+                reference="repository:scan",
+                summary=(
+                    f"files={len(snapshot.files)} manifests={list(snapshot.manifests)} "
+                    f"tests={list(snapshot.test_files)} symbols={len(index.symbols)} "
+                    f"imports={len(index.imports)} parser_failures={len(index.parser_failures)}"
+                ),
+                source=snapshot.root,
+                importance=3,
+            )
+        )
+        return _PreparedRun(state=state, machine=machine, ledger=ledger, events=events)
+
+    def _execute_plan(
+        self,
+        prepared: _PreparedRun,
+        *,
+        actions: tuple[ActionProposal, ...],
+        verification_commands: tuple[tuple[str, ...], ...],
+        recovery_actions: tuple[ActionProposal, ...],
+    ) -> EngineResult:
+        state = prepared.state
+        machine = prepared.machine
+        ledger = prepared.ledger
+        events = prepared.events
         terminal_status: TerminalStatus
         terminal_reason: str
         terminal_evidence_refs: tuple[str, ...] = ()
         try:
-            events.append(machine.move(Phase.UNDERSTAND, reason="task accepted")[1])
-            events.append(machine.move(Phase.EXPLORE, reason="structural repository scan")[1])
-            index = self.indexer.build()
-            snapshot = index.snapshot
-            ledger.record(
-                EvidenceRecord(
-                    reference="repository:scan",
-                    summary=(
-                        f"files={len(snapshot.files)} manifests={list(snapshot.manifests)} "
-                        f"tests={list(snapshot.test_files)} symbols={len(index.symbols)} "
-                        f"imports={len(index.imports)} parser_failures={len(index.parser_failures)}"
-                    ),
-                    source=snapshot.root,
-                    importance=3,
-                )
-            )
-            events.append(machine.move(Phase.PLAN, reason="actions supplied by planner")[1])
             events.append(machine.move(Phase.EXECUTE, reason="dispatch planned actions")[1])
             self._execute_actions(actions, ledger, state, events)
             events.append(machine.move(Phase.VERIFY, reason="run verification commands")[1])
@@ -129,6 +210,27 @@ class HarnessEngine:
                 failure_class=FailureClass.TOOL_FAILURE,
                 failure_summary=str(exc),
             )
+        return self._finalize(
+            prepared,
+            verification=verification,
+            terminal_status=terminal_status,
+            terminal_reason=terminal_reason,
+            terminal_evidence_refs=terminal_evidence_refs,
+        )
+
+    def _finalize(
+        self,
+        prepared: _PreparedRun,
+        *,
+        verification: VerificationResult,
+        terminal_status: TerminalStatus,
+        terminal_reason: str,
+        terminal_evidence_refs: tuple[str, ...] = (),
+    ) -> EngineResult:
+        state = prepared.state
+        machine = prepared.machine
+        ledger = prepared.ledger
+        events = prepared.events
         self._collect_final_diff(ledger, state, events)
         events.append(
             machine.terminate(

@@ -11,6 +11,7 @@ class FailureClass(StrEnum):
     RUNTIME_ERROR = "RUNTIME_ERROR"
     TOOL_FAILURE = "TOOL_FAILURE"
     ENVIRONMENT_FAILURE = "ENVIRONMENT_FAILURE"
+    MODEL_PLANNING_FAILURE = "MODEL_PLANNING_FAILURE"
     REGRESSION = "REGRESSION"
     UNKNOWN = "UNKNOWN"
 
@@ -31,4 +32,3 @@ class TerminationDecision:
     status: str
     reason: str
     evidence_refs: tuple[str, ...] = field(default_factory=tuple)
-

@@ -1,4 +1,5 @@
 import pytest
+import asyncio
 
 from SecondEgo.context.assembler import ContextAssembler
 from SecondEgo.context.ledger import EvidenceLedger
@@ -13,6 +14,9 @@ from SecondEgo.tools.router import ToolRouter
 from SecondEgo.tools.runner import CommandRunner
 from SecondEgo.tools.search import SearchTool
 from SecondEgo.model.base import ActionProposal
+from SecondEgo.model.gemini import GeminiProvider, ProviderConfigurationError
+from SecondEgo.model.planner import ModelPlanner, PlanValidationError
+from SecondEgo.model.scripted import ScriptedProvider
 from SecondEgo.orchestration.engine import HarnessEngine
 from SecondEgo.repository.scanner import RepositoryScanner
 from SecondEgo.repository.index import RepositoryIndexer
@@ -342,6 +346,109 @@ def test_sqlite_store_persists_run_events_and_evidence(tmp_path) -> None:
     assert loaded["status"] == "COMPLETE"
     assert loaded["events"][-1]["event_type"] == "run.terminated"
     assert "repository:scan" in {record["reference"] for record in loaded["evidence"]}
+
+
+def test_model_planner_validates_bounded_structured_plan() -> None:
+    state = ExecutionState(run_id="model-run", task="write a version file", workspace="/repo")
+    provider = ScriptedProvider(
+        [
+            ActionProposal(
+                "submit_plan",
+                {
+                    "actions": [
+                        {
+                            "action": "edit_file",
+                            "arguments": {"path": "src/version.py", "content": "VERSION = '1'\n"},
+                            "rationale": "create requested file",
+                        }
+                    ],
+                    "verification_commands": [["python3", "-c", "assert True"]],
+                    "recovery_actions": [],
+                },
+            )
+        ]
+    )
+    resources = ResourceUsage(ResourceBudget(max_model_calls=1))
+    planner = ModelPlanner(
+        provider=provider,
+        assembler=ContextAssembler(ContextBudget(24_000, 4_000, 2_000, 12_000, 3_000, 3_000)),
+        resources=resources,
+    )
+
+    plan = asyncio.run(
+        planner.create_plan(state, [EvidenceRecord("e1", "target file", "src/version.py", importance=3)])
+    )
+
+    assert plan.actions[0].action == "edit_file"
+    assert plan.verification_commands == (("python3", "-c", "assert True"),)
+    assert resources.model_calls == 1
+
+
+def test_model_planner_rejects_non_plan_action() -> None:
+    with pytest.raises(PlanValidationError, match="submit_plan"):
+        from SecondEgo.model.planner import _parse_plan
+
+        _parse_plan(ActionProposal("edit_file", {"path": "x"}))
+
+
+def test_harness_engine_executes_validated_provider_plan(tmp_path) -> None:
+    workspace = WorkspacePolicy(tmp_path)
+    resources = ResourceUsage(ResourceBudget(max_model_calls=1, max_tool_calls=10))
+    runner = CommandRunner(workspace)
+    engine = HarnessEngine(
+        scanner=RepositoryScanner(workspace),
+        router=ToolRouter(
+            files=FileTool(workspace),
+            search=SearchTool(workspace),
+            runner=runner,
+            resources=resources,
+        ),
+        verifier=VerificationEngine(runner),
+        resources=resources,
+    )
+    planner = ModelPlanner(
+        provider=ScriptedProvider(
+            [
+                ActionProposal(
+                    "submit_plan",
+                    {
+                        "actions": [
+                            {
+                                "action": "edit_file",
+                                "arguments": {"path": "provider.txt", "content": "planned\n"},
+                                "rationale": "create the requested file",
+                            }
+                        ],
+                        "verification_commands": [
+                            ["python3", "-c", "from pathlib import Path; assert Path('provider.txt').exists()"]
+                        ],
+                    },
+                )
+            ]
+        ),
+        assembler=ContextAssembler(ContextBudget(24_000, 4_000, 2_000, 12_000, 3_000, 3_000)),
+        resources=resources,
+    )
+
+    result = asyncio.run(
+        engine.run_with_planner(
+            task="create provider file",
+            acceptance_criteria=(AcceptanceCriterion("provider file exists"),),
+            planner=planner,
+        )
+    )
+
+    assert result.state.status is TerminalStatus.COMPLETE
+    assert result.state.resource_usage["model_calls"] == 1
+    assert "provider.txt" in result.state.changed_paths
+
+
+def test_gemini_provider_requires_explicit_key_before_sdk_import(monkeypatch) -> None:
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    provider = GeminiProvider(api_key="")
+
+    with pytest.raises(ProviderConfigurationError, match="GEMINI_API_KEY"):
+        asyncio.run(provider.generate("plan", context={}))
 
 
 def test_cli_action_parser_rejects_malformed_plan_actions() -> None:
