@@ -1,7 +1,9 @@
 import pytest
 
 from SecondEgo.context.assembler import ContextAssembler
+from SecondEgo.context.ledger import EvidenceLedger
 from SecondEgo.context.policy import ContextBudget, ContextPolicy, EvidenceRecord
+from SecondEgo.core.resources import ResourceBudget, ResourceLimitExceeded, ResourceUsage
 from SecondEgo.core.state import ExecutionState, Phase, TerminalStatus
 from SecondEgo.core.state_machine import InvalidTransition, StateMachine
 from SecondEgo.tools.policy import CommandPolicy, PolicyViolation, WorkspacePolicy
@@ -58,6 +60,30 @@ def test_context_assembler_prioritizes_evidence_and_skips_stale() -> None:
 
     assert [item.reference for item in packet.evidence] == ["high", "low"]
     assert packet.estimated_tokens <= 90
+
+
+def test_evidence_ledger_retains_source_linked_active_evidence() -> None:
+    ledger = EvidenceLedger()
+    ledger.record(EvidenceRecord("test-1", "one failure", "tests/auth.py:17", importance=3))
+    ledger.record(EvidenceRecord("old", "stale output", "stdout", importance=1))
+    ledger.mark_stale("old")
+
+    assert [record.reference for record in ledger.active()] == ["test-1"]
+    assert ledger.snapshot()[1]["stale"] is True
+
+
+def test_resource_usage_rejects_budget_overrun_before_recording() -> None:
+    usage = ResourceUsage(ResourceBudget(max_model_calls=1, max_tool_calls=1, max_retries=1))
+    usage.record_model_call(10)
+    usage.record_tool_call()
+    usage.record_retry()
+
+    with pytest.raises(ResourceLimitExceeded, match="model-call"):
+        usage.record_model_call(10)
+    with pytest.raises(ResourceLimitExceeded, match="tool-call"):
+        usage.record_tool_call()
+    with pytest.raises(ResourceLimitExceeded, match="retry"):
+        usage.record_retry()
 
 
 def test_failed_verification_has_explicit_failure_class() -> None:

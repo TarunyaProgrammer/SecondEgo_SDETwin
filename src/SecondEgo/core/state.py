@@ -1,8 +1,5 @@
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import FrozenSet
-
-
 class Phase(StrEnum):
     INITIALIZE = "INITIALIZE"
     UNDERSTAND = "UNDERSTAND"
@@ -43,6 +40,7 @@ class ExecutionState:
     open_questions: list[str] = field(default_factory=list)
     failed_approaches: list[str] = field(default_factory=list)
     retry_counts: dict[str, int] = field(default_factory=dict)
+    resource_usage: dict[str, float | int] = field(default_factory=dict)
     evidence_refs: list[str] = field(default_factory=list)
     termination_reason: str | None = None
 
@@ -65,7 +63,7 @@ class ExecutionState:
             "open_questions": list(self.open_questions),
             "failed_approaches": list(self.failed_approaches),
             "retry_counts": dict(self.retry_counts),
+            "resource_usage": dict(self.resource_usage),
             "evidence_refs": list(self.evidence_refs),
             "termination_reason": self.termination_reason,
         }
-
