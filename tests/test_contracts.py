@@ -14,6 +14,8 @@ from SecondEgo.tools.search import SearchTool
 from SecondEgo.model.base import ActionProposal
 from SecondEgo.orchestration.engine import HarnessEngine
 from SecondEgo.repository.scanner import RepositoryScanner
+from SecondEgo.repository.index import RepositoryIndexer
+from SecondEgo.repository.retrieval import RepositoryRetriever
 from SecondEgo.verification.contracts import FailureClass, VerificationResult
 from SecondEgo.verification.verifier import VerificationEngine
 from SecondEgo.cli import _proposal
@@ -192,6 +194,30 @@ def test_repository_scanner_ignores_non_code_test_fixtures(tmp_path) -> None:
     assert snapshot.test_files == ()
 
 
+def test_repository_indexer_records_symbols_imports_and_parse_failures(tmp_path) -> None:
+    files = FileTool(WorkspacePolicy(tmp_path))
+    files.write("src/auth.py", "import time\n\nclass AuthService:\n    def refresh_token(self):\n        return time.time()\n")
+    files.write("src/broken.py", "def incomplete(:\n")
+
+    index = RepositoryIndexer(WorkspacePolicy(tmp_path)).build()
+
+    assert [symbol.name for symbol in index.symbols] == ["AuthService", "refresh_token"]
+    assert index.imports[0].module == "time"
+    assert index.parser_failures[0].path == "src/broken.py"
+
+
+def test_repository_retriever_ranks_symbol_matches_above_path_matches(tmp_path) -> None:
+    files = FileTool(WorkspacePolicy(tmp_path))
+    files.write("src/auth.py", "def refresh_token():\n    return None\n")
+    files.write("src/token_notes.py", "VALUE = 1\n")
+    index = RepositoryIndexer(WorkspacePolicy(tmp_path)).build()
+
+    ranked = RepositoryRetriever().rank(index, "refresh token bug")
+
+    assert ranked[0].path == "src/auth.py"
+    assert "symbol:refresh" in ranked[0].reasons
+
+
 def test_verifier_returns_test_failure_evidence(tmp_path) -> None:
     runner = CommandRunner(WorkspacePolicy(tmp_path))
     result, evidence = VerificationEngine(runner).run(
@@ -230,6 +256,7 @@ def test_harness_engine_runs_edit_to_verified_completion(tmp_path) -> None:
     assert result.state.phase is Phase.VERIFY
     assert result.verification.passed is True
     assert "src/version.py" in result.state.changed_paths
+    assert "symbols=" in result.evidence[0].summary
     assert [event.event_type for event in result.events][-2:] == [
         "verification.completed",
         "run.terminated",

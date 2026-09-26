@@ -9,6 +9,7 @@ from SecondEgo.core.state import AcceptanceCriterion, ExecutionState, Phase, Ter
 from SecondEgo.core.events import EngineEvent
 from SecondEgo.core.state_machine import StateMachine
 from SecondEgo.model.base import ActionProposal
+from SecondEgo.repository.index import RepositoryIndexer
 from SecondEgo.repository.scanner import RepositoryScanner
 from SecondEgo.tools.router import ToolRouter
 from SecondEgo.verification.contracts import FailureClass, VerificationResult
@@ -30,11 +31,13 @@ class HarnessEngine:
         self,
         *,
         scanner: RepositoryScanner,
+        indexer: RepositoryIndexer | None = None,
         router: ToolRouter,
         verifier: VerificationEngine,
         resources: ResourceUsage,
     ) -> None:
         self.scanner = scanner
+        self.indexer = indexer or RepositoryIndexer(scanner.workspace, scanner=scanner)
         self.router = router
         self.verifier = verifier
         self.resources = resources
@@ -60,13 +63,15 @@ class HarnessEngine:
         try:
             events.append(machine.move(Phase.UNDERSTAND, reason="task accepted")[1])
             events.append(machine.move(Phase.EXPLORE, reason="structural repository scan")[1])
-            snapshot = self.scanner.scan()
+            index = self.indexer.build()
+            snapshot = index.snapshot
             ledger.record(
                 EvidenceRecord(
                     reference="repository:scan",
                     summary=(
                         f"files={len(snapshot.files)} manifests={list(snapshot.manifests)} "
-                        f"tests={list(snapshot.test_files)}"
+                        f"tests={list(snapshot.test_files)} symbols={len(index.symbols)} "
+                        f"imports={len(index.imports)} parser_failures={len(index.parser_failures)}"
                     ),
                     source=snapshot.root,
                     importance=3,
