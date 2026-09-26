@@ -13,6 +13,7 @@ from SecondEgo.repository.index import RepositoryIndexer
 from SecondEgo.repository.scanner import RepositoryScanner
 from SecondEgo.storage.sqlite import SQLiteRunStore
 from SecondEgo.tools.router import ToolRouter
+from SecondEgo.tools.git import GitTool
 from SecondEgo.verification.contracts import FailureClass, VerificationResult
 from SecondEgo.verification.verifier import VerificationEngine
 
@@ -37,6 +38,7 @@ class HarnessEngine:
         verifier: VerificationEngine,
         resources: ResourceUsage,
         store: SQLiteRunStore | None = None,
+        git: GitTool | None = None,
     ) -> None:
         self.scanner = scanner
         self.indexer = indexer or RepositoryIndexer(scanner.workspace, scanner=scanner)
@@ -44,6 +46,7 @@ class HarnessEngine:
         self.verifier = verifier
         self.resources = resources
         self.store = store
+        self.git = git or GitTool(router.runner)
 
     def run(
         self,
@@ -63,6 +66,9 @@ class HarnessEngine:
         machine = StateMachine(state)
         ledger = EvidenceLedger()
         events: list[EngineEvent] = []
+        terminal_status: TerminalStatus
+        terminal_reason: str
+        terminal_evidence_refs: tuple[str, ...] = ()
         try:
             events.append(machine.move(Phase.UNDERSTAND, reason="task accepted")[1])
             events.append(machine.move(Phase.EXPLORE, reason="structural repository scan")[1])
@@ -86,11 +92,9 @@ class HarnessEngine:
             events.append(machine.move(Phase.VERIFY, reason="run verification commands")[1])
             verification, _ = self._verify(verification_commands, ledger, state, events)
             if verification.passed:
-                events.append(machine.terminate(
-                    TerminalStatus.COMPLETE,
-                    reason="verification passed",
-                    evidence_refs=verification.evidence_refs,
-                ))
+                terminal_status = TerminalStatus.COMPLETE
+                terminal_reason = "verification passed"
+                terminal_evidence_refs = verification.evidence_refs
             elif recovery_actions:
                 events.append(machine.move(Phase.DIAGNOSE, reason=verification.failure_summary or "verification failed")[1])
                 self.resources.record_retry()
@@ -100,35 +104,39 @@ class HarnessEngine:
                 events.append(machine.move(Phase.VERIFY, reason="rerun verification commands")[1])
                 verification, _ = self._verify(verification_commands, ledger, state, events)
                 if verification.passed:
-                    events.append(machine.terminate(
-                        TerminalStatus.COMPLETE,
-                        reason="verification passed after recovery",
-                        evidence_refs=verification.evidence_refs,
-                    ))
+                    terminal_status = TerminalStatus.COMPLETE
+                    terminal_reason = "verification passed after recovery"
+                    terminal_evidence_refs = verification.evidence_refs
                 else:
-                    events.append(machine.terminate(
-                        TerminalStatus.FAILED,
-                        reason=verification.failure_summary or "verification failed after recovery",
-                    ))
+                    terminal_status = TerminalStatus.FAILED
+                    terminal_reason = verification.failure_summary or "verification failed after recovery"
             else:
-                events.append(machine.terminate(
-                    TerminalStatus.FAILED,
-                    reason=verification.failure_summary or "verification failed",
-                ))
+                terminal_status = TerminalStatus.FAILED
+                terminal_reason = verification.failure_summary or "verification failed"
         except ResourceLimitExceeded as exc:
-            events.append(machine.terminate(TerminalStatus.BLOCKED, reason=str(exc)))
+            terminal_status = TerminalStatus.BLOCKED
+            terminal_reason = str(exc)
             verification = VerificationResult(
                 passed=False,
                 failure_class=FailureClass.ENVIRONMENT_FAILURE,
                 failure_summary=str(exc),
             )
         except RuntimeError as exc:
-            events.append(machine.terminate(TerminalStatus.FAILED, reason=str(exc)))
+            terminal_status = TerminalStatus.FAILED
+            terminal_reason = str(exc)
             verification = VerificationResult(
                 passed=False,
                 failure_class=FailureClass.TOOL_FAILURE,
                 failure_summary=str(exc),
             )
+        self._collect_final_diff(ledger, state, events)
+        events.append(
+            machine.terminate(
+                terminal_status,
+                reason=terminal_reason,
+                evidence_refs=terminal_evidence_refs,
+            )
+        )
         state.resource_usage = self.resources.snapshot()
         result = EngineResult(
             state=state,
@@ -211,3 +219,47 @@ class HarnessEngine:
             )
         )
         return result, evidence
+
+    def _collect_final_diff(
+        self,
+        ledger: EvidenceLedger,
+        state: ExecutionState,
+        events: list[EngineEvent],
+    ) -> None:
+        try:
+            self.resources.record_tool_call()
+        except ResourceLimitExceeded as exc:
+            ledger.record(
+                EvidenceRecord(
+                    reference="diff:final",
+                    summary=f"final diff unavailable: {exc}",
+                    source="git diff",
+                    importance=3,
+                )
+            )
+            return
+        result = self.git.diff()
+        summary = result.stdout[:4_000] if result.success else result.stderr[:1_000]
+        ledger.record(
+            EvidenceRecord(
+                reference="diff:final",
+                summary=summary or "no tracked diff",
+                source="git diff --no-ext-diff --unified=3",
+                importance=4,
+            )
+        )
+        events.append(
+            EngineEvent(
+                run_id=state.run_id,
+                event_type="git.diff_collected",
+                phase=state.phase.value,
+                status=state.status.value,
+                evidence_ref="diff:final",
+                payload={
+                    "success": result.success,
+                    "exit_code": result.exit_code,
+                    "duration_ms": result.duration_ms,
+                    "truncated": result.truncated,
+                },
+            )
+        )

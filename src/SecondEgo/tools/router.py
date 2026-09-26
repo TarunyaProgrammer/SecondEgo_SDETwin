@@ -6,6 +6,7 @@ from SecondEgo.model.base import ActionProposal
 
 from .contracts import ToolResult
 from .filesystem import FileTool
+from .git import GitTool
 from .runner import CommandRunner
 from .search import SearchTool
 
@@ -20,11 +21,13 @@ class ToolRouter:
         search: SearchTool,
         runner: CommandRunner,
         resources: ResourceUsage,
+        git: GitTool | None = None,
     ) -> None:
         self.files = files
         self.search = search
         self.runner = runner
         self.resources = resources
+        self.git = git or GitTool(runner)
 
     def dispatch(self, proposal: ActionProposal) -> ToolResult:
         try:
@@ -60,6 +63,10 @@ class ToolRouter:
                     cwd=arguments.get("cwd", "."),
                     timeout_seconds=float(timeout),
                 )
+            case "git_diff":
+                return self.git.diff()
+            case "git_status":
+                return self.git.status()
             case _:
                 raise ValueError(f"unsupported tool action: {action}")
 
@@ -69,4 +76,3 @@ def _required_string(arguments: dict[str, Any], field: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{field} must be a non-empty string")
     return value
-

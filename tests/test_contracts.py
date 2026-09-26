@@ -7,6 +7,7 @@ from SecondEgo.core.resources import ResourceBudget, ResourceLimitExceeded, Reso
 from SecondEgo.core.state import AcceptanceCriterion, ExecutionState, Phase, TerminalStatus
 from SecondEgo.core.state_machine import InvalidTransition, StateMachine
 from SecondEgo.tools.filesystem import FileTool
+from SecondEgo.tools.git import GitTool
 from SecondEgo.tools.policy import CommandPolicy, PolicyViolation, WorkspacePolicy
 from SecondEgo.tools.router import ToolRouter
 from SecondEgo.tools.runner import CommandRunner
@@ -257,11 +258,25 @@ def test_harness_engine_runs_edit_to_verified_completion(tmp_path) -> None:
     assert result.state.phase is Phase.VERIFY
     assert result.verification.passed is True
     assert "src/version.py" in result.state.changed_paths
-    assert "symbols=" in result.evidence[0].summary
+    repository_evidence = next(item for item in result.evidence if item.reference == "repository:scan")
+    assert "symbols=" in repository_evidence.summary
     assert [event.event_type for event in result.events][-2:] == [
-        "verification.completed",
+        "git.diff_collected",
         "run.terminated",
     ]
+    assert any(record.reference == "diff:final" for record in result.evidence)
+
+
+def test_git_tool_reports_status_from_workspace(tmp_path) -> None:
+    workspace = WorkspacePolicy(tmp_path)
+    runner = CommandRunner(workspace)
+    assert runner.run(("git", "init")).success is True
+    FileTool(workspace).write("new.py", "VALUE = 1\n")
+
+    result = GitTool(runner).status()
+
+    assert result.success is True
+    assert "?? new.py" in result.stdout
 
 
 def test_harness_engine_recovers_from_failed_verification(tmp_path) -> None:
@@ -326,7 +341,7 @@ def test_sqlite_store_persists_run_events_and_evidence(tmp_path) -> None:
     assert loaded is not None
     assert loaded["status"] == "COMPLETE"
     assert loaded["events"][-1]["event_type"] == "run.terminated"
-    assert loaded["evidence"][0]["reference"] == "repository:scan"
+    assert "repository:scan" in {record["reference"] for record in loaded["evidence"]}
 
 
 def test_cli_action_parser_rejects_malformed_plan_actions() -> None:

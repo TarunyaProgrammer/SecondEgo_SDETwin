@@ -9,6 +9,7 @@ from SecondEgo.model.base import ActionProposal
 from SecondEgo.orchestration.engine import HarnessEngine
 from SecondEgo.repository.scanner import RepositoryScanner
 from SecondEgo.tools.filesystem import FileTool
+from SecondEgo.tools.git import GitTool
 from SecondEgo.tools.policy import WorkspacePolicy
 from SecondEgo.tools.router import ToolRouter
 from SecondEgo.tools.runner import CommandRunner
@@ -39,6 +40,7 @@ def main() -> int:
         )
     )
     runner = CommandRunner(workspace)
+    git = GitTool(runner)
     engine = HarnessEngine(
         scanner=RepositoryScanner(workspace),
         router=ToolRouter(
@@ -46,10 +48,12 @@ def main() -> int:
             search=SearchTool(workspace),
             runner=runner,
             resources=resources,
+            git=git,
         ),
         verifier=VerificationEngine(runner),
         resources=resources,
         store=SQLiteRunStore(arguments.state_db) if arguments.state_db else None,
+        git=git,
     )
     result = engine.run(
         task=arguments.issue,
