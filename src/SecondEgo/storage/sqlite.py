@@ -7,6 +7,8 @@ from SecondEgo.context.policy import EvidenceRecord
 from SecondEgo.core.events import EngineEvent
 from SecondEgo.core.state import ExecutionState
 
+from .redaction import redact_sensitive
+
 
 class SQLiteRunStore:
     """Versioned local persistence for compact execution evidence."""
@@ -75,7 +77,7 @@ class SQLiteRunStore:
                     (
                         state.run_id,
                         record.reference,
-                        record.summary[:4_000],
+                        redact_sensitive(record.summary[:4_000]),
                         record.source,
                         record.importance,
                         int(record.stale),
@@ -173,4 +175,3 @@ class SQLiteRunStore:
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.database_path)
-

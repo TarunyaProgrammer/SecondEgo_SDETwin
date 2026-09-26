@@ -25,6 +25,7 @@ from SecondEgo.repository.scanner import RepositoryScanner
 from SecondEgo.repository.index import RepositoryIndexer
 from SecondEgo.repository.retrieval import RepositoryRetriever
 from SecondEgo.storage.sqlite import SQLiteRunStore
+from SecondEgo.storage.redaction import redact_sensitive
 from SecondEgo.verification.contracts import FailureClass, VerificationResult
 from SecondEgo.verification.verifier import VerificationEngine
 from SecondEgo.cli import _proposal
@@ -171,6 +172,14 @@ def test_command_runner_reports_missing_allowlisted_executable(tmp_path) -> None
 
     assert result.success is False
     assert "could not start" in result.stderr
+
+
+def test_telemetry_redacts_common_secret_assignments() -> None:
+    value = redact_sensitive("AI_API_KEY=secret-value password: hunter2 normal")
+
+    assert "secret-value" not in value
+    assert "hunter2" not in value
+    assert "[REDACTED]" in value
 
 
 def test_file_tool_reads_and_writes_only_workspace_files(tmp_path) -> None:

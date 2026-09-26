@@ -9,6 +9,12 @@ from pathlib import Path
 from .policy import WorkspacePolicy
 
 
+_GENERATED_PARTS = frozenset(
+    {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "node_modules", ".venv", "build", "dist"}
+)
+_SENSITIVE_NAMES = frozenset({".env", ".env.local", ".env.production", "credentials.json"})
+
+
 class TransactionBlocked(RuntimeError):
     """Raised when an attempt cannot be isolated without risking repository state."""
 
@@ -185,7 +191,8 @@ def _status_paths(workspace: Path) -> list[str]:
         value = line[3:]
         if " -> " in value:
             value = value.rsplit(" -> ", 1)[1]
-        paths.append(value)
+        if _is_transfer_candidate(value):
+            paths.append(value)
     return paths
 
 
@@ -194,7 +201,18 @@ def _untracked_paths(workspace: Path) -> tuple[str, ...]:
         ("ls-files", "--others", "--exclude-standard", "-z"),
         workspace,
     )
-    return tuple(item for item in result.stdout.split("\0") if item)
+    return tuple(
+        item
+        for item in result.stdout.split("\0")
+        if item and _is_transfer_candidate(item)
+    )
+
+
+def _is_transfer_candidate(relative: str) -> bool:
+    path = Path(relative)
+    if path.name in _SENSITIVE_NAMES:
+        return False
+    return not any(part in _GENERATED_PARTS for part in path.parts)
 
 
 def _safe_child(root: Path, relative: str) -> Path:

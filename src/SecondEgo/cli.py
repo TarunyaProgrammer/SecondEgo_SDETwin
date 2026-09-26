@@ -9,6 +9,8 @@ from SecondEgo.config import configured_model
 from SecondEgo.core.state import AcceptanceCriterion
 from SecondEgo.model.base import ActionProposal
 from SecondEgo.orchestration.engine import HarnessEngine
+from SecondEgo.storage.redaction import redact_sensitive
+from SecondEgo.verification.contracts import FailureRecord
 
 
 def main() -> int:
@@ -95,6 +97,7 @@ def _report(result: object) -> dict[str, object]:
             "failure_class": result.verification.failure_class.value,
             "failure_summary": result.verification.failure_summary,
             "commands": list(result.verification.commands),
+            "failure_record": _failure_report(result.verification.failure_record),
         },
         "events": [
             {
@@ -110,12 +113,24 @@ def _report(result: object) -> dict[str, object]:
         "evidence": [
             {
                 "reference": item.reference,
-                "summary": item.summary,
+                "summary": redact_sensitive(item.summary),
                 "source": item.source,
                 "importance": item.importance,
             }
             for item in result.evidence
         ],
+    }
+
+
+def _failure_report(record: FailureRecord | None) -> dict[str, object] | None:
+    if record is None:
+        return None
+    return {
+        "failure_class": record.failure_class.value,
+        "summary": redact_sensitive(record.summary),
+        "failing_tests": list(record.failing_tests),
+        "error_locations": list(record.error_locations),
+        "fingerprint": redact_sensitive(record.fingerprint or ""),
     }
 
 
