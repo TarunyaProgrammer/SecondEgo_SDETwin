@@ -56,9 +56,10 @@ desktop-electron: rust-build
 desktop-macos:
 	@if [ ! -x apps/desktop/node_modules/.bin/vite ]; then npm --prefix apps/desktop install; fi
 	npm --prefix apps/desktop run build
-	mkdir -p apps/desktop/native/.build/SecondEgo.app/Contents/MacOS apps/desktop/native/.build/module-cache
+	mkdir -p apps/desktop/native/.build/SecondEgo.app/Contents/MacOS apps/desktop/native/.build/SecondEgo.app/Contents/Resources apps/desktop/native/.build/module-cache
 	CLANG_MODULE_CACHE_PATH="$(CURDIR)/apps/desktop/native/.build/module-cache" swiftc -target "$(shell uname -m)-apple-macosx11.0" -framework Cocoa -framework WebKit -O -o apps/desktop/native/.build/SecondEgo.app/Contents/MacOS/SecondEgo apps/desktop/native/SecondEgo.swift
 	cp apps/desktop/native/Info.plist apps/desktop/native/.build/SecondEgo.app/Contents/Info.plist
+	cp apps/desktop/native/SecondEgo.icns apps/desktop/native/.build/SecondEgo.app/Contents/Resources/SecondEgo.icns
 	@port="$${SECONDEGO_GATEWAY_PORT:-$$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')}"; \
 	cleanup() { pid="$$(lsof -tiTCP:"$$port" -sTCP:LISTEN 2>/dev/null | head -1)"; if [ -n "$$pid" ]; then kill "$$pid" 2>/dev/null || true; fi; }; \
 	on_signal() { cleanup; exit 130; }; \
@@ -75,10 +76,10 @@ rust-test:
 	cargo test --manifest-path engine-rs/Cargo.toml
 
 rust-build:
-	cargo build --manifest-path engine-rs/Cargo.toml
+	cargo build --manifest-path engine-rs/Cargo.toml --quiet
 
 rust-build-release:
-	cargo build --manifest-path engine-rs/Cargo.toml --release -p secondego-cli -p secondego-gateway
+	cargo build --manifest-path engine-rs/Cargo.toml --release -p secondego-cli -p secondego-gateway --quiet
 
 rust-run:
 	cargo run --manifest-path engine-rs/Cargo.toml -p secondego-cli -- --workspace "$(CURDIR)" --task "$(TASK)" $(if $(SCRIPT),--script "$(SCRIPT)",)

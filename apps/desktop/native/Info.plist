@@ -10,6 +10,8 @@
 	<string>com.secondego.desktop</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
+	<key>CFBundleIconFile</key>
+	<string>SecondEgo.icns</string>
 	<key>CFBundleName</key>
 	<string>SecondEgo</string>
 	<key>CFBundlePackageType</key>

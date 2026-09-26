@@ -211,43 +211,39 @@ fn print_goodbye(message: &str) {
 
 fn print_banner() {
     println!();
-    for line in [
-        " ███████╗███████╗ ██████╗ ██████╗ ███╗   ██╗██████╗     ███████╗ ██████╗  ██████╗ ",
-        " ██╔════╝██╔════╝██╔════╝██╔═══██╗████╗  ██║██╔══██╗    ██╔════╝██╔════╝ ██╔═══██╗",
-        " ███████╗█████╗  ██║     ██║   ██║██╔██╗ ██║██║  ██║    █████╗  ██║  ███╗██║   ██║",
-        " ╚════██║██╔══╝  ██║     ██║   ██║██║╚██╗██║██║  ██║    ██╔══╝  ██║   ██║██║   ██║",
-        " ███████║███████╗╚██████╗╚██████╔╝██║ ╚████║██████╔╝    ███████╗╚██████╔╝╚██████╔╝",
-        " ╚══════╝╚══════╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝╚═════╝     ╚══════╝ ╚═════╝  ╚═════╝ ",
-    ] {
-        println!("{}", paint(CORAL, line));
-    }
-    println!();
     println!(
         "{}",
         paint(
             CORAL,
-            "╭─ SECOND EGO · VERIFIED CODING HARNESS ───────────────────────────────╮"
+            "╭────────────────────── SECOND EGO ──────────────────────╮"
         )
     );
     println!(
         "{}",
         paint(
             PARCHEMENT,
-            "│  understand  ›  explore  ›  plan  ›  execute  ›  verify              │"
+            "│  [ ] VERIFIED CODING HARNESS                              │"
         )
     );
     println!(
         "{}",
         paint(
             PEACH,
-            "│  local-first repository intelligence with bounded, inspectable runs   │"
+            "│  understand > explore > plan > execute > verify         │"
+        )
+    );
+    println!(
+        "{}",
+        paint(
+            MUTED,
+            "│  local-first, bounded, inspectable repository runs      │"
         )
     );
     println!(
         "{}",
         paint(
             CORAL,
-            "╰───────────────────────────────────────────────────────────────────────╯"
+            "╰────────────────────────────────────────────────────────╯"
         )
     );
     println!(

@@ -29,20 +29,11 @@ def _paint(code: str, value: str) -> str:
 
 def _banner() -> None:
     print()
-    for line in (
-        " ███████╗███████╗ ██████╗ ██████╗ ███╗   ██╗██████╗     ███████╗ ██████╗  ██████╗ ",
-        " ██╔════╝██╔════╝██╔════╝██╔═══██╗████╗  ██║██╔══██╗    ██╔════╝██╔════╝ ██╔═══██╗",
-        " ███████╗█████╗  ██║     ██║   ██║██╔██╗ ██║██║  ██║    █████╗  ██║  ███╗██║   ██║",
-        " ╚════██║██╔══╝  ██║     ██║   ██║██║╚██╗██║██║  ██║    ██╔══╝  ██║   ██║██║   ██║",
-        " ███████║███████╗╚██████╗╚██████╔╝██║ ╚████║██████╔╝    ███████╗╚██████╔╝╚██████╔╝",
-        " ╚══════╝╚══════╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝╚═════╝     ╚══════╝ ╚═════╝  ╚═════╝ ",
-    ):
-        print(_paint(CORAL, line))
-    print()
-    print(_paint(CORAL, "╭─ SECOND EGO · VERIFIED CODING HARNESS ───────────────────────────────╮"))
-    print(_paint(PARCHEMENT, "│  understand  ›  explore  ›  plan  ›  execute  ›  verify              │"))
-    print(_paint(PEACH, "│  local-first repository intelligence with bounded, inspectable runs   │"))
-    print(_paint(CORAL, "╰───────────────────────────────────────────────────────────────────────╯"))
+    print(_paint(CORAL, "╭────────────────────── SECOND EGO ──────────────────────╮"))
+    print(_paint(PARCHEMENT, "│  [ ] VERIFIED CODING HARNESS                              │"))
+    print(_paint(PEACH, "│  understand > explore > plan > execute > verify         │"))
+    print(_paint(MUTED, "│  local-first, bounded, inspectable repository runs      │"))
+    print(_paint(CORAL, "╰────────────────────────────────────────────────────────╯"))
     print(f"  {_paint(MUTED, 'PYTHON COMPATIBILITY / INTERACTIVE')}  Type Ctrl-C to cancel.\n")
 
 
