@@ -4,6 +4,10 @@ from SecondEgo.context.assembler import ContextAssembler
 from SecondEgo.context.policy import ContextBudget, ContextPolicy, EvidenceRecord
 from SecondEgo.core.state import ExecutionState, Phase, TerminalStatus
 from SecondEgo.core.state_machine import InvalidTransition, StateMachine
+from SecondEgo.tools.policy import CommandPolicy, PolicyViolation, WorkspacePolicy
+from SecondEgo.tools.runner import CommandRunner
+from SecondEgo.tools.filesystem import FileTool
+from SecondEgo.tools.search import SearchTool
 from SecondEgo.verification.contracts import FailureClass, VerificationResult
 
 
@@ -90,3 +94,44 @@ def test_state_machine_protects_terminal_state() -> None:
 
     with pytest.raises(InvalidTransition):
         machine.move(Phase.UNDERSTAND, reason="should not run")
+
+
+def test_workspace_policy_rejects_paths_outside_root(tmp_path) -> None:
+    policy = WorkspacePolicy(tmp_path)
+
+    with pytest.raises(PolicyViolation, match="escapes"):
+        policy.resolve_path("../outside.txt")
+
+
+def test_command_policy_rejects_unapproved_executable() -> None:
+    policy = CommandPolicy.default()
+
+    with pytest.raises(PolicyViolation, match="allowlisted"):
+        policy.validate(("curl", "https://example.com"), 5)
+
+
+def test_command_runner_is_bounded_and_workspace_scoped(tmp_path) -> None:
+    runner = CommandRunner(WorkspacePolicy(tmp_path))
+    result = runner.run(("python3", "-c", "print('ok')"), cwd=".")
+
+    assert result.success is True
+    assert result.stdout.strip() == "ok"
+
+
+def test_file_tool_reads_and_writes_only_workspace_files(tmp_path) -> None:
+    files = FileTool(WorkspacePolicy(tmp_path))
+    written = files.write("src/example.py", "VALUE = 1\n")
+    read = files.read("src/example.py")
+
+    assert written.success is True
+    assert written.changed_paths == ("src/example.py",)
+    assert read.success is True
+    assert read.stdout == "VALUE = 1\n"
+
+
+def test_search_tool_returns_paths_and_line_numbers(tmp_path) -> None:
+    files = FileTool(WorkspacePolicy(tmp_path))
+    files.write("src/example.py", "VALUE = 1\nneedle = True\n")
+    results = SearchTool(WorkspacePolicy(tmp_path)).text("needle")
+
+    assert results == [{"path": "src/example.py", "line": 2, "text": "needle = True"}]
