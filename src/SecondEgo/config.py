@@ -2,7 +2,20 @@ import os
 from enum import StrEnum
 
 
-DEFAULT_MODEL = "gemini-3.8-flash"
+class ProviderKind(StrEnum):
+    """Supported structured-planning providers selected outside orchestration."""
+
+    DEEPSEEK = "deepseek"
+    GEMINI = "gemini"
+
+
+DEFAULT_PROVIDER = ProviderKind.DEEPSEEK
+DEFAULT_MODELS = {
+    ProviderKind.DEEPSEEK: "deepseek-flash",
+    ProviderKind.GEMINI: "gemini-3.8-flash",
+}
+# Compatibility for callers that read the default without selecting a provider.
+DEFAULT_MODEL = DEFAULT_MODELS[DEFAULT_PROVIDER]
 
 
 class PresentationMode(StrEnum):
@@ -12,9 +25,19 @@ class PresentationMode(StrEnum):
     EVENTS = "events"
 
 
-def configured_model() -> str:
-    """Return the model selected by evaluation configuration without reading secrets."""
-    return os.environ.get("SECONDEGO_MODEL", DEFAULT_MODEL)
+def configured_provider() -> ProviderKind:
+    """Read the provider choice without reading a credential."""
+    value = os.environ.get("SECONDEGO_PROVIDER", DEFAULT_PROVIDER.value).strip().lower()
+    try:
+        return ProviderKind(value or DEFAULT_PROVIDER.value)
+    except ValueError as exc:
+        allowed = ", ".join(provider.value for provider in ProviderKind)
+        raise ValueError(f"SECONDEGO_PROVIDER must be one of: {allowed}") from exc
+
+
+def configured_model(provider: ProviderKind | None = None) -> str:
+    """Return a model override or the selected provider's safe evaluator default."""
+    return os.environ.get("SECONDEGO_MODEL", "").strip() or DEFAULT_MODELS[provider or configured_provider()]
 
 
 def configured_presentation_mode() -> PresentationMode:

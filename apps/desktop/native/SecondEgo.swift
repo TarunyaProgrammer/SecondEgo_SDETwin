@@ -123,8 +123,10 @@ final class NotchController: NSObject, WKScriptMessageHandler, WKNavigationDeleg
     private func bounds(expanded: Bool) -> NSRect {
         let screen = NSScreen.main ?? NSScreen.screens[0]
         let screenFrame = screen.frame
-        let width: CGFloat = expanded ? 760 : 236
-        let height: CGFloat = expanded ? 620 : 38
+        let desiredWidth: CGFloat = expanded ? 1024 : 260
+        let desiredHeight: CGFloat = expanded ? 720 : 46
+        let width = min(desiredWidth, max(236, screenFrame.width - 24))
+        let height = min(desiredHeight, max(38, screenFrame.height - 18))
         return NSRect(
             x: screenFrame.midX - width / 2,
             y: screenFrame.maxY - height,

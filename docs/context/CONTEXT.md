@@ -13,7 +13,7 @@ Implemented vertical slice:
 - workspace-bounded files, search, commands, Git evidence, and tool routing;
 - context budgets, source-linked evidence ledger, and run-level resource budgets;
 - Python AST repository indexing with lexical fallback retrieval;
-- deterministic and optional Gemini-backed structured planning;
+- deterministic structured planning with a provider-neutral boundary: DeepSeek is the evaluator default and Gemini is an optional compatibility adapter;
 - isolated Git worktree attempts that discard failures and transfer only verified diffs;
 - structured verification failure records and diagnosis-informed model recovery;
 - ranked task and failure retrieval with bounded, redacted source excerpts in planner context;
@@ -59,15 +59,15 @@ diagnosis-informed recovery over UI work or additional infrastructure.
 ## Evaluation interface
 
 - `make setup` creates `.venv`, installs the Python compatibility dependencies and project, and builds the Rust CLI/gateway in release mode.
-- `make run` builds the Rust release CLI if needed, prompts for the repository path and issue, and uses `AI_API_KEY` for Gemini-backed planning. `ENGINE=python make run` explicitly selects the compatibility TUI.
+- `make run` builds the Rust release CLI if needed, prompts for the repository path and issue, and uses the `SECONDEGO_PROVIDER` adapter with `AI_API_KEY` for planning. `ENGINE=python make run` explicitly selects the compatibility TUI.
 - `make test` runs the contract suite.
 - `make ui` builds and launches the optional macOS notch observer; `make run UI=on` is the equivalent switch through the standard launcher.
-- `SECONDEGO_MODEL` overrides the default configured Gemini model when the organizers prescribe a different text model.
+- `SECONDEGO_PROVIDER=deepseek` is the default evaluator path (`deepseek-flash`); `SECONDEGO_MODEL` overrides its model. `SECONDEGO_PROVIDER=gemini` is an explicit optional adapter and requires `.[gemini]` in the Python compatibility runtime.
 - No committed file contains an API credential; `.env.example` contains empty placeholders only.
 
 ## Decisions still open
 
-- Evaluation-required Gemini model identifier and API configuration. The adapter defaults to `gemini-3.8-flash` but is configurable; model calls remain behind `ModelProvider`.
+- The organizer's required DeepSeek model identifier. The provider default is `deepseek-flash`, can be overridden with `SECONDEGO_MODEL`, and remains behind `ModelProvider`.
 - Provider-native token counting. The current preflight budget uses a deterministic local estimate to avoid a separate paid request.
 - Supported repository languages beyond Python AST extraction; unsupported languages fall back to structural/lexical retrieval.
 - Exact evaluation tool-permission policy and sandbox boundary.

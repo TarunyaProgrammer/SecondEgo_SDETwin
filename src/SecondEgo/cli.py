@@ -5,8 +5,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from SecondEgo.app import build_engine, build_gemini_planner, build_resources
-from SecondEgo.config import configured_model
+from SecondEgo.app import build_engine, build_model_planner, build_resources
+from SecondEgo.config import ProviderKind, configured_model
 from SecondEgo.core.events import EngineEvent
 from SecondEgo.core.state import AcceptanceCriterion
 from SecondEgo.model.base import ActionProposal
@@ -27,8 +27,9 @@ def main() -> int:
     parser.add_argument("--issue", required=True, help="issue description")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--plan", type=Path, help="JSON plan with actions and verification_commands")
-    source.add_argument("--gemini", action="store_true", help="request a structured plan from Gemini")
-    parser.add_argument("--model", default=configured_model(), help="Gemini model identifier for --gemini mode")
+    source.add_argument("--provider", choices=[provider.value for provider in ProviderKind], help="request a structured plan from this provider")
+    source.add_argument("--gemini", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--model", help="provider model identifier (defaults to the selected provider's evaluation model)")
     parser.add_argument("--max-model-calls", type=int, default=20)
     parser.add_argument("--max-tool-calls", type=int, default=80)
     parser.add_argument("--max-retries", type=int, default=6)
@@ -75,7 +76,8 @@ def main() -> int:
                 recovery_actions=tuple(_proposal(item) for item in plan.get("recovery_actions", [])),
             )
         else:
-            planner = build_gemini_planner(resources, arguments.model)
+            provider_kind = ProviderKind("gemini" if arguments.gemini else arguments.provider)
+            planner = build_model_planner(resources, arguments.model or configured_model(provider_kind), provider_kind)
             result = asyncio.run(
                 engine.run_with_planner(
                     task=arguments.issue,

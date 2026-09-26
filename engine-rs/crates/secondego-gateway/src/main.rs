@@ -9,7 +9,7 @@ use std::thread;
 use std::time::Duration;
 
 use secondego_core::EngineEvent;
-use secondego_model::GeminiProvider;
+use secondego_model::{ConfiguredProvider, configured_model};
 use secondego_runtime::{
     RunReport, RustEngine, collect_garbage, resolve_repository, validate_repository_source,
 };
@@ -141,11 +141,15 @@ fn create_run(
     if let Err(error) = validate_repository_source(&request.repository) {
         return respond(stream, 400, serde_json::json!({"error":error.to_string()}));
     }
-    let model = request
-        .model
-        .filter(|model| !model.trim().is_empty())
-        .or_else(|| env::var("SECONDEGO_MODEL").ok())
-        .unwrap_or_else(|| "gemini-3.8-flash".into());
+    let model = match request.model.filter(|model| !model.trim().is_empty()) {
+        Some(model) => model,
+        None => match configured_model() {
+            Ok(model) => model,
+            Err(error) => {
+                return respond(stream, 500, serde_json::json!({"error": error.to_string()}));
+            }
+        },
+    };
     let id = Uuid::new_v4();
     runs.lock().unwrap().insert(
         id,
@@ -177,8 +181,18 @@ fn create_run(
                 return;
             }
         };
-        let mut provider = GeminiProvider::default();
-        provider.model = model;
+        let provider = match ConfiguredProvider::from_environment() {
+            Ok(provider) => provider.with_model(model),
+            Err(error) => {
+                if let Ok(mut all_runs) = runs_for_thread.lock() {
+                    if let Some(record) = all_runs.get_mut(&id) {
+                        record.status = "FAILED".into();
+                        record.error = Some(error.to_string());
+                    }
+                }
+                return;
+            }
+        };
         let event_sink = move |event: &EngineEvent| {
             if let Ok(mut all_runs) = event_runs.lock() {
                 if let Some(record) = all_runs.get_mut(&id) {
@@ -433,7 +447,7 @@ mod tests {
             validate_start_request(&StartRequest {
                 repository: "/tmp/repo".into(),
                 issue: "fix pagination".into(),
-                model: Some("gemini-3.8-flash".into())
+                model: Some("deepseek-flash".into())
             })
             .is_ok()
         );

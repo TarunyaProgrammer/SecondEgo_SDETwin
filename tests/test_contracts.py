@@ -19,9 +19,10 @@ from SecondEgo.tools.search import SearchTool
 from SecondEgo.tools.transaction import GitAttemptTransaction
 from SecondEgo.model.base import ActionProposal
 from SecondEgo.model.gemini import GeminiProvider, ProviderConfigurationError
+from SecondEgo.model.deepseek import DeepSeekProvider
 from SecondEgo.model.planner import ModelPlanner, PlanValidationError
 from SecondEgo.model.scripted import ScriptedProvider
-from SecondEgo.config import DEFAULT_MODEL, configured_model
+from SecondEgo.config import DEFAULT_MODEL, ProviderKind, configured_model, configured_provider
 from SecondEgo.config import PresentationMode, configured_presentation_mode
 from SecondEgo.core.events import EngineEvent, EventLog
 from SecondEgo.orchestration.engine import HarnessEngine
@@ -921,11 +922,35 @@ def test_gemini_provider_reads_evaluator_credential_name(monkeypatch) -> None:
     assert GeminiProvider()._resolve_api_key() == "evaluation-key"
 
 
+def test_deepseek_provider_is_the_default_and_reads_the_evaluator_credential(monkeypatch) -> None:
+    monkeypatch.delenv("SECONDEGO_PROVIDER", raising=False)
+    monkeypatch.setenv("AI_API_KEY", "evaluation-key")
+
+    assert configured_provider() is ProviderKind.DEEPSEEK
+    assert DeepSeekProvider()._resolve_api_key() == "evaluation-key"
+
+
+def test_deepseek_provider_requires_a_key_before_transport(monkeypatch) -> None:
+    monkeypatch.delenv("AI_API_KEY", raising=False)
+
+    with pytest.raises(ProviderConfigurationError, match="AI_API_KEY"):
+        asyncio.run(DeepSeekProvider(api_key="").generate("plan", context={}))
+
+
 def test_model_name_can_be_overridden_for_prescribed_evaluation_model(monkeypatch) -> None:
     monkeypatch.delenv("SECONDEGO_MODEL", raising=False)
+    monkeypatch.delenv("SECONDEGO_PROVIDER", raising=False)
     assert configured_model() == DEFAULT_MODEL
     monkeypatch.setenv("SECONDEGO_MODEL", "prescribed-text-model")
     assert configured_model() == "prescribed-text-model"
+
+
+def test_gemini_remains_an_explicit_opt_in(monkeypatch) -> None:
+    monkeypatch.delenv("SECONDEGO_MODEL", raising=False)
+    monkeypatch.setenv("SECONDEGO_PROVIDER", "gemini")
+
+    assert configured_provider() is ProviderKind.GEMINI
+    assert configured_model() == "gemini-3.8-flash"
 
 
 def test_presentation_mode_defaults_to_headless(monkeypatch) -> None:

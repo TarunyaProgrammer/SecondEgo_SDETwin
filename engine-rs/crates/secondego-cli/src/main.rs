@@ -4,7 +4,7 @@ use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 
 use secondego_core::ActionProposal;
-use secondego_model::{GeminiProvider, ScriptedProvider};
+use secondego_model::{ConfiguredProvider, ScriptedProvider};
 use secondego_runtime::{RustEngine, collect_garbage, resolve_repository};
 
 fn main() {
@@ -60,7 +60,7 @@ fn main() {
             state_db,
             interactive,
         ),
-        None => run_gemini(resolved.root, task, events, state_db, interactive),
+        None => run_configured(resolved.root, task, events, state_db, interactive),
     };
     if let Err(error) = result {
         eprintln!("SecondEgo failed: {error}");
@@ -93,14 +93,14 @@ fn run_scripted(
     emit_report(engine.run(task, workspace)?, events, state_db, interactive)
 }
 
-fn run_gemini(
+fn run_configured(
     workspace: PathBuf,
     task: String,
     events: bool,
     state_db: Option<String>,
     interactive: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut engine = RustEngine::new(GeminiProvider::default());
+    let mut engine = RustEngine::new(ConfiguredProvider::from_environment()?);
     if interactive && !events {
         engine = engine.with_event_sink(print_live_event);
     }

@@ -2,6 +2,8 @@ from pathlib import Path
 from SecondEgo.core.events import EventSink
 
 from SecondEgo.core.resources import ResourceBudget, ResourceUsage
+from SecondEgo.config import ProviderKind, configured_provider
+from SecondEgo.model.deepseek import DeepSeekProvider
 from SecondEgo.model.gemini import GeminiProvider
 from SecondEgo.model.planner import ModelPlanner
 from SecondEgo.orchestration.engine import HarnessEngine
@@ -48,9 +50,18 @@ def build_engine(
     )
 
 
-def build_gemini_planner(resources: ResourceUsage, model: str) -> ModelPlanner:
+def build_model_planner(
+    resources: ResourceUsage,
+    model: str,
+    provider_kind: ProviderKind | None = None,
+) -> ModelPlanner:
+    provider = (
+        DeepSeekProvider(model=model)
+        if (provider_kind or configured_provider()) is ProviderKind.DEEPSEEK
+        else GeminiProvider(model=model)
+    )
     return ModelPlanner(
-        provider=GeminiProvider(model=model),
+        provider=provider,
         assembler=ContextAssembler(ContextBudget(24_000, 4_000, 2_000, 12_000, 3_000, 3_000)),
         resources=resources,
     )

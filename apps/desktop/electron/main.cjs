@@ -11,18 +11,20 @@ let mainWindow;
 const notchMode = process.platform === "darwin" && process.env.SECONDEGO_DESKTOP_MODE !== "window";
 
 const NOTCH_SIZE = {
-  closed: { width: 236, height: 38 },
-  open: { width: 760, height: 620 },
+  closed: { width: 260, height: 46 },
+  open: { width: 1024, height: 720 },
 };
 
 function notchBounds(expanded) {
   const display = screen.getPrimaryDisplay();
   const size = expanded ? NOTCH_SIZE.open : NOTCH_SIZE.closed;
+  const width = Math.min(size.width, Math.max(236, display.workArea.width - 24));
+  const height = Math.min(size.height, Math.max(38, display.workArea.height - 18));
   return {
-    x: Math.round(display.bounds.x + (display.bounds.width - size.width) / 2),
+    x: Math.round(display.bounds.x + (display.bounds.width - width) / 2),
     y: display.bounds.y,
-    width: size.width,
-    height: size.height,
+    width,
+    height,
   };
 }
 

@@ -1,0 +1,11 @@
+Use case: logo-brand
+Asset type: production identity mark for SecondEgo, a local AI coding harness.
+Input image: Potential Logo.png is inspiration only. Preserve its bold modular, notched architectural silhouette and the warm coral-and-cream energy, but do not copy its exact outline or pattern.
+Primary request: Create one original compact app icon that feels like an intelligent doorway and a second self: two mirrored, interlocking stepped forms with a small central opening. It must be iconic and readable at 24px.
+Scene/backdrop: genuinely transparent background.
+Style/medium: flat vector-friendly geometric symbol, rounded-square app-mark proportion, high-end technical stationery feel, no 3D, no gradients, no noise texture.
+Color palette: a refined burnt coral #EE6547, pale parchment #FFF1D8, and a single dark midnight #101923 detail.
+Composition/framing: centered mark with generous transparent margin.
+Text (verbatim): no text, no letters, no words.
+Constraints: original design inspired only by Potential Logo.png; crisp silhouette; transparent alpha; suitable in a dark minimal macOS UI.
+Avoid: the exact inspiration silhouette, robot heads, brains, shields, mascots, pixel art, gradients, watermarks, any text.

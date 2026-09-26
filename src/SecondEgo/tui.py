@@ -3,7 +3,7 @@ import json
 import os
 import sys
 
-from SecondEgo.app import build_engine, build_gemini_planner, build_resources
+from SecondEgo.app import build_engine, build_model_planner, build_resources
 from SecondEgo.config import configured_model, configured_presentation_mode
 from SecondEgo.core.state import AcceptanceCriterion
 from SecondEgo.core.events import EngineEvent
@@ -86,7 +86,7 @@ def main() -> int:
             engine.run_with_planner(
                 task=issue,
                 acceptance_criteria=(AcceptanceCriterion("Implement and verify the supplied issue"),),
-                planner=build_gemini_planner(engine.resources, configured_model()),
+                planner=build_model_planner(engine.resources, configured_model()),
             )
         )
         print(f"\n  {_paint('90', 'RUN COMPLETE')}  {result.state.status.value}  ·  {result.state.phase.value}")

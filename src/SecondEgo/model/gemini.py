@@ -5,21 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .base import ActionProposal
-
-
-class ProviderConfigurationError(RuntimeError):
-    """Raised when an optional model provider is unavailable or misconfigured."""
-
-
-_ACTION_SCHEMA: dict[str, object] = {
-    "type": "object",
-    "properties": {
-        "action": {"type": "string"},
-        "arguments": {"type": "object"},
-        "rationale": {"type": "string"},
-    },
-    "required": ["action", "arguments", "rationale"],
-}
+from .structured import ACTION_SCHEMA, ProviderConfigurationError, parse_action
 
 
 @dataclass(frozen=True)
@@ -55,7 +41,7 @@ class GeminiProvider:
                 contents=prompt,
                 config={
                     "response_mime_type": "application/json",
-                    "response_schema": _ACTION_SCHEMA,
+                    "response_schema": ACTION_SCHEMA,
                 },
             )
         except Exception as exc:
@@ -68,18 +54,7 @@ class GeminiProvider:
             data = json.loads(response.text)
         except (TypeError, json.JSONDecodeError) as exc:
             raise RuntimeError("Gemini returned invalid structured action output") from exc
-        return _parse_action(data)
+        return parse_action(data)
 
     def _resolve_api_key(self) -> str | None:
         return self.api_key or os.environ.get("AI_API_KEY")
-
-
-def _parse_action(data: object) -> ActionProposal:
-    if not isinstance(data, dict):
-        raise RuntimeError("model action must be an object")
-    action = data.get("action")
-    arguments = data.get("arguments")
-    rationale = data.get("rationale")
-    if not isinstance(action, str) or not isinstance(arguments, dict) or not isinstance(rationale, str):
-        raise RuntimeError("model action does not match the required schema")
-    return ActionProposal(action=action, arguments=arguments, rationale=rationale)

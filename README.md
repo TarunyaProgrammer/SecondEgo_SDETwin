@@ -68,11 +68,20 @@ tests, model, and evaluation rules. A GitHub URL is supported for development
 rehearsals, but external network access, private-repository credentials, and
 additional model providers must not be assumed during the official evaluation.
 
-The default model is `gemini-3.8-flash`. An organizer-prescribed model can be
-selected with:
+The default provider is DeepSeek and the default model is `deepseek-flash`.
+An organizer-prescribed model can be selected without changing orchestration:
 
 ```bash
+export SECONDEGO_PROVIDER=deepseek
 export SECONDEGO_MODEL="<PRESCRIBED_MODEL>"
+```
+
+The evaluator credential is always read from `AI_API_KEY`; it is never stored
+by the app. Gemini remains available only as an explicit development opt-in:
+
+```bash
+export SECONDEGO_PROVIDER=gemini
+.venv/bin/pip install '.[gemini]'
 ```
 
 The harness reads the API key only from `AI_API_KEY`. Credentials must not be
@@ -113,7 +122,7 @@ The CLI accepts either a local repository path or a public HTTPS GitHub URL:
 PYTHONPATH=src .venv/bin/python -m SecondEgo.cli solve \
   --repo /path/to/evaluation-repository \
   --issue "Fix authentication timeout handling" \
-  --gemini \
+  --provider deepseek \
   --model "$SECONDEGO_MODEL"
 ```
 

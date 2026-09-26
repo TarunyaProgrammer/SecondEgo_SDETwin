@@ -14,7 +14,7 @@ from typing import Any
 from urllib.parse import parse_qs, quote, urlparse
 from uuid import uuid4
 
-from SecondEgo.app import build_engine, build_gemini_planner, build_resources
+from SecondEgo.app import build_engine, build_model_planner, build_resources
 from SecondEgo.config import configured_model
 from SecondEgo.core.events import EngineEvent
 from SecondEgo.core.state import AcceptanceCriterion
@@ -121,7 +121,7 @@ class RunRegistry:
                     acceptance_criteria=(
                         AcceptanceCriterion("Implement and verify the supplied issue"),
                     ),
-                    planner=build_gemini_planner(engine.resources, record.model),
+                    planner=build_model_planner(engine.resources, record.model),
                 )
             )
             with record.lock:

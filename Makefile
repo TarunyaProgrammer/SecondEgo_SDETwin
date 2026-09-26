@@ -9,7 +9,7 @@ RUST_BIN ?= $(CURDIR)/engine-rs/target/release/secondego-cli
 
 setup:
 	$(PYTHON) -m venv $(VENV)
-	$(VENV)/bin/pip install 'setuptools>=68' 'pytest>=8.0' 'google-genai>=1.0'
+	$(VENV)/bin/pip install 'setuptools>=68' 'pytest>=8.0'
 	$(VENV)/bin/pip install --no-build-isolation -e .
 	cargo build --manifest-path engine-rs/Cargo.toml --release -p secondego-cli -p secondego-gateway
 
