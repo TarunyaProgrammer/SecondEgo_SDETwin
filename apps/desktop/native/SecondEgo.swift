@@ -136,18 +136,28 @@ final class NotchController: NSObject, WKScriptMessageHandler, WKNavigationDeleg
     }
 
     private func startGateway() {
-        let executable = root.appendingPathComponent("engine-rs/target/debug/secondego-gateway")
-        guard FileManager.default.isExecutableFile(atPath: executable.path) else {
-            NSLog("SecondEgo gateway not found at %@; run make desktop-electron again.", executable.path)
-            return
-        }
+        let rustExecutable = root.appendingPathComponent("engine-rs/target/debug/secondego-gateway")
         let process = Process()
-        process.executableURL = executable
-        process.currentDirectoryURL = root
         var environment = ProcessInfo.processInfo.environment
         environment["SECONDEGO_UI_TOKEN"] = token
         environment["SECONDEGO_GATEWAY_PORT"] = port
         environment["SECONDEGO_UI_DIST"] = root.appendingPathComponent("apps/desktop/dist").path
+
+        if FileManager.default.isExecutableFile(atPath: rustExecutable.path) {
+            process.executableURL = rustExecutable
+        } else {
+            let venvPython = root.appendingPathComponent(".venv/bin/python")
+            let pythonPath = FileManager.default.isExecutableFile(atPath: venvPython.path)
+                ? venvPython.path
+                : "/usr/local/bin/python3"
+            process.executableURL = URL(fileURLWithPath: pythonPath)
+            process.arguments = ["-m", "SecondEgo.desktop.gateway", "--host", "127.0.0.1", "--port", port]
+            let srcPath = root.appendingPathComponent("src").path
+            let existingPythonPath = environment["PYTHONPATH"] ?? ""
+            environment["PYTHONPATH"] = existingPythonPath.isEmpty ? srcPath : "\(srcPath):\(existingPythonPath)"
+        }
+
+        process.currentDirectoryURL = root
         process.environment = environment
         process.standardOutput = FileHandle.standardOutput
         process.standardError = FileHandle.standardError
