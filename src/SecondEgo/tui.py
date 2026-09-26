@@ -3,11 +3,17 @@ import json
 from pathlib import Path
 
 from SecondEgo.app import build_engine, build_gemini_planner, build_resources
-from SecondEgo.config import configured_model
+from SecondEgo.config import configured_model, configured_presentation_mode
 from SecondEgo.core.state import AcceptanceCriterion
+from SecondEgo.core.events import EngineEvent
+
+
+def _print_event(event: EngineEvent) -> None:
+    print(f"[{event.phase}] {event.event_type}", flush=True)
 
 
 def main() -> int:
+    presentation_mode = configured_presentation_mode()
     print("SecondEgo evaluation mode")
     print("Text-only autonomous coding harness. Type Ctrl-C to cancel before execution.")
     repository_text = input("Repository path [.]: ").strip() or "."
@@ -16,7 +22,11 @@ def main() -> int:
         print("No issue supplied; exiting without an agent run.")
         return 0
     try:
-        engine = build_engine(Path(repository_text), resources=build_resources())
+        engine = build_engine(
+            Path(repository_text),
+            resources=build_resources(),
+            event_sink=_print_event if presentation_mode.value == "events" else None,
+        )
     except ValueError as exc:
         print(f"Invalid repository: {exc}")
         return 2

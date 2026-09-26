@@ -15,6 +15,7 @@ Implemented vertical slice:
 - structured verification failure records and diagnosis-informed model recovery;
 - ranked task and failure retrieval with bounded, redacted source excerpts in planner context;
 - provider transport failures converted into bounded terminal evidence instead of TUI crashes;
+- optional loopback-only observer gateway and browser UI that consume serialized engine events without adding model/tool calls;
 - redacted bounded telemetry and generated-file filtering at the transaction boundary;
 - SQLite schema version 1 for final run state, events, and evidence;
 - CLI execution and automated contract tests.
@@ -46,6 +47,7 @@ diagnosis-informed recovery over UI work or additional infrastructure.
 9. Meet the standard evaluation contract through a root `Makefile` exposing `setup`, `run`, `test`, and `clean`.
 10. Read the evaluator-supplied credential only from `AI_API_KEY`; never persist or log it.
 11. Keep the evaluation path text-only. `make run` launches the terminal UI, which collects a repository path and issue before starting one autonomous run.
+12. Keep presentation optional. `make run` defaults to `UI_MODE=headless`; `UI_MODE=events` or CLI `--ui` only observes compact engine events and must not add model calls, tool calls, or engine decisions.
 
 ## Evaluation interface
 

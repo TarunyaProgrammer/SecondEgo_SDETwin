@@ -1,4 +1,5 @@
 from pathlib import Path
+from SecondEgo.core.events import EventSink
 
 from SecondEgo.core.resources import ResourceBudget, ResourceUsage
 from SecondEgo.model.gemini import GeminiProvider
@@ -24,6 +25,7 @@ def build_engine(
     resources: ResourceUsage,
     state_db: Path | None = None,
     transactional: bool = True,
+    event_sink: EventSink | None = None,
 ) -> HarnessEngine:
     workspace = WorkspacePolicy(repository)
     runner = CommandRunner(workspace)
@@ -42,6 +44,7 @@ def build_engine(
         store=SQLiteRunStore(state_db) if state_db else None,
         git=git,
         transaction=GitAttemptTransaction(workspace) if transactional else None,
+        event_sink=event_sink,
     )
 
 

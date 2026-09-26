@@ -20,6 +20,8 @@ from SecondEgo.model.gemini import GeminiProvider, ProviderConfigurationError
 from SecondEgo.model.planner import ModelPlanner, PlanValidationError
 from SecondEgo.model.scripted import ScriptedProvider
 from SecondEgo.config import DEFAULT_MODEL, configured_model
+from SecondEgo.config import PresentationMode, configured_presentation_mode
+from SecondEgo.core.events import EngineEvent, EventLog
 from SecondEgo.orchestration.engine import HarnessEngine
 from SecondEgo.repository.scanner import RepositoryScanner
 from SecondEgo.repository.index import RepositoryIndexer
@@ -29,6 +31,7 @@ from SecondEgo.storage.redaction import redact_sensitive
 from SecondEgo.verification.contracts import FailureClass, VerificationResult
 from SecondEgo.verification.verifier import VerificationEngine
 from SecondEgo.cli import _proposal
+from SecondEgo.desktop.gateway import RunRecord
 
 
 def test_execution_state_snapshot_is_structured_and_bounded() -> None:
@@ -41,6 +44,47 @@ def test_execution_state_snapshot_is_structured_and_bounded() -> None:
     assert snapshot["phase"] == Phase.VERIFY
     assert snapshot["changed_paths"] == ["src/app.py"]
     assert "transcript" not in snapshot
+
+
+def test_engine_event_serializes_for_ui_observers() -> None:
+    event = EngineEvent(run_id="r1", event_type="state.changed", phase="PLAN")
+
+    payload = event.to_dict()
+
+    assert payload["schema_version"] == 1
+    assert payload["run_id"] == "r1"
+    assert payload["event_type"] == "state.changed"
+    assert payload["timestamp"].endswith("+00:00")
+
+
+def test_event_sink_is_observational_only() -> None:
+    observed: list[str] = []
+    log = EventLog(lambda event: observed.append(event.event_type))
+    event = EngineEvent(run_id="r1", event_type="run.terminated", phase="VERIFY")
+
+    log.append(event)
+
+    assert tuple(log) == (event,)
+    assert observed == ["run.terminated"]
+
+
+def test_event_sink_failure_does_not_break_engine_history() -> None:
+    log = EventLog(lambda event: (_ for _ in ()).throw(RuntimeError("ui offline")))
+    event = EngineEvent(run_id="r1", event_type="tool.completed", phase="EXECUTE")
+
+    log.append(event)
+
+    assert log == [event]
+
+
+def test_gateway_run_record_exposes_incremental_versioned_events() -> None:
+    record = RunRecord(request_id="q1", repository="/repo", issue="fix", model="test-model")
+    record.add_event(EngineEvent(run_id="r1", event_type="state.changed", phase="PLAN"))
+
+    snapshot = record.snapshot(event_offset=0)
+
+    assert snapshot["status"] == "RUNNING"
+    assert snapshot["events"][0]["schema_version"] == 1
 
 
 def test_context_budget_rejects_overflow() -> None:
@@ -763,6 +807,18 @@ def test_model_name_can_be_overridden_for_prescribed_evaluation_model(monkeypatc
     assert configured_model() == DEFAULT_MODEL
     monkeypatch.setenv("SECONDEGO_MODEL", "prescribed-text-model")
     assert configured_model() == "prescribed-text-model"
+
+
+def test_presentation_mode_defaults_to_headless(monkeypatch) -> None:
+    monkeypatch.delenv("SECONDEGO_UI_MODE", raising=False)
+
+    assert configured_presentation_mode() is PresentationMode.HEADLESS
+
+
+def test_presentation_mode_can_enable_event_display(monkeypatch) -> None:
+    monkeypatch.setenv("SECONDEGO_UI_MODE", "events")
+
+    assert configured_presentation_mode() is PresentationMode.EVENTS
 
 
 def test_cli_action_parser_rejects_malformed_plan_actions() -> None:

@@ -5,7 +5,7 @@ from SecondEgo.context.ledger import EvidenceLedger
 from SecondEgo.context.policy import EvidenceRecord
 from SecondEgo.core.resources import ResourceLimitExceeded, ResourceUsage
 from SecondEgo.core.state import AcceptanceCriterion, ExecutionState, Phase, TerminalStatus
-from SecondEgo.core.events import EngineEvent
+from SecondEgo.core.events import EngineEvent, EventLog, EventSink
 from SecondEgo.core.state_machine import StateMachine
 from SecondEgo.model.base import ActionProposal
 from SecondEgo.model.planner import ModelPlanner, PlanValidationError
@@ -58,6 +58,7 @@ class HarnessEngine:
         store: SQLiteRunStore | None = None,
         git: GitTool | None = None,
         transaction: GitAttemptTransaction | None = None,
+        event_sink: EventSink | None = None,
     ) -> None:
         self.scanner = scanner
         self.indexer = indexer or RepositoryIndexer(scanner.workspace, scanner=scanner)
@@ -68,6 +69,7 @@ class HarnessEngine:
         self.store = store
         self.git = git or GitTool(router.runner)
         self.transaction = transaction
+        self.event_sink = event_sink
 
     def run(
         self,
@@ -146,7 +148,7 @@ class HarnessEngine:
         )
         machine = StateMachine(state)
         ledger = EvidenceLedger()
-        events: list[EngineEvent] = []
+        events = EventLog(self.event_sink)
         events.append(machine.move(Phase.UNDERSTAND, reason="task accepted")[1])
         events.append(machine.move(Phase.EXPLORE, reason="structural repository scan")[1])
         index = self.indexer.build()

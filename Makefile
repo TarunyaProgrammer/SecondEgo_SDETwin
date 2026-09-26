@@ -1,7 +1,8 @@
 PYTHON ?= python3
 VENV ?= .venv
+UI_MODE ?= headless
 
-.PHONY: setup run test clean
+.PHONY: setup run desktop test clean
 
 setup:
 	$(PYTHON) -m venv $(VENV)
@@ -10,7 +11,10 @@ setup:
 
 run:
 	@test -n "$$AI_API_KEY" || (echo "AI_API_KEY must be set for evaluation"; exit 2)
-	PATH="$(CURDIR)/$(VENV)/bin:$$PATH" $(VENV)/bin/secondego-tui
+	SECONDEGO_UI_MODE="$(UI_MODE)" PATH="$(CURDIR)/$(VENV)/bin:$$PATH" $(VENV)/bin/secondego-tui
+
+desktop:
+	PATH="$(CURDIR)/$(VENV)/bin:$$PATH" $(VENV)/bin/secondego-desktop
 
 test:
 	$(VENV)/bin/python -m pytest -q

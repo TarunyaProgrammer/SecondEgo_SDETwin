@@ -6,6 +6,7 @@ from typing import Any
 
 from SecondEgo.app import build_engine, build_gemini_planner, build_resources
 from SecondEgo.config import configured_model
+from SecondEgo.core.events import EngineEvent
 from SecondEgo.core.state import AcceptanceCriterion
 from SecondEgo.model.base import ActionProposal
 from SecondEgo.orchestration.engine import HarnessEngine
@@ -26,6 +27,11 @@ def main() -> int:
     parser.add_argument("--max-tool-calls", type=int, default=80)
     parser.add_argument("--max-retries", type=int, default=6)
     parser.add_argument("--state-db", type=Path, help="optional SQLite path for run state and evidence")
+    parser.add_argument(
+        "--ui",
+        action="store_true",
+        help="stream compact engine events; does not add model calls or tools",
+    )
     arguments = parser.parse_args()
     if arguments.solve != "solve":
         parser.error("the first argument must be 'solve'")
@@ -35,7 +41,12 @@ def main() -> int:
         max_tool_calls=arguments.max_tool_calls,
         max_retries=arguments.max_retries,
     )
-    engine = build_engine(arguments.repo, resources=resources, state_db=arguments.state_db)
+    engine = build_engine(
+        arguments.repo,
+        resources=resources,
+        state_db=arguments.state_db,
+        event_sink=_print_event if arguments.ui else None,
+    )
     if arguments.plan:
         plan = _load_plan(arguments.plan)
         result = engine.run(
@@ -99,17 +110,7 @@ def _report(result: object) -> dict[str, object]:
             "commands": list(result.verification.commands),
             "failure_record": _failure_report(result.verification.failure_record),
         },
-        "events": [
-            {
-                "event_type": event.event_type,
-                "phase": event.phase,
-                "status": event.status,
-                "timestamp": event.timestamp.isoformat(),
-                "evidence_ref": event.evidence_ref,
-                "payload": event.payload,
-            }
-            for event in result.events
-        ],
+        "events": [event.to_dict() for event in result.events],
         "evidence": [
             {
                 "reference": item.reference,
@@ -132,6 +133,12 @@ def _failure_report(record: FailureRecord | None) -> dict[str, object] | None:
         "error_locations": list(record.error_locations),
         "fingerprint": redact_sensitive(record.fingerprint or ""),
     }
+
+
+def _print_event(event: EngineEvent) -> None:
+    """Render safe, compact progress without exposing model/tool output."""
+    status = f" status={event.status}" if event.status else ""
+    print(f"[{event.phase}] {event.event_type}{status}", flush=True)
 
 
 if __name__ == "__main__":

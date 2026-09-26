@@ -6,7 +6,7 @@ SecondEgo is a local coding-agent application whose Python engine turns a founda
 
 ## Status
 
-The headless Python harness is implemented as the competition-critical vertical slice. It has an explicit state machine, safe workspace tools, isolated Git attempts, test-topology retrieval, bounded context packets, structured plan validation, diagnosis-informed recovery, SQLite evidence persistence, and a CLI. The Electron/React shell is not implemented yet.
+The headless Python harness is implemented as the competition-critical vertical slice. It has an explicit state machine, safe workspace tools, isolated Git attempts, test-topology retrieval, bounded context packets, structured plan validation, diagnosis-informed recovery, SQLite evidence persistence, and a CLI. The Electron/React shell is not implemented yet. A presentation boundary now exists: headless mode is the default, while optional event display observes the same engine run without adding model calls or tools.
 
 [`CONTEXT-1.md`](docs/context/CONTEXT-1.md) contains the harness proposal, [`CONTEXT-2.md`](docs/context/CONTEXT-2.md) contains the desktop product-shell proposal, and [`CONTEXT.md`](docs/context/CONTEXT.md) records current decisions and open questions.
 
@@ -42,6 +42,15 @@ AI_API_KEY=... PYTHONPATH=src python3 -m SecondEgo.cli solve \
 ```
 
 The engine does not send an API request when `AI_API_KEY` is missing. It terminates with explicit model-planning evidence instead. The root `Makefile` provides the evaluator interface: `make setup`, `make run`, `make test`, and `make clean`.
+
+Presentation is opt-in. The evaluator-safe default is `make run`. To display
+compact live engine events without changing model or tool budgets, run
+`make run UI_MODE=events`. Direct CLI runs support the equivalent `--ui` flag.
+
+The optional local browser observer can be started separately with `make desktop`.
+It binds to loopback, displays a per-process token, and submits work through the
+Python engine gateway. It is an initial observer implementation; the planned
+Electron/React shell will consume the same event boundary later.
 
 [`evaluation/README.md`](evaluation/README.md) documents a separate target-repository
 rehearsal and includes a deliberately buggy pagination fixture.

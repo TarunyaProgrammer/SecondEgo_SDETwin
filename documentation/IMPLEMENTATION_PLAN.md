@@ -1,6 +1,6 @@
 # SecondEgo Implementation Plan
 
-Status: active implementation plan; transaction milestone delivered
+Status: active implementation plan; headless runtime delivered; presentation boundary in progress
 
 This plan reconciles `docs/context/CONTEXT.md`, `docs/context/CONTEXT-1.md`, `docs/context/CONTEXT-2.md`, the repository `AGENTS.md`, and the hackathon scoring rubric supplied by the user.
 
@@ -212,6 +212,50 @@ Exit condition: a run can be inspected without relying on model narration.
 
 Exit condition: the shell renders the same run truthfully and cannot bypass engine policy.
 
+### Milestone H — Presentation modes and desktop boundary (in progress)
+
+The first UI increment must not change the evaluator path or consume model/tool
+budget. The engine remains authoritative and exposes an observational event
+boundary.
+
+#### H1 — Headless default
+
+- `make run` uses `UI_MODE=headless` by default;
+- no presentation observer is attached;
+- model calls, tool calls, context budgets, verification, and termination remain unchanged;
+- `--ui` / `UI_MODE=events` is opt-in for compact event display only.
+
+#### H2 — Versioned event boundary
+
+- serialize `EngineEvent` into a JSON-safe contract;
+- allow a non-authoritative event sink;
+- swallow observer failures so a closed UI cannot fail a coding run;
+- never include secrets or unbounded tool/model output in display events.
+
+#### H3 — Local desktop gateway
+
+- add a localhost-only gateway around the existing engine;
+- accept a task/repository request;
+- return a run ID;
+- stream the existing event contract;
+- expose final evidence, verification, and diff records;
+- enforce local ownership/authentication and bounded request sizes.
+
+#### H4 — React/Electron observer
+
+- build the shell after the gateway contract is stable;
+- render task, phase, tools, changed paths, verification, failure, recovery, and final diff;
+- label unknown/indeterminate progress honestly;
+- keep renderer code free of API keys, shell access, and direct filesystem writes.
+
+#### H5 — Mode acceptance gates
+
+- headless evaluator run works when no UI dependencies are installed;
+- event display adds zero model calls and zero tool calls;
+- observer disconnect does not alter terminal status;
+- UI state is derived only from engine events;
+- the same fixture result is produced in headless and presentation modes.
+
 ## 6. Evaluation proof plan
 
 ### Problem and user value — 20%
@@ -253,14 +297,16 @@ The project is not ready for a judging demo until:
 ## 8. Current delivery status
 
 Milestones A, B, the first vertical slice, the transactional safety increment, and
-the first diagnosis-informed recovery loop are implemented. The current test suite
-has 42 passing contract tests. The remaining competition-critical work is
-test-topology retrieval, phase-specific context packets, richer telemetry, and a
-realistic local evaluation fixture.
+the first diagnosis-informed recovery loop are implemented. The presentation
+boundary is now in progress with 48 contract tests. The first localhost gateway
+and browser observer slice exists; the remaining competition-critical work is
+gateway integration testing, the final desktop observer, richer telemetry, and
+a realistic local evaluation fixture.
 
 ## 9. Immediate next action
 
-The next implementation task is the retrieval/context increment: connect the
-failure record to targeted test and dependency retrieval, then enforce fixed
-phase-specific context slots. No UI, voice, computer vision, graph database, or
-packaging work should begin before that evidence packet passes fixture tests.
+The next implementation task is gateway integration testing: verify bounded
+requests, authentication, observer disconnects, and headless equivalence. After
+that passes, replace the dependency-free browser observer with the minimal
+React/Electron shell while preserving the same event contract. No voice,
+computer vision, graph database, or always-on service should be added.

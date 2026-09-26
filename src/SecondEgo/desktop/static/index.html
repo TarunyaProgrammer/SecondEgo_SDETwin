@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SecondEgo Observer</title>
+    <style>
+      :root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #101214; color: #e6edf3; }
+      body { max-width: 1100px; margin: 0 auto; padding: 32px 20px 60px; }
+      h1 { margin: 0 0 8px; letter-spacing: -0.04em; }
+      .muted { color: #8b949e; }
+      form, section { border: 1px solid #30363d; background: #161b22; border-radius: 10px; padding: 18px; margin-top: 18px; }
+      label { display: block; color: #8b949e; font-size: 12px; margin: 12px 0 6px; }
+      input, textarea { box-sizing: border-box; width: 100%; color: #e6edf3; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 10px; font: inherit; }
+      textarea { min-height: 110px; resize: vertical; }
+      button { margin-top: 14px; background: #238636; border: 0; color: white; border-radius: 6px; padding: 10px 14px; font: inherit; cursor: pointer; }
+      button:disabled { opacity: .5; cursor: wait; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+      .status { font-size: 22px; font-weight: 700; }
+      .event { border-left: 3px solid #58a6ff; padding: 6px 10px; margin: 7px 0; background: #0d1117; }
+      pre { white-space: pre-wrap; overflow-wrap: anywhere; color: #c9d1d9; }
+      @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <h1>SecondEgo</h1>
+    <div class="muted">Local observer. The Python engine owns planning, tools, verification, and termination.</div>
+    <form id="run-form">
+      <label for="repository">Target repository path</label>
+      <input id="repository" required placeholder="/path/to/target/repository" />
+      <label for="issue">Issue</label>
+      <textarea id="issue" required placeholder="Describe the change to make and verify."></textarea>
+      <button id="submit" type="submit">Start verified run</button>
+      <div id="form-error" class="muted"></div>
+    </form>
+    <div class="grid">
+      <section><div class="muted">STATUS</div><div id="status" class="status">IDLE</div><div id="run-id" class="muted"></div></section>
+      <section><div class="muted">VERIFICATION</div><pre id="verification">No run yet.</pre></section>
+    </div>
+    <section><div class="muted">ENGINE EVENTS</div><div id="events">No events yet.</div></section>
+    <section><div class="muted">RESULT</div><pre id="result">No result yet.</pre></section>
+    <script>
+      const token = "__SECOND_EGO_TOKEN__";
+      let requestId = null;
+      let eventOffset = 0;
+      let timer = null;
+      const $ = (id) => document.getElementById(id);
+      const api = (path, options = {}) => fetch(path, { ...options, headers: { "X-SecondEgo-Token": token, ...(options.headers || {}) } });
+      $("run-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        $("submit").disabled = true;
+        $("form-error").textContent = "";
+        try {
+          const response = await api("/api/runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ repository: $("repository").value, issue: $("issue").value }) });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error || "request failed");
+          requestId = data.request_id;
+          eventOffset = 0;
+          $("run-id").textContent = requestId;
+          $("events").textContent = "Waiting for engine events...";
+          $("result").textContent = "Run in progress...";
+          if (timer) clearInterval(timer);
+          timer = setInterval(poll, 600);
+          await poll();
+        } catch (error) {
+          $("form-error").textContent = error.message;
+          $("submit").disabled = false;
+        }
+      });
+      async function poll() {
+        if (!requestId) return;
+        const response = await api(`/api/runs/${encodeURIComponent(requestId)}?offset=${eventOffset}`);
+        const data = await response.json();
+        if (!response.ok) return;
+        $("status").textContent = data.status;
+        for (const item of data.events || []) {
+          const node = document.createElement("div");
+          node.className = "event";
+          node.textContent = `${item.phase}  ${item.event_type}`;
+          $("events").appendChild(node);
+          eventOffset += 1;
+        }
+        if (data.result) {
+          $("verification").textContent = JSON.stringify(data.result.verification, null, 2);
+          $("result").textContent = JSON.stringify(data.result, null, 2);
+          $("submit").disabled = false;
+          clearInterval(timer);
+        }
+        if (data.error) {
+          $("result").textContent = data.error;
+          $("submit").disabled = false;
+          clearInterval(timer);
+        }
+      }
+    </script>
+  </body>
+</html>
