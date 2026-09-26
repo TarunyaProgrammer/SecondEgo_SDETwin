@@ -122,10 +122,17 @@ function startGateway() {
       createWindow(token);
     }
   };
+  let portInUse = false;
   gatewayProcess.stdout.on("data", (data) => {
     if (data.toString().includes("SecondEgo UI:")) announce();
   });
-  gatewayProcess.stderr.on("data", (data) => console.error(data.toString().trim()));
+  gatewayProcess.stderr.on("data", (data) => {
+    const text = data.toString();
+    console.error(text.trim());
+    if (text.includes("Address already in use") || text.includes("in use")) {
+      portInUse = true;
+    }
+  });
   gatewayProcess.on("error", (error) => {
     console.error(`Could not start SecondEgo gateway: ${error.message}`);
     announce();
@@ -135,6 +142,10 @@ function startGateway() {
   // process finishes binding its loopback socket.
   setTimeout(announce, 250);
   gatewayProcess.on("exit", () => {
+    if (portInUse) {
+      console.log("Gateway is already running externally; keeping UI open.");
+      return;
+    }
     if (app.isReady() && mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
   });
 }
