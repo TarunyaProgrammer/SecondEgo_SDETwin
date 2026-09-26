@@ -229,6 +229,41 @@ def test_harness_engine_runs_edit_to_verified_completion(tmp_path) -> None:
     assert result.state.phase is Phase.VERIFY
     assert result.verification.passed is True
     assert "src/version.py" in result.state.changed_paths
+    assert [event.event_type for event in result.events][-2:] == [
+        "verification.completed",
+        "run.terminated",
+    ]
+
+
+def test_harness_engine_recovers_from_failed_verification(tmp_path) -> None:
+    workspace = WorkspacePolicy(tmp_path)
+    resources = ResourceUsage(ResourceBudget(max_tool_calls=10, max_retries=1))
+    runner = CommandRunner(workspace)
+    engine = HarnessEngine(
+        scanner=RepositoryScanner(workspace),
+        router=ToolRouter(
+            files=FileTool(workspace),
+            search=SearchTool(workspace),
+            runner=runner,
+            resources=resources,
+        ),
+        verifier=VerificationEngine(runner),
+        resources=resources,
+    )
+
+    result = engine.run(
+        task="write the expected value",
+        acceptance_criteria=(AcceptanceCriterion("file contains correct value"),),
+        actions=(ActionProposal("edit_file", {"path": "value.txt", "content": "wrong\n"}),),
+        verification_commands=(
+            ("python3", "-c", "from pathlib import Path; assert Path('value.txt').read_text() == 'right\\n'"),
+        ),
+        recovery_actions=(ActionProposal("edit_file", {"path": "value.txt", "content": "right\n"}),),
+    )
+
+    assert result.state.status is TerminalStatus.COMPLETE
+    assert result.verification.passed is True
+    assert result.state.resource_usage["retries"] == 1
 
 
 def test_cli_action_parser_rejects_malformed_plan_actions() -> None:

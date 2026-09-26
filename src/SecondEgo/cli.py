@@ -99,6 +99,17 @@ def _report(result: object) -> dict[str, object]:
             "failure_summary": result.verification.failure_summary,
             "commands": list(result.verification.commands),
         },
+        "events": [
+            {
+                "event_type": event.event_type,
+                "phase": event.phase,
+                "status": event.status,
+                "timestamp": event.timestamp.isoformat(),
+                "evidence_ref": event.evidence_ref,
+                "payload": event.payload,
+            }
+            for event in result.events
+        ],
         "evidence": [
             {
                 "reference": item.reference,

@@ -6,6 +6,7 @@ from SecondEgo.context.ledger import EvidenceLedger
 from SecondEgo.context.policy import EvidenceRecord
 from SecondEgo.core.resources import ResourceLimitExceeded, ResourceUsage
 from SecondEgo.core.state import AcceptanceCriterion, ExecutionState, Phase, TerminalStatus
+from SecondEgo.core.events import EngineEvent
 from SecondEgo.core.state_machine import StateMachine
 from SecondEgo.model.base import ActionProposal
 from SecondEgo.repository.scanner import RepositoryScanner
@@ -73,9 +74,9 @@ class HarnessEngine:
             )
             events.append(machine.move(Phase.PLAN, reason="actions supplied by planner")[1])
             events.append(machine.move(Phase.EXECUTE, reason="dispatch planned actions")[1])
-            self._execute_actions(actions, ledger, state)
+            self._execute_actions(actions, ledger, state, events)
             events.append(machine.move(Phase.VERIFY, reason="run verification commands")[1])
-            verification, _ = self._verify(verification_commands, ledger)
+            verification, _ = self._verify(verification_commands, ledger, state, events)
             if verification.passed:
                 events.append(machine.terminate(
                     TerminalStatus.COMPLETE,
@@ -87,9 +88,9 @@ class HarnessEngine:
                 self.resources.record_retry()
                 events.append(machine.move(Phase.RECOVER, reason="recovery actions supplied")[1])
                 events.append(machine.move(Phase.EXECUTE, reason="dispatch recovery actions")[1])
-                self._execute_actions(recovery_actions, ledger, state)
+                self._execute_actions(recovery_actions, ledger, state, events)
                 events.append(machine.move(Phase.VERIFY, reason="rerun verification commands")[1])
-                verification, _ = self._verify(verification_commands, ledger)
+                verification, _ = self._verify(verification_commands, ledger, state, events)
                 if verification.passed:
                     events.append(machine.terminate(
                         TerminalStatus.COMPLETE,
@@ -133,6 +134,7 @@ class HarnessEngine:
         actions: tuple[ActionProposal, ...],
         ledger: EvidenceLedger,
         state: ExecutionState,
+        events: list[object],
     ) -> None:
         for index, proposal in enumerate(actions):
             result = self.router.dispatch(proposal)
@@ -148,6 +150,22 @@ class HarnessEngine:
             )
             state.changed_paths.update(result.changed_paths)
             state.evidence_refs.append(reference)
+            events.append(
+                EngineEvent(
+                    run_id=state.run_id,
+                    event_type="tool.completed",
+                    phase=state.phase.value,
+                    status=state.status.value,
+                    evidence_ref=reference,
+                    payload={
+                        "tool": proposal.action,
+                        "success": result.success,
+                        "exit_code": result.exit_code,
+                        "changed_paths": list(result.changed_paths),
+                        "duration_ms": result.duration_ms,
+                    },
+                )
+            )
             if not result.success:
                 raise RuntimeError(f"tool action failed: {proposal.action}: {result.stderr}")
 
@@ -155,6 +173,8 @@ class HarnessEngine:
         self,
         commands: tuple[tuple[str, ...], ...],
         ledger: EvidenceLedger,
+        state: ExecutionState,
+        events: list[object],
     ) -> tuple[VerificationResult, tuple[object, ...]]:
         result, evidence = self.verifier.run(commands)
         for index, item in enumerate(evidence):
@@ -166,4 +186,17 @@ class HarnessEngine:
                     importance=4 if not item.success else 3,
                 )
             )
+        events.append(
+            EngineEvent(
+                run_id=state.run_id,
+                event_type="verification.completed",
+                phase=state.phase.value,
+                status=state.status.value,
+                payload={
+                    "passed": result.passed,
+                    "failure_class": result.failure_class.value,
+                    "commands": list(result.commands),
+                },
+            )
+        )
         return result, evidence
