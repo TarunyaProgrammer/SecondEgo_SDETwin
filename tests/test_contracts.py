@@ -385,6 +385,21 @@ def test_repository_retriever_links_failure_test_to_implementation(tmp_path) -> 
     assert implementation.confidence == 0.95
 
 
+def test_repository_retriever_propagates_multifile_import_dependencies(tmp_path) -> None:
+    files = FileTool(WorkspacePolicy(tmp_path))
+    files.write("src/core.py", "def execute_task():\n    return 'done'\n")
+    files.write("src/consumer.py", "from src.core import execute_task\n\ndef run():\n    return execute_task()\n")
+    index = RepositoryIndexer(WorkspacePolicy(tmp_path)).build()
+
+    ranked = RepositoryRetriever().rank(index, "execute_task")
+    paths = [item.path for item in ranked]
+
+    assert "src/core.py" in paths
+    assert "src/consumer.py" in paths
+    consumer_item = next(item for item in ranked if item.path == "src/consumer.py")
+    assert any("importer-of:src/core.py" in reason for reason in consumer_item.reasons)
+
+
 def test_engine_feeds_ranked_repository_evidence_into_run_ledger(tmp_path) -> None:
     files = FileTool(WorkspacePolicy(tmp_path))
     files.write("src/auth.py", "def refresh_token():\n    return None\n")

@@ -169,6 +169,51 @@ impl RepositoryIndex {
             }
         }
 
+        // Multi-file dependency & blast radius propagation across import graph
+        let mut module_to_file = BTreeMap::new();
+        for path in &self.snapshot.files {
+            if let Some(module) = path.strip_suffix(".py") {
+                let dotted = module.replace('/', ".").trim_end_matches(".__init__").to_owned();
+                module_to_file.insert(dotted.clone(), path.clone());
+                if let Some(base) = dotted.split('.').last() {
+                    module_to_file.entry(base.to_owned()).or_insert_with(|| path.clone());
+                }
+            }
+        }
+
+        let scored_files: Vec<(String, i32)> = scores
+            .iter()
+            .filter(|(_, &score)| score >= 3)
+            .map(|(path, &score)| (path.clone(), score))
+            .collect();
+
+        for (scored_path, _) in scored_files {
+            for edge in &self.imports {
+                let edge_target = module_to_file.get(&edge.module).cloned();
+                if edge_target.as_deref() == Some(&scored_path) && edge.source_path != scored_path {
+                    add_score(
+                        &mut scores,
+                        &mut reasons,
+                        &edge.source_path,
+                        4,
+                        format!("importer-of:{}", scored_path),
+                    );
+                } else if edge.source_path == scored_path {
+                    if let Some(dep_path) = module_to_file.get(&edge.module) {
+                        if dep_path != &scored_path {
+                            add_score(
+                                &mut scores,
+                                &mut reasons,
+                                dep_path,
+                                3,
+                                format!("dependency-of:{}", scored_path),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
         let mut ranked: Vec<RankedFile> = scores
             .into_iter()
             .filter_map(|(path, score)| {
@@ -569,4 +614,27 @@ mod tests {
                 .any(|path| path.starts_with("target/"))
         );
     }
+
+    #[test]
+    fn retrieval_propagates_multifile_import_dependencies() {
+        let directory = fixture();
+        // Add a caller file that imports app.py
+        fs::write(
+            directory.path().join("src/caller.py"),
+            "from src.app import validate_token\n\ndef run():\n    return validate_token(1)\n",
+        )
+        .unwrap();
+        let index = RepositoryIndexer::new(directory.path()).build().unwrap();
+        let ranked = index.rank("validate_token", 8, false);
+        let caller = ranked.iter().find(|item| item.path == "src/caller.py");
+        assert!(caller.is_some(), "caller file should be ranked via import propagation");
+        assert!(
+            caller
+                .unwrap()
+                .reasons
+                .iter()
+                .any(|r| r.contains("importer-of:src/app.py"))
+        );
+    }
 }
+

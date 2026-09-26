@@ -367,6 +367,18 @@ impl<P: ModelProvider> RustEngine<P> {
                 "explainable repository retrieval",
                 4,
             ));
+            for item in ranked.iter().take(4) {
+                let file_path = workspace.join(&item.path);
+                if let Ok(content) = std::fs::read_to_string(&file_path) {
+                    let excerpt: String = content.chars().take(2_500).collect();
+                    ledger.record(EvidenceRecord::new(
+                        format!("source:{}", item.path),
+                        format!("path: {}\n```\n{}\n```", item.path, excerpt),
+                        item.path.clone(),
+                        3,
+                    ));
+                }
+            }
         }
         self.append_event(
             &mut events,
@@ -691,7 +703,7 @@ fn parse_command(value: &serde_json::Value) -> Result<Vec<String>, RuntimeError>
     Ok(command)
 }
 
-const PLAN_INSTRUCTION: &str = "Return exactly one submit_plan action with actions [{action,arguments,rationale}] and non-empty verification_commands as argv arrays. Use only read_file, search_code, edit_file, run_command, git_diff, git_status. Never return shell strings.";
+const PLAN_INSTRUCTION: &str = "Return exactly one submit_plan action with actions [{action,arguments,rationale}] and non-empty verification_commands as argv arrays. Use only read_file, search_code, edit_file, write_file, run_command, git_diff, git_status. Never return shell strings.\nSDETwin Directives:\n1. Multi-File: When an issue spans multiple files or requires updating dependencies/callers, include actions for all necessary files.\n2. Autonomous Test Verification: If appropriate for the issue, include a focused reproduction test in tests/ to verify the fix and prevent regressions.";
 
 #[cfg(test)]
 mod tests {

@@ -117,8 +117,11 @@ _PLAN_INSTRUCTION = """Return exactly one action named submit_plan. Its argument
 actions: a list of {action, arguments, rationale} tool actions;
 verification_commands: a list of argv arrays for test, lint, build, or focused verification commands;
 recovery_actions: an optional list of corrective tool actions.
-Use only workspace-safe actions: read_file, search_code, edit_file, run_command, git_diff, git_status.
-Do not include shell strings; every command must be an argv array."""
+Use only workspace-safe actions: read_file, search_code, edit_file, write_file, run_command, git_diff, git_status.
+Do not include shell strings; every command must be an argv array.
+SDETwin Directives:
+1. Multi-File: When an issue spans multiple files or requires updating dependencies/callers, include actions for all necessary files.
+2. Autonomous Test Verification: If appropriate for the issue, include a focused reproduction test in tests/ to verify the fix and prevent regressions."""
 
 _RECOVERY_INSTRUCTION = """Return exactly one action named submit_repair_plan. Its arguments must contain:
 actions: a non-empty list of corrective {action, arguments, rationale} tool actions.
