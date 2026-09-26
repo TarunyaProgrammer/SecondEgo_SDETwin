@@ -17,6 +17,7 @@ from SecondEgo.model.base import ActionProposal
 from SecondEgo.model.gemini import GeminiProvider, ProviderConfigurationError
 from SecondEgo.model.planner import ModelPlanner, PlanValidationError
 from SecondEgo.model.scripted import ScriptedProvider
+from SecondEgo.config import DEFAULT_MODEL, configured_model
 from SecondEgo.orchestration.engine import HarnessEngine
 from SecondEgo.repository.scanner import RepositoryScanner
 from SecondEgo.repository.index import RepositoryIndexer
@@ -444,11 +445,24 @@ def test_harness_engine_executes_validated_provider_plan(tmp_path) -> None:
 
 
 def test_gemini_provider_requires_explicit_key_before_sdk_import(monkeypatch) -> None:
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("AI_API_KEY", raising=False)
     provider = GeminiProvider(api_key="")
 
-    with pytest.raises(ProviderConfigurationError, match="GEMINI_API_KEY"):
+    with pytest.raises(ProviderConfigurationError, match="AI_API_KEY"):
         asyncio.run(provider.generate("plan", context={}))
+
+
+def test_gemini_provider_reads_evaluator_credential_name(monkeypatch) -> None:
+    monkeypatch.setenv("AI_API_KEY", "evaluation-key")
+
+    assert GeminiProvider()._resolve_api_key() == "evaluation-key"
+
+
+def test_model_name_can_be_overridden_for_prescribed_evaluation_model(monkeypatch) -> None:
+    monkeypatch.delenv("SECONDEGO_MODEL", raising=False)
+    assert configured_model() == DEFAULT_MODEL
+    monkeypatch.setenv("SECONDEGO_MODEL", "prescribed-text-model")
+    assert configured_model() == "prescribed-text-model"
 
 
 def test_cli_action_parser_rejects_malformed_plan_actions() -> None:

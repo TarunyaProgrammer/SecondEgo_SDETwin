@@ -33,6 +33,17 @@ Still unimplemented: Electron/React shell, packaging, broad language parsing, be
 6. Make termination explicit: success, justified failure, or blocked state.
 7. Keep the Electron/React pixel-village shell separate from the Python engine and keep the core runnable headlessly.
 8. Use SQLite for local execution state and rebuildable repository metadata before considering external infrastructure.
+9. Meet the standard evaluation contract through a root `Makefile` exposing `setup`, `run`, `test`, and `clean`.
+10. Read the evaluator-supplied credential only from `AI_API_KEY`; never persist or log it.
+11. Keep the evaluation path text-only. `make run` launches the terminal UI, which collects a repository path and issue before starting one autonomous run.
+
+## Evaluation interface
+
+- `make setup` creates `.venv`, installs `setuptools`, `pytest`, the optional Gemini SDK, and the project.
+- `make run` requires `AI_API_KEY` and launches `secondego-tui`.
+- `make test` runs the contract suite.
+- `SECONDEGO_MODEL` overrides the default configured Gemini model when the organizers prescribe a different text model.
+- No committed file contains an API credential; `.env.example` contains empty placeholders only.
 
 ## Decisions still open
 

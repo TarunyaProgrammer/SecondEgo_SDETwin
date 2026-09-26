@@ -38,9 +38,9 @@ class GeminiProvider:
         return max(1, (len(text) + 3) // 4)
 
     def _generate_sync(self, prompt: str) -> ActionProposal:
-        key = self.api_key or os.environ.get("GEMINI_API_KEY")
+        key = self._resolve_api_key()
         if not key:
-            raise ProviderConfigurationError("GEMINI_API_KEY is required for GeminiProvider")
+            raise ProviderConfigurationError("AI_API_KEY is required for GeminiProvider")
         try:
             from google import genai
         except ImportError as exc:
@@ -63,6 +63,9 @@ class GeminiProvider:
             raise RuntimeError("Gemini returned invalid structured action output") from exc
         return _parse_action(data)
 
+    def _resolve_api_key(self) -> str | None:
+        return self.api_key or os.environ.get("AI_API_KEY")
+
 
 def _parse_action(data: object) -> ActionProposal:
     if not isinstance(data, dict):
@@ -73,4 +76,3 @@ def _parse_action(data: object) -> ActionProposal:
     if not isinstance(action, str) or not isinstance(arguments, dict) or not isinstance(rationale, str):
         raise RuntimeError("model action does not match the required schema")
     return ActionProposal(action=action, arguments=arguments, rationale=rationale)
-

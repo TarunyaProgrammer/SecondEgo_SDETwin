@@ -30,18 +30,18 @@ PYTHONPATH=src python3 -m SecondEgo.cli solve \
   --state-db /path/to/secondego-runs.db
 ```
 
-For provider-backed planning, install the optional Gemini dependency, set `GEMINI_API_KEY` in the environment, and select a model explicitly if the evaluation requires one:
+For provider-backed planning, install the optional Gemini dependency, set the evaluation-required `AI_API_KEY` in the environment, and select a model explicitly if the evaluation requires one:
 
 ```bash
 .venv/bin/pip install -e '.[dev,gemini]'
-GEMINI_API_KEY=... PYTHONPATH=src python3 -m SecondEgo.cli solve \
+AI_API_KEY=... PYTHONPATH=src python3 -m SecondEgo.cli solve \
   --repo /path/to/repository \
   --issue "Fix authentication timeout handling" \
   --gemini \
   --model gemini-3.8-flash
 ```
 
-The engine does not send an API request when `GEMINI_API_KEY` is missing. It terminates with explicit model-planning evidence instead.
+The engine does not send an API request when `AI_API_KEY` is missing. It terminates with explicit model-planning evidence instead. The root `Makefile` provides the evaluator interface: `make setup`, `make run`, `make test`, and `make clean`.
 
 ## Design direction
 
