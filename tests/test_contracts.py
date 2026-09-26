@@ -4,13 +4,19 @@ from SecondEgo.context.assembler import ContextAssembler
 from SecondEgo.context.ledger import EvidenceLedger
 from SecondEgo.context.policy import ContextBudget, ContextPolicy, EvidenceRecord
 from SecondEgo.core.resources import ResourceBudget, ResourceLimitExceeded, ResourceUsage
-from SecondEgo.core.state import ExecutionState, Phase, TerminalStatus
+from SecondEgo.core.state import AcceptanceCriterion, ExecutionState, Phase, TerminalStatus
 from SecondEgo.core.state_machine import InvalidTransition, StateMachine
-from SecondEgo.tools.policy import CommandPolicy, PolicyViolation, WorkspacePolicy
-from SecondEgo.tools.runner import CommandRunner
 from SecondEgo.tools.filesystem import FileTool
+from SecondEgo.tools.policy import CommandPolicy, PolicyViolation, WorkspacePolicy
+from SecondEgo.tools.router import ToolRouter
+from SecondEgo.tools.runner import CommandRunner
 from SecondEgo.tools.search import SearchTool
+from SecondEgo.model.base import ActionProposal
+from SecondEgo.orchestration.engine import HarnessEngine
+from SecondEgo.repository.scanner import RepositoryScanner
 from SecondEgo.verification.contracts import FailureClass, VerificationResult
+from SecondEgo.verification.verifier import VerificationEngine
+from SecondEgo.cli import _proposal
 
 
 def test_execution_state_snapshot_is_structured_and_bounded() -> None:
@@ -161,3 +167,70 @@ def test_search_tool_returns_paths_and_line_numbers(tmp_path) -> None:
     results = SearchTool(WorkspacePolicy(tmp_path)).text("needle")
 
     assert results == [{"path": "src/example.py", "line": 2, "text": "needle = True"}]
+
+
+def test_repository_scanner_discovers_manifests_and_tests(tmp_path) -> None:
+    files = FileTool(WorkspacePolicy(tmp_path))
+    files.write("pyproject.toml", "[project]\nname = 'fixture'\n")
+    files.write("tests/test_feature.py", "def test_feature(): pass\n")
+    files.write("src/app.py", "VALUE = 1\n")
+
+    snapshot = RepositoryScanner(WorkspacePolicy(tmp_path)).scan()
+
+    assert snapshot.manifests == ("pyproject.toml",)
+    assert snapshot.test_files == ("tests/test_feature.py",)
+    assert "src/app.py" in snapshot.files
+
+
+def test_repository_scanner_ignores_non_code_test_fixtures(tmp_path) -> None:
+    files = FileTool(WorkspacePolicy(tmp_path))
+    files.write("tests/plan.json", "{}")
+
+    snapshot = RepositoryScanner(WorkspacePolicy(tmp_path)).scan()
+
+    assert snapshot.test_files == ()
+
+
+def test_verifier_returns_test_failure_evidence(tmp_path) -> None:
+    runner = CommandRunner(WorkspacePolicy(tmp_path))
+    result, evidence = VerificationEngine(runner).run(
+        (("python3", "-c", "raise AssertionError('broken')"),)
+    )
+
+    assert result.passed is False
+    assert result.failure_class is FailureClass.TEST_FAILURE
+    assert evidence[0].success is False
+
+
+def test_harness_engine_runs_edit_to_verified_completion(tmp_path) -> None:
+    workspace = WorkspacePolicy(tmp_path)
+    resources = ResourceUsage(ResourceBudget(max_tool_calls=10, max_retries=1))
+    runner = CommandRunner(workspace)
+    engine = HarnessEngine(
+        scanner=RepositoryScanner(workspace),
+        router=ToolRouter(
+            files=FileTool(workspace),
+            search=SearchTool(workspace),
+            runner=runner,
+            resources=resources,
+        ),
+        verifier=VerificationEngine(runner),
+        resources=resources,
+    )
+
+    result = engine.run(
+        task="create a version file",
+        acceptance_criteria=(AcceptanceCriterion("version file exists"),),
+        actions=(ActionProposal("edit_file", {"path": "src/version.py", "content": "VERSION = '1'\n"}),),
+        verification_commands=(("python3", "-c", "from pathlib import Path; assert Path('src/version.py').exists()"),),
+    )
+
+    assert result.state.status is TerminalStatus.COMPLETE
+    assert result.state.phase is Phase.VERIFY
+    assert result.verification.passed is True
+    assert "src/version.py" in result.state.changed_paths
+
+
+def test_cli_action_parser_rejects_malformed_plan_actions() -> None:
+    with pytest.raises(SystemExit, match="action requires"):
+        _proposal({"action": "edit_file", "arguments": []})

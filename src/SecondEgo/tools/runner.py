@@ -43,7 +43,11 @@ class CommandRunner:
             truncated = False
         except subprocess.TimeoutExpired as exc:
             stdout = _decode_output(exc.stdout)
-            stderr = _decode_output(exc.stderr)
+            stderr = "\n".join(
+                item
+                for item in (_decode_output(exc.stderr), "command timed out")
+                if item
+            )
             success = False
             exit_code = None
             truncated = False
@@ -74,4 +78,3 @@ def _cap_output(value: str, limit: int) -> tuple[str, bool]:
     if len(encoded) <= limit:
         return value, False
     return encoded[:limit].decode(errors="replace"), True
-

@@ -1,0 +1,9 @@
+{
+  "acceptance_criteria": [
+    "verification command completes"
+  ],
+  "actions": [],
+  "verification_commands": [
+    ["python3", "-c", "assert True"]
+  ]
+}
