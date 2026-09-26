@@ -535,6 +535,83 @@ def test_harness_engine_executes_validated_provider_plan(tmp_path) -> None:
     assert "provider.txt" in result.state.changed_paths
 
 
+def test_planner_requests_repair_after_observed_failure(tmp_path) -> None:
+    root = _git_fixture(tmp_path)
+    workspace = WorkspacePolicy(root)
+    resources = ResourceUsage(
+        ResourceBudget(max_model_calls=2, max_tool_calls=20, max_retries=1)
+    )
+    runner = CommandRunner(workspace)
+    engine = HarnessEngine(
+        scanner=RepositoryScanner(workspace),
+        router=ToolRouter(
+            files=FileTool(workspace),
+            search=SearchTool(workspace),
+            runner=runner,
+            resources=resources,
+        ),
+        verifier=VerificationEngine(runner),
+        resources=resources,
+        transaction=GitAttemptTransaction(workspace),
+    )
+    planner = ModelPlanner(
+        provider=ScriptedProvider(
+            [
+                ActionProposal(
+                    "submit_plan",
+                    {
+                        "actions": [
+                            {
+                                "action": "edit_file",
+                                "arguments": {"path": "value.txt", "content": "wrong\n"},
+                                "rationale": "initial hypothesis",
+                            }
+                        ],
+                        "verification_commands": [
+                            [
+                                "python3",
+                                "-c",
+                                "from pathlib import Path; assert Path('value.txt').read_text() == 'right\\n'",
+                            ]
+                        ],
+                    },
+                ),
+                ActionProposal(
+                    "submit_repair_plan",
+                    {
+                        "actions": [
+                            {
+                                "action": "edit_file",
+                                "arguments": {"path": "value.txt", "content": "right\n"},
+                                "rationale": "repair the value identified by the failed assertion",
+                            }
+                        ]
+                    },
+                ),
+            ]
+        ),
+        assembler=ContextAssembler(ContextBudget(24_000, 4_000, 2_000, 12_000, 3_000, 3_000)),
+        resources=resources,
+    )
+
+    result = asyncio.run(
+        engine.run_with_planner(
+            task="write the verified value",
+            acceptance_criteria=(AcceptanceCriterion("value is right"),),
+            planner=planner,
+        )
+    )
+
+    assert result.state.status is TerminalStatus.COMPLETE
+    assert result.state.resource_usage["model_calls"] == 2
+    assert "diagnosis:failure" in {record.reference for record in result.evidence}
+    assert (root / "value.txt").read_text() == "right\n"
+    assert any(
+        event.event_type == "state.changed" and event.payload.get("reason") == "apply diagnosis-informed repair plan"
+        for event in result.events
+    )
+
+
 def test_gemini_provider_requires_explicit_key_before_sdk_import(monkeypatch) -> None:
     monkeypatch.delenv("AI_API_KEY", raising=False)
     provider = GeminiProvider(api_key="")

@@ -12,6 +12,7 @@ Implemented vertical slice:
 - Python AST repository indexing with lexical fallback retrieval;
 - deterministic and optional Gemini-backed structured planning;
 - isolated Git worktree attempts that discard failures and transfer only verified diffs;
+- structured verification failure records and diagnosis-informed model recovery;
 - SQLite schema version 1 for final run state, events, and evidence;
 - CLI execution and automated contract tests.
 

@@ -252,14 +252,15 @@ The project is not ready for a judging demo until:
 
 ## 8. Current delivery status
 
-Milestones A, B, the first vertical slice, and the transactional safety increment are
-implemented. The current test suite has 34 passing contract tests. The remaining
-competition-critical work is structured failure diagnosis, test-topology retrieval,
-phase-specific context packets, and a realistic local evaluation fixture.
+Milestones A, B, the first vertical slice, the transactional safety increment, and
+the first diagnosis-informed recovery loop are implemented. The current test suite
+has 36 passing contract tests. The remaining competition-critical work is
+test-topology retrieval, phase-specific context packets, richer telemetry, and a
+realistic local evaluation fixture.
 
 ## 9. Immediate next action
 
-The next implementation task is Milestone E: replace pre-written recovery actions
-with a classified failure record, targeted retrieval refresh, and one structured
-diagnosis-informed repair plan. No UI, voice, computer vision, graph database, or
-packaging work should begin before that loop passes fixture tests.
+The next implementation task is the retrieval/context increment: connect the
+failure record to targeted test and dependency retrieval, then enforce fixed
+phase-specific context slots. No UI, voice, computer vision, graph database, or
+packaging work should begin before that evidence packet passes fixture tests.

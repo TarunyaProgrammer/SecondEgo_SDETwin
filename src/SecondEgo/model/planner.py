@@ -6,6 +6,7 @@ from SecondEgo.context.assembler import ContextAssembler
 from SecondEgo.context.policy import EvidenceRecord
 from SecondEgo.core.resources import ResourceUsage
 from SecondEgo.core.state import ExecutionState
+from SecondEgo.verification.contracts import VerificationResult
 
 from .base import ActionProposal, ModelProvider
 
@@ -53,6 +54,44 @@ class ModelPlanner:
         )
         return _parse_plan(proposal)
 
+    async def create_recovery_actions(
+        self,
+        state: ExecutionState,
+        evidence: list[EvidenceRecord],
+        verification: VerificationResult,
+    ) -> tuple[ActionProposal, ...]:
+        failure = verification.failure_record
+        failure_summary = verification.failure_summary or "verification failed"
+        if failure is not None:
+            failure_summary = (
+                f"class={failure.failure_class.value}; "
+                f"tests={list(failure.failing_tests)}; "
+                f"locations={list(failure.error_locations)}; "
+                f"fingerprint={failure.fingerprint or 'none'}; "
+                f"summary={failure.summary}"
+            )
+        recovery_evidence = list(evidence)
+        recovery_evidence.append(
+            EvidenceRecord(
+                reference="diagnosis:failure",
+                summary=failure_summary,
+                source="verification failure record",
+                importance=5,
+            )
+        )
+        packet = self.assembler.assemble(
+            task=state.task,
+            action=_RECOVERY_INSTRUCTION,
+            evidence=recovery_evidence,
+            state=json.dumps(state.snapshot(), separators=(",", ":"), default=str),
+        )
+        self.resources.record_model_call(packet.estimated_tokens)
+        proposal = await self.provider.generate(
+            packet.as_text(),
+            context={"run_id": state.run_id, "phase": "DIAGNOSE"},
+        )
+        return _parse_recovery_actions(proposal)
+
 
 _PLAN_INSTRUCTION = """Return exactly one action named submit_plan. Its arguments must contain:
 actions: a list of {action, arguments, rationale} tool actions;
@@ -60,6 +99,12 @@ verification_commands: a list of argv arrays for test, lint, build, or focused v
 recovery_actions: an optional list of corrective tool actions.
 Use only workspace-safe actions: read_file, search_code, edit_file, run_command, git_diff, git_status.
 Do not include shell strings; every command must be an argv array."""
+
+_RECOVERY_INSTRUCTION = """Return exactly one action named submit_repair_plan. Its arguments must contain:
+actions: a non-empty list of corrective {action, arguments, rationale} tool actions.
+Use the verification failure record and cited repository evidence to choose a different repair strategy.
+Use only workspace-safe actions: read_file, search_code, edit_file, run_command, git_diff, git_status.
+Do not include shell strings; commands must be argv arrays. Do not modify tests unless the task explicitly requires it."""
 
 
 def _parse_plan(proposal: ActionProposal) -> ActionPlan:
@@ -97,3 +142,12 @@ def _parse_actions(value: object, *, field: str) -> list[ActionProposal]:
             raise PlanValidationError(f"{field} entries require action, arguments, and rationale")
         parsed.append(ActionProposal(action=action, arguments=arguments, rationale=rationale))
     return parsed
+
+
+def _parse_recovery_actions(proposal: ActionProposal) -> tuple[ActionProposal, ...]:
+    if proposal.action != "submit_repair_plan":
+        raise PlanValidationError("recovery planner must return a submit_repair_plan action")
+    actions = _parse_actions(proposal.arguments.get("actions"), field="recovery actions")
+    if not actions:
+        raise PlanValidationError("recovery actions must not be empty")
+    return tuple(actions)

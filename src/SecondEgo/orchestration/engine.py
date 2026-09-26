@@ -120,11 +120,11 @@ class HarnessEngine:
                 terminal_status=TerminalStatus.FAILED,
                 terminal_reason=str(exc),
             )
-        return self._execute_plan(
+        return await self._execute_planned_with_dynamic_recovery(
             prepared,
             actions=plan.actions,
             verification_commands=plan.verification_commands,
-            recovery_actions=plan.recovery_actions,
+            planner=planner,
         )
 
     def _prepare_run(
@@ -158,6 +158,186 @@ class HarnessEngine:
             )
         )
         return _PreparedRun(state=state, machine=machine, ledger=ledger, events=events)
+
+    async def _execute_planned_with_dynamic_recovery(
+        self,
+        prepared: _PreparedRun,
+        *,
+        actions: tuple[ActionProposal, ...],
+        verification_commands: tuple[tuple[str, ...], ...],
+        planner: ModelPlanner,
+    ) -> EngineResult:
+        """Execute a model plan, then request repair only after observing failure evidence."""
+        state = prepared.state
+        machine = prepared.machine
+        ledger = prepared.ledger
+        events = prepared.events
+        terminal_evidence_refs: tuple[str, ...] = ()
+        attempt_active = False
+        verification = VerificationResult(
+            passed=False,
+            failure_class=FailureClass.TOOL_FAILURE,
+            failure_summary="execution did not reach verification",
+        )
+        try:
+            active_router, active_verifier = self._begin_attempt(state, events)
+            attempt_active = self.transaction is not None
+            events.append(machine.move(Phase.EXECUTE, reason="dispatch planned actions")[1])
+            self._execute_actions(
+                actions,
+                ledger,
+                state,
+                events,
+                router=active_router,
+                track_changed_paths=self.transaction is None,
+            )
+            events.append(machine.move(Phase.VERIFY, reason="run verification commands")[1])
+            verification, _ = self._verify(
+                verification_commands,
+                ledger,
+                state,
+                events,
+                verifier=active_verifier,
+            )
+            if verification.passed:
+                self._finish_attempt(
+                    passed=True,
+                    ledger=ledger,
+                    state=state,
+                    events=events,
+                )
+                attempt_active = False
+                return self._finalize(
+                    prepared,
+                    verification=verification,
+                    terminal_status=TerminalStatus.COMPLETE,
+                    terminal_reason="verification passed",
+                    terminal_evidence_refs=verification.evidence_refs,
+                )
+
+            self._finish_attempt(
+                passed=False,
+                ledger=ledger,
+                state=state,
+                events=events,
+            )
+            attempt_active = False
+            events.append(
+                machine.move(
+                    Phase.DIAGNOSE,
+                    reason=verification.failure_summary or "verification failed",
+                )[1]
+            )
+            ledger.record(
+                EvidenceRecord(
+                    reference="diagnosis:failure",
+                    summary=verification.failure_summary or "verification failed",
+                    source="verification failure record",
+                    importance=5,
+                )
+            )
+            state.evidence_refs.append("diagnosis:failure")
+            self.resources.record_retry()
+            try:
+                recovery_actions = await planner.create_recovery_actions(
+                    state,
+                    ledger.active(),
+                    verification,
+                )
+            except ResourceLimitExceeded as exc:
+                return self._finalize(
+                    prepared,
+                    verification=VerificationResult(
+                        passed=False,
+                        failure_class=FailureClass.ENVIRONMENT_FAILURE,
+                        failure_summary=str(exc),
+                    ),
+                    terminal_status=TerminalStatus.BLOCKED,
+                    terminal_reason=str(exc),
+                )
+            except (PlanValidationError, RuntimeError) as exc:
+                return self._finalize(
+                    prepared,
+                    verification=VerificationResult(
+                        passed=False,
+                        failure_class=FailureClass.MODEL_PLANNING_FAILURE,
+                        failure_summary=str(exc),
+                    ),
+                    terminal_status=TerminalStatus.FAILED,
+                    terminal_reason=str(exc),
+                )
+
+            events.append(machine.move(Phase.RECOVER, reason="apply diagnosis-informed repair plan")[1])
+            active_router, active_verifier = self._begin_attempt(state, events)
+            attempt_active = self.transaction is not None
+            events.append(machine.move(Phase.EXECUTE, reason="dispatch repair actions")[1])
+            self._execute_actions(
+                recovery_actions,
+                ledger,
+                state,
+                events,
+                router=active_router,
+                track_changed_paths=self.transaction is None,
+            )
+            events.append(machine.move(Phase.VERIFY, reason="verify repair plan")[1])
+            verification, _ = self._verify(
+                verification_commands,
+                ledger,
+                state,
+                events,
+                verifier=active_verifier,
+            )
+            if verification.passed:
+                terminal_status = TerminalStatus.COMPLETE
+                terminal_reason = "verification passed after diagnosis-informed recovery"
+                terminal_evidence_refs = verification.evidence_refs
+            else:
+                terminal_status = TerminalStatus.FAILED
+                terminal_reason = verification.failure_summary or "verification failed after recovery"
+            self._finish_attempt(
+                passed=verification.passed,
+                ledger=ledger,
+                state=state,
+                events=events,
+            )
+            attempt_active = False
+        except ResourceLimitExceeded as exc:
+            if attempt_active and self.transaction is not None:
+                self.transaction.abort()
+            terminal_status = TerminalStatus.BLOCKED
+            terminal_reason = str(exc)
+            verification = VerificationResult(
+                passed=False,
+                failure_class=FailureClass.ENVIRONMENT_FAILURE,
+                failure_summary=str(exc),
+            )
+        except TransactionBlocked as exc:
+            if attempt_active and self.transaction is not None:
+                self.transaction.abort()
+            terminal_status = TerminalStatus.BLOCKED
+            terminal_reason = str(exc)
+            verification = VerificationResult(
+                passed=False,
+                failure_class=FailureClass.ENVIRONMENT_FAILURE,
+                failure_summary=str(exc),
+            )
+        except RuntimeError as exc:
+            if attempt_active and self.transaction is not None:
+                self.transaction.abort()
+            terminal_status = TerminalStatus.FAILED
+            terminal_reason = str(exc)
+            verification = VerificationResult(
+                passed=False,
+                failure_class=FailureClass.TOOL_FAILURE,
+                failure_summary=str(exc),
+            )
+        return self._finalize(
+            prepared,
+            verification=verification,
+            terminal_status=terminal_status,
+            terminal_reason=terminal_reason,
+            terminal_evidence_refs=terminal_evidence_refs,
+        )
 
     def _execute_plan(
         self,
