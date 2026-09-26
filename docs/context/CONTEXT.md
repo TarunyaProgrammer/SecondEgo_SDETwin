@@ -3,9 +3,9 @@
 ## Current status
 
 The repository contains a verified headless Python reference runtime and an
-executable staged Rust engine. The final engine direction is Rust; Python remains
-the compatibility/reference path until the Rust CLI, gateway, recovery fixtures,
-and evaluator contract reach parity.
+executable Rust engine. Rust is the default local execution path and final engine
+direction; Python remains the explicit compatibility/reference path while clean
+organizer-environment parity is hardened.
 
 Implemented vertical slice:
 
@@ -48,15 +48,15 @@ diagnosis-informed recovery over UI work or additional infrastructure.
 6. Make termination explicit: success, justified failure, or blocked state.
 7. Keep the Electron/React pixel-village shell separate from the Rust engine and keep the core runnable headlessly.
 8. Use SQLite for local execution state and rebuildable repository metadata before considering external infrastructure.
-9. Meet the standard evaluation contract through a root `Makefile` exposing `setup`, `run`, `test`, and `clean`.
+9. Meet the standard evaluation contract through a root `Makefile` exposing `setup`, `run`, `test`, and `clean`; `run` now defaults to Rust and `ENGINE=python` is an explicit compatibility switch.
 10. Read the evaluator-supplied credential only from `AI_API_KEY`; never persist or log it.
 11. Keep the evaluation path text-only. `make run` launches the terminal UI, which collects a repository path and issue before starting one autonomous run.
 12. Keep presentation optional. `make run` defaults to `UI_MODE=headless`; `UI_MODE=events` or CLI `--ui` only observes compact engine events and must not add model calls, tool calls, or engine decisions.
 
 ## Evaluation interface
 
-- `make setup` creates `.venv`, installs `setuptools`, `pytest`, the optional Gemini SDK, and the project.
-- `make run` requires `AI_API_KEY` and launches `secondego-tui`.
+- `make setup` creates `.venv`, installs the Python compatibility dependencies and project, and builds the Rust CLI/gateway in release mode.
+- `make run` builds the Rust release CLI if needed, prompts for the repository path and issue, and uses `AI_API_KEY` for Gemini-backed planning. `ENGINE=python make run` explicitly selects the compatibility TUI.
 - `make test` runs the contract suite.
 - `SECONDEGO_MODEL` overrides the default configured Gemini model when the organizers prescribe a different text model.
 - No committed file contains an API credential; `.env.example` contains empty placeholders only.
@@ -70,7 +70,7 @@ diagnosis-informed recovery over UI work or additional infrastructure.
 - Evaluation tasks, benchmark fixtures, and final telemetry/report schemas.
 - The transactional runtime currently requires a clean Git repository root with an initial commit; non-Git and dirty targets intentionally block mutation until a bounded journal fallback exists.
 - Desktop transport contract and Electron/React shell implementation.
-- Rust migration and cutover are tracked in [`RUST_MIGRATION_PLAN.md`](RUST_MIGRATION_PLAN.md); `make rust-run` exercises the Rust engine without changing the evaluator default yet.
+- Rust migration and cutover are tracked in [`RUST_MIGRATION_PLAN.md`](RUST_MIGRATION_PLAN.md); `make run` now exercises Rust by default and `make rust-run` remains the explicit development entry point.
 
 ## Change protocol
 

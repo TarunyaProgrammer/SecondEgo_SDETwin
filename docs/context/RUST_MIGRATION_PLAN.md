@@ -91,7 +91,8 @@ remain gated on parity tests rather than being assumed complete.
 
 ## Cutover gates
 
-Rust cannot become the evaluator default until all are true:
+Rust is the repository's default local `make run` engine. It should not be called
+the organizer-evaluator default until all of these clean-checkout gates are true:
 
 - the same fixture produces the same verified diff;
 - failed attempts leave the target untouched;
@@ -104,13 +105,15 @@ Rust cannot become the evaluator default until all are true:
 - the Rust report preserves run ID, events, evidence, resources, verification,
   changed paths, and terminal reason.
 
-Until then, Python remains a reference and rollback path, not the final engine.
+Until then, Python remains an explicit reference/rollback path; Rust remains the
+final engine direction and the default local execution path.
 
 ## Current implementation checkpoint
 
 `cargo test --manifest-path engine-rs/Cargo.toml` covers the Rust workspace,
 including an end-to-end scripted plan that proves indexed context, isolated edit,
 verification, and verified diff transfer. `make rust-run` exposes the CLI. The
-remaining cutover blockers are a full Electron run against the Rust gateway,
+remaining hardening blockers are a full Electron run against the Rust gateway,
 broader language indexing, explicit report/evidence parity with the Python
-reference, and switching the root evaluator commands only after those checks pass.
+reference, and clean-checkout validation of the Rust-default `make setup`/`make
+run` path.

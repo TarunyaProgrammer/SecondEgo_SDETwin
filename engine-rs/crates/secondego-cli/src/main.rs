@@ -8,9 +8,15 @@ use secondego_runtime::RustEngine;
 
 fn main() {
     let arguments: Vec<String> = env::args().skip(1).collect();
-    let workspace = value(&arguments, "--workspace").unwrap_or_else(|| ".".into());
+    let interactive = arguments.iter().any(|argument| argument == "--interactive");
+    let workspace = value(&arguments, "--workspace")
+        .or_else(|| env::var("SECONDEGO_REPOSITORY").ok())
+        .or_else(|| interactive.then(|| prompt("Repository path")))
+        .unwrap_or_else(|| ".".into());
     let task = value(&arguments, "--task")
         .or_else(|| value(&arguments, "--issue"))
+        .or_else(|| env::var("SECONDEGO_TASK").ok())
+        .or_else(|| interactive.then(|| prompt("Issue")))
         .unwrap_or_else(|| "complete the requested repository change".into());
     let events = value(&arguments, "--ui").as_deref() == Some("events");
     let state_db = value(&arguments, "--state-db");
@@ -87,4 +93,15 @@ fn value(arguments: &[String], name: &str) -> Option<String> {
         .windows(2)
         .find(|pair| pair[0] == name)
         .map(|pair| pair[1].clone())
+}
+
+fn prompt(label: &str) -> String {
+    use std::io::{self, Write};
+    print!("{label}: ");
+    let _ = io::stdout().flush();
+    let mut value = String::new();
+    if io::stdin().read_line(&mut value).is_err() {
+        return String::new();
+    }
+    value.trim().to_owned()
 }

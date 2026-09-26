@@ -6,7 +6,7 @@ SecondEgo is a local coding-agent application whose Rust engine turns a foundati
 
 ## Status
 
-The headless Rust harness now has an executable indexed vertical slice: explicit state machine, Tree-sitter repository index, explainable retrieval, safe workspace tools, isolated Git attempts, bounded context packets, structured provider output, verification, one recovery cycle, SQLite persistence, and a CLI. Python remains the compatibility path until evaluator parity is proven. An Electron/React observer shell builds against the local gateway; presentation mode is optional and observes engine events without adding model calls or tools.
+The headless Rust harness now has an executable indexed vertical slice: explicit state machine, Tree-sitter repository index, explainable retrieval, safe workspace tools, isolated Git attempts, bounded context packets, structured provider output, verification, one recovery cycle, SQLite persistence, and a CLI. Rust is now the default `make run` engine; Python remains available through explicit `ENGINE=python` compatibility mode. An Electron/React observer shell builds against the local gateway; presentation mode is optional and observes engine events without adding model calls or tools.
 
 [`CONTEXT-1.md`](docs/context/CONTEXT-1.md) contains the harness proposal, [`CONTEXT-2.md`](docs/context/CONTEXT-2.md) contains the desktop product-shell proposal, and [`CONTEXT.md`](docs/context/CONTEXT.md) records current decisions and open questions.
 
@@ -45,8 +45,9 @@ The engine does not send an API request when `AI_API_KEY` is missing. It termina
 
 The Rust migration can be exercised with `make rust-test` and `make rust-run`. A
 replayable Rust run accepts `TASK=... SCRIPT=...`; `--state-db` persists its final
-state and versioned events to SQLite. The root evaluator commands remain unchanged
-until Rust passes the documented cutover gates.
+state and versioned events to SQLite. `make run` now defaults to Rust and prompts
+for the repository path and issue; `ENGINE=python make run` retains the reference
+path.
 
 Presentation is opt-in. The evaluator-safe default is `make run`. To display
 compact live engine events without changing model or tool budgets, run

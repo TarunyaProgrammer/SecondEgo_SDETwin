@@ -1,6 +1,6 @@
 # SecondEgo Implementation Plan
 
-Status: active implementation plan; Rust migration vertical slice delivered; evaluator cutover gated by parity
+Status: active implementation plan; Rust is the default local engine; organizer cutover hardening remains
 
 This plan reconciles `docs/context/CONTEXT.md`, `docs/context/CONTEXT-1.md`, `docs/context/CONTEXT-2.md`, the repository `AGENTS.md`, and the hackathon scoring rubric supplied by the user.
 
@@ -286,10 +286,11 @@ Current Rust crates:
 - `secondego-storage`: local SQLite run/event persistence;
 - `secondego-cli`: replayable fixture and Gemini-backed Rust entry point.
 
-The Rust engine is exercised with `make rust-run` and `make rust-test`. The root
-`make run` remains Python until the parity gates pass: recovery fixture, dirty/non-
-Git/path escape/timeout safety cases, report/evidence parity, gateway integration,
-and clean-checkout evaluator commands.
+The Rust engine is exercised with `make rust-run`, `make rust-test`, and now the
+default `make run` interactive path. `ENGINE=python make run` remains the rollback
+path. The final clean-checkout gate still covers dirty/non-Git/path escape/timeout
+safety cases, report/evidence parity, provider-backed evaluation, and setup on the
+organizer environment.
 
 ## 7. Evaluation proof plan
 
