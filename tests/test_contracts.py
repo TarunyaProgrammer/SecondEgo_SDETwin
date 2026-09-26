@@ -77,6 +77,9 @@ def test_context_assembler_prioritizes_evidence_and_skips_stale() -> None:
 
     assert [item.reference for item in packet.evidence] == ["high", "low"]
     assert packet.estimated_tokens <= 90
+    assert packet.dropped_evidence == ("stale",)
+    assert packet.slot_usage["response_reserved"] == 10
+    assert "OMITTED_EVIDENCE" in packet.as_text()
 
 
 def test_evidence_ledger_retains_source_linked_active_evidence() -> None:
@@ -215,6 +218,24 @@ def test_repository_indexer_records_symbols_imports_and_parse_failures(tmp_path)
     assert index.parser_failures[0].path == "src/broken.py"
 
 
+def test_repository_indexer_builds_test_topology_from_python_imports(tmp_path) -> None:
+    files = FileTool(WorkspacePolicy(tmp_path))
+    files.write("src/auth.py", "def refresh_token():\n    return None\n")
+    files.write(
+        "tests/test_auth.py",
+        "from src.auth import refresh_token\n\ndef test_refresh_token():\n    assert refresh_token() is None\n",
+    )
+
+    index = RepositoryIndexer(WorkspacePolicy(tmp_path)).build()
+
+    assert [(item.path, item.name) for item in index.tests] == [
+        ("tests/test_auth.py", "test_refresh_token")
+    ]
+    assert index.test_links[0].test_path == "tests/test_auth.py"
+    assert index.test_links[0].target_path == "src/auth.py"
+    assert index.test_links[0].confidence == 0.95
+
+
 def test_repository_retriever_ranks_symbol_matches_above_path_matches(tmp_path) -> None:
     files = FileTool(WorkspacePolicy(tmp_path))
     files.write("src/auth.py", "def refresh_token():\n    return None\n")
@@ -225,6 +246,27 @@ def test_repository_retriever_ranks_symbol_matches_above_path_matches(tmp_path) 
 
     assert ranked[0].path == "src/auth.py"
     assert "symbol:refresh" in ranked[0].reasons
+
+
+def test_repository_retriever_links_failure_test_to_implementation(tmp_path) -> None:
+    files = FileTool(WorkspacePolicy(tmp_path))
+    files.write("src/auth.py", "def refresh_token():\n    return None\n")
+    files.write(
+        "tests/test_auth.py",
+        "from src.auth import refresh_token\n\ndef test_refresh_token():\n    assert refresh_token() is None\n",
+    )
+    index = RepositoryIndexer(WorkspacePolicy(tmp_path)).build()
+
+    ranked = RepositoryRetriever().rank(
+        index,
+        "tests/test_auth.py::test_refresh_token failed",
+        mode="failure",
+    )
+
+    assert ranked[0].path == "tests/test_auth.py"
+    implementation = next(item for item in ranked if item.path == "src/auth.py")
+    assert "failure-linked-test" in implementation.reasons
+    assert implementation.confidence == 0.95
 
 
 def test_verifier_returns_test_failure_evidence(tmp_path) -> None:

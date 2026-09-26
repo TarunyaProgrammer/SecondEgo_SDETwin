@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .policy import ContextBudget, EvidenceRecord
 
@@ -10,6 +10,8 @@ class ContextPacket:
     evidence: tuple[EvidenceRecord, ...]
     state: str
     estimated_tokens: int
+    dropped_evidence: tuple[str, ...] = ()
+    slot_usage: dict[str, int] = field(default_factory=dict)
 
     def as_text(self) -> str:
         evidence_text = "\n".join(
@@ -20,6 +22,7 @@ class ContextPacket:
             f"TASK:\n{self.task}\n\n"
             f"ACTION:\n{self.action}\n\n"
             f"EVIDENCE:\n{evidence_text}\n\n"
+            f"OMITTED_EVIDENCE:\n{list(self.dropped_evidence)}\n\n"
             f"STATE:\n{self.state}"
         )
 
@@ -54,12 +57,15 @@ class ContextAssembler:
             raise ValueError("state exceeds its reserved context budget")
 
         selected: list[EvidenceRecord] = []
+        dropped: list[str] = []
         used_evidence_tokens = 0
         for item in sorted(evidence, key=lambda value: value.importance, reverse=True):
             if item.stale:
+                dropped.append(item.reference)
                 continue
             item_tokens = self.estimate_tokens(item.summary)
             if used_evidence_tokens + item_tokens > self.budget.evidence_tokens:
+                dropped.append(item.reference)
                 continue
             selected.append(item)
             used_evidence_tokens += item_tokens
@@ -73,5 +79,12 @@ class ContextAssembler:
             evidence=tuple(selected),
             state=state,
             estimated_tokens=estimated,
+            dropped_evidence=tuple(dropped),
+            slot_usage={
+                "task": task_tokens,
+                "action": action_tokens,
+                "evidence": used_evidence_tokens,
+                "state": state_tokens,
+                "response_reserved": self.budget.response_tokens,
+            },
         )
-

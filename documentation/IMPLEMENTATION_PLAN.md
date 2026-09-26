@@ -254,7 +254,7 @@ The project is not ready for a judging demo until:
 
 Milestones A, B, the first vertical slice, the transactional safety increment, and
 the first diagnosis-informed recovery loop are implemented. The current test suite
-has 36 passing contract tests. The remaining competition-critical work is
+has 38 passing contract tests. The remaining competition-critical work is
 test-topology retrieval, phase-specific context packets, richer telemetry, and a
 realistic local evaluation fixture.
 

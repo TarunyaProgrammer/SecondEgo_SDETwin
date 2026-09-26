@@ -31,11 +31,28 @@ class ParserFailure:
 
 
 @dataclass(frozen=True)
+class TestNode:
+    path: str
+    name: str
+    line: int
+
+
+@dataclass(frozen=True)
+class TestLink:
+    test_path: str
+    target_path: str
+    reason: str
+    confidence: float
+
+
+@dataclass(frozen=True)
 class RepositoryIndex:
     snapshot: RepositorySnapshot
     symbols: tuple[Symbol, ...]
     imports: tuple[ImportEdge, ...]
     parser_failures: tuple[ParserFailure, ...]
+    tests: tuple[TestNode, ...] = ()
+    test_links: tuple[TestLink, ...] = ()
 
 
 class RepositoryIndexer:
@@ -50,6 +67,7 @@ class RepositoryIndexer:
         symbols: list[Symbol] = []
         imports: list[ImportEdge] = []
         failures: list[ParserFailure] = []
+        tests: list[TestNode] = []
         for path in snapshot.files:
             if not path.endswith(".py"):
                 continue
@@ -66,6 +84,12 @@ class RepositoryIndexer:
                 )
                 continue
             for node in ast.walk(tree):
+                if (
+                    path in snapshot.test_files
+                    and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name.startswith("test")
+                ):
+                    tests.append(TestNode(path=path, name=node.name, line=node.lineno))
                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     symbols.append(
                         Symbol(
@@ -91,10 +115,52 @@ class RepositoryIndexer:
                         imports.append(ImportEdge(path, alias.name, node.lineno))
                 elif isinstance(node, ast.ImportFrom):
                     imports.append(ImportEdge(path, node.module or "", node.lineno))
+        test_links = _link_tests(snapshot, imports)
         return RepositoryIndex(
             snapshot=snapshot,
             symbols=tuple(sorted(symbols, key=lambda item: (item.path, item.line_start, item.name))),
             imports=tuple(sorted(imports, key=lambda item: (item.source_path, item.line, item.module))),
             parser_failures=tuple(sorted(failures, key=lambda item: item.path)),
+            tests=tuple(sorted(tests, key=lambda item: (item.path, item.line, item.name))),
+            test_links=tuple(
+                sorted(
+                    test_links,
+                    key=lambda item: (item.test_path, item.target_path, item.reason),
+                )
+            ),
         )
 
+
+def _link_tests(snapshot: RepositorySnapshot, imports: list[ImportEdge]) -> list[TestLink]:
+    module_paths: dict[str, str] = {}
+    for path in snapshot.files:
+        if not path.endswith(".py"):
+            continue
+        without_suffix = path[:-3].replace("/", ".")
+        if without_suffix.endswith(".__init__"):
+            without_suffix = without_suffix[:-9]
+        module_paths[without_suffix] = path
+
+    links: list[TestLink] = []
+    for edge in imports:
+        if edge.source_path not in snapshot.test_files:
+            continue
+        target = module_paths.get(edge.module)
+        if target is None:
+            candidates = [
+                path
+                for module, path in module_paths.items()
+                if module.endswith(f".{edge.module}") or edge.module.endswith(f".{module}")
+            ]
+            if len(candidates) == 1:
+                target = candidates[0]
+        if target is not None and target not in snapshot.test_files:
+            links.append(
+                TestLink(
+                    test_path=edge.source_path,
+                    target_path=target,
+                    reason="test_import",
+                    confidence=0.95,
+                )
+            )
+    return list({(item.test_path, item.target_path, item.reason): item for item in links}.values())

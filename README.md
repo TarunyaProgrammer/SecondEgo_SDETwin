@@ -6,7 +6,7 @@ SecondEgo is a local coding-agent application whose Python engine turns a founda
 
 ## Status
 
-The headless Python harness is implemented as an early vertical slice. It has an explicit state machine, safe workspace tools, context and resource budgets, Python repository indexing, structured plan validation, verification/recovery, SQLite evidence persistence, and a CLI. The Electron/React shell is not implemented yet.
+The headless Python harness is implemented as the competition-critical vertical slice. It has an explicit state machine, safe workspace tools, isolated Git attempts, test-topology retrieval, bounded context packets, structured plan validation, diagnosis-informed recovery, SQLite evidence persistence, and a CLI. The Electron/React shell is not implemented yet.
 
 [`CONTEXT-1.md`](docs/context/CONTEXT-1.md) contains the harness proposal, [`CONTEXT-2.md`](docs/context/CONTEXT-2.md) contains the desktop product-shell proposal, and [`CONTEXT.md`](docs/context/CONTEXT.md) records current decisions and open questions.
 
@@ -58,6 +58,8 @@ The design favors a derived repository knowledge graph backed by lightweight loc
 ## Current scope
 
 - Python AST symbol/import extraction is implemented; other languages currently use structural and lexical fallback only.
+- Clean Git targets run in detached worktrees; failed attempts are discarded and only verified diffs are transferred.
+- Python test nodes and import-backed test-to-code links feed failure-aware retrieval.
 - SQLite schema version 1 persists compact final run state, events, and evidence.
 - The model is required to return a structured plan, which is validated before tools execute it.
 - The desktop shell, package distribution, full benchmark suite, and richer multi-language parsing remain planned work.
