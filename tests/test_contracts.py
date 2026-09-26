@@ -286,6 +286,38 @@ def test_repository_retriever_links_failure_test_to_implementation(tmp_path) -> 
     assert implementation.confidence == 0.95
 
 
+def test_engine_feeds_ranked_repository_evidence_into_run_ledger(tmp_path) -> None:
+    files = FileTool(WorkspacePolicy(tmp_path))
+    files.write("src/auth.py", "def refresh_token():\n    return None\n")
+    files.write("tests/test_auth.py", "from src.auth import refresh_token\n")
+    workspace = WorkspacePolicy(tmp_path)
+    resources = ResourceUsage(ResourceBudget(max_tool_calls=10))
+    runner = CommandRunner(workspace)
+    engine = HarnessEngine(
+        scanner=RepositoryScanner(workspace),
+        router=ToolRouter(
+            files=FileTool(workspace),
+            search=SearchTool(workspace),
+            runner=runner,
+            resources=resources,
+        ),
+        verifier=VerificationEngine(runner),
+        resources=resources,
+    )
+
+    result = engine.run(
+        task="fix refresh_token behavior",
+        acceptance_criteria=(),
+        actions=(),
+        verification_commands=(("python3", "-c", "assert True"),),
+    )
+
+    retrieval = [item for item in result.evidence if item.reference.startswith("retrieval:")]
+    assert retrieval
+    assert any(item.source == "src/auth.py" for item in retrieval)
+    assert any("def refresh_token" in item.summary for item in retrieval)
+
+
 def test_verifier_returns_test_failure_evidence(tmp_path) -> None:
     runner = CommandRunner(WorkspacePolicy(tmp_path))
     result, evidence = VerificationEngine(runner).run(

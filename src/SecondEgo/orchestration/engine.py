@@ -10,6 +10,8 @@ from SecondEgo.core.state_machine import StateMachine
 from SecondEgo.model.base import ActionProposal
 from SecondEgo.model.planner import ModelPlanner, PlanValidationError
 from SecondEgo.repository.index import RepositoryIndexer
+from SecondEgo.repository.index import RepositoryIndex
+from SecondEgo.repository.retrieval import RepositoryRetriever
 from SecondEgo.repository.scanner import RepositoryScanner
 from SecondEgo.storage.sqlite import SQLiteRunStore
 from SecondEgo.tools.router import ToolRouter
@@ -19,6 +21,7 @@ from SecondEgo.tools.policy import WorkspacePolicy
 from SecondEgo.tools.runner import CommandRunner
 from SecondEgo.tools.search import SearchTool
 from SecondEgo.tools.transaction import GitAttemptTransaction, TransactionBlocked
+from SecondEgo.storage.redaction import redact_sensitive
 from SecondEgo.verification.contracts import FailureClass, VerificationResult
 from SecondEgo.verification.verifier import VerificationEngine
 
@@ -37,6 +40,7 @@ class _PreparedRun:
     machine: StateMachine
     ledger: EvidenceLedger
     events: list[EngineEvent]
+    index: RepositoryIndex
 
 
 class HarnessEngine:
@@ -47,6 +51,7 @@ class HarnessEngine:
         *,
         scanner: RepositoryScanner,
         indexer: RepositoryIndexer | None = None,
+        retriever: RepositoryRetriever | None = None,
         router: ToolRouter,
         verifier: VerificationEngine,
         resources: ResourceUsage,
@@ -56,6 +61,7 @@ class HarnessEngine:
     ) -> None:
         self.scanner = scanner
         self.indexer = indexer or RepositoryIndexer(scanner.workspace, scanner=scanner)
+        self.retriever = retriever or RepositoryRetriever()
         self.router = router
         self.verifier = verifier
         self.resources = resources
@@ -157,7 +163,52 @@ class HarnessEngine:
                 importance=3,
             )
         )
-        return _PreparedRun(state=state, machine=machine, ledger=ledger, events=events)
+        self._record_retrieval(
+            task,
+            index,
+            ledger,
+            state,
+            prefix="retrieval",
+            mode="issue",
+        )
+        return _PreparedRun(
+            state=state,
+            machine=machine,
+            ledger=ledger,
+            events=events,
+            index=index,
+        )
+
+    def _record_retrieval(
+        self,
+        query: str,
+        index: RepositoryIndex,
+        ledger: EvidenceLedger,
+        state: ExecutionState,
+        *,
+        prefix: str,
+        mode: str,
+    ) -> None:
+        ranked = self.retriever.rank(index, query, limit=8, mode=mode)
+        for number, item in enumerate(ranked):
+            summary = (
+                f"path={item.path} score={item.score} confidence={item.confidence:.2f} "
+                f"reasons={list(item.reasons)}"
+            )
+            if _is_safe_context_path(item.path):
+                excerpt = self.router.files.read(item.path)
+                if excerpt.success and excerpt.stdout:
+                    summary += f" excerpt={redact_sensitive(excerpt.stdout[:2_500])}"
+            reference = f"{prefix}:{number}"
+            ledger.record(
+                EvidenceRecord(
+                    reference=reference,
+                    summary=summary,
+                    source=item.path,
+                    importance=4 if mode == "failure" else 3,
+                )
+            )
+            state.evidence_refs.append(reference)
 
     async def _execute_planned_with_dynamic_recovery(
         self,
@@ -237,6 +288,20 @@ class HarnessEngine:
                 )
             )
             state.evidence_refs.append("diagnosis:failure")
+            failure_record = verification.failure_record
+            diagnosis_query = " ".join(
+                (list(failure_record.failing_tests) if failure_record is not None else [])
+                + (list(failure_record.error_locations) if failure_record is not None else [])
+                + [(verification.failure_summary or "")[:500]]
+            )
+            self._record_retrieval(
+                diagnosis_query,
+                prepared.index,
+                ledger,
+                state,
+                prefix="diagnosis:retrieval",
+                mode="failure",
+            )
             self.resources.record_retry()
             try:
                 recovery_actions = await planner.create_recovery_actions(
@@ -728,3 +793,8 @@ class HarnessEngine:
                 },
             )
         )
+
+
+def _is_safe_context_path(path: str) -> bool:
+    name = path.casefold().rsplit("/", 1)[-1]
+    return name not in {".env", ".env.local", ".env.production", "credentials.json"}
