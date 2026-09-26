@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
+from SecondEgo.lifecycle import OwnedTempLease
+
 
 MAX_CLONE_SECONDS = 180
 MAX_CLONE_BYTES = 1_000_000_000
@@ -24,6 +26,12 @@ class ResolvedRepository:
     source: str
     root: Path
     cloned: bool = False
+    lease: OwnedTempLease | None = None
+
+    def cleanup(self) -> None:
+        lease, self.lease = self.lease, None
+        if lease is not None:
+            lease.cleanup()
 
 
 def resolve_repository(source: str | Path) -> ResolvedRepository:
@@ -67,6 +75,7 @@ def _clone_github_repository(url: str) -> ResolvedRepository:
     if git is None:
         raise RepositorySourceError("git is required to clone a remote repository")
     clone_root = Path(tempfile.mkdtemp(prefix="secondego-remote-"))
+    lease = OwnedTempLease(clone_root, "remote")
     target = clone_root / repository
     clone_url = f"https://github.com/{owner}/{repository}.git"
     try:
@@ -90,20 +99,20 @@ def _clone_github_repository(url: str) -> ResolvedRepository:
             env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
         )
     except subprocess.TimeoutExpired as exc:
-        shutil.rmtree(clone_root, ignore_errors=True)
+        lease.cleanup()
         raise RepositorySourceError("GitHub clone timed out after 180 seconds") from exc
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout).strip().splitlines()
         reason = detail[-1][:300] if detail else "git clone failed"
-        shutil.rmtree(clone_root, ignore_errors=True)
+        lease.cleanup()
         raise RepositorySourceError(f"GitHub clone failed: {reason}")
     if not target.is_dir() or not (target / ".git").exists():
-        shutil.rmtree(clone_root, ignore_errors=True)
+        lease.cleanup()
         raise RepositorySourceError("GitHub clone did not produce a Git repository")
     if _directory_size(target) > MAX_CLONE_BYTES:
-        shutil.rmtree(clone_root, ignore_errors=True)
+        lease.cleanup()
         raise RepositorySourceError("cloned repository exceeds the 1 GB safety limit")
-    return ResolvedRepository(source=url, root=target.resolve(), cloned=True)
+    return ResolvedRepository(source=url, root=target.resolve(), cloned=True, lease=lease)
 
 
 def _github_parts(url: str) -> tuple[str, str]:

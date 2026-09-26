@@ -66,8 +66,11 @@ function App() {
   useEffect(() => {
     document.body.classList.toggle("notch-mode", notchMode);
     void window.secondEgoWindow?.setExpanded(notchOpen);
+    if (notchMode && notchOpen && !busy && !run) {
+      window.setTimeout(() => document.getElementById("repository-input")?.focus(), 80);
+    }
     return () => document.body.classList.remove("notch-mode");
-  }, [notchMode, notchOpen]);
+  }, [busy, notchMode, notchOpen, run]);
 
   useEffect(() => {
     const requestId = run?.request_id;
@@ -144,7 +147,7 @@ function App() {
         <button className="notch-handle" type="button" onClick={() => setNotchOpen((open) => !open)} aria-expanded={notchOpen}><span className="notch-grip" aria-hidden="true" /><span>{notchOpen ? "CLOSE COMMAND NOTCH" : "OPEN COMMAND NOTCH"}</span><span className="notch-state">{run ? `RUN ${run.request_id.slice(0, 8)}` : "NO RUN"}</span></button>
         {notchOpen && <form className="notch-drawer" onSubmit={submit}>
           <div className="notch-intro"><span className="panel-label">MISSION CONTROL</span><h2>Give the village one repository task.</h2><p>The engine owns the plan. The village only shows its evidence.</p></div>
-          <div className="notch-fields"><label>Repository path or public GitHub URL<input value={repository} onChange={(event) => setRepository(event.target.value)} placeholder="/path/to/repository or https://github.com/owner/repo" required /></label><label>Issue<textarea value={issue} onChange={(event) => setIssue(event.target.value)} placeholder="Describe the change to make and verify." required /></label></div>
+          <div className="notch-fields"><label>Repository path or public GitHub URL<input id="repository-input" value={repository} onChange={(event) => setRepository(event.target.value)} placeholder="/path/to/repository or https://github.com/owner/repo" autoComplete="url" required /></label><label>Issue<textarea id="issue-input" value={issue} onChange={(event) => setIssue(event.target.value)} placeholder="Describe the change to make and verify." required /></label></div>
           <details className="advanced-fields"><summary>Connection details</summary><label>Gateway URL<input value={gateway} onChange={(event) => setGateway(event.target.value)} /></label><label>Gateway token<input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="Printed by the local gateway" required /></label></details>
           <div className="notch-actions"><button className="start-button" disabled={busy}>{busy ? "VILLAGE WORKING..." : "START VERIFIED RUN"}</button>{error && <div className="error" role="alert">{error}</div>}</div>
         </form>}

@@ -1,14 +1,18 @@
 use std::collections::HashMap;
 use std::env;
+use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use secondego_core::EngineEvent;
 use secondego_model::GeminiProvider;
-use secondego_runtime::{RunReport, RustEngine, resolve_repository, validate_repository_source};
+use secondego_runtime::{
+    RunReport, RustEngine, collect_garbage, resolve_repository, validate_repository_source,
+};
 use uuid::Uuid;
 
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
@@ -25,19 +29,30 @@ struct RunRecord {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let gc = collect_garbage();
+    if gc.deleted > 0 {
+        eprintln!(
+            "SecondEgo garbage collector: reclaimed {} stale temp directories",
+            gc.deleted
+        );
+    }
     let token = env::var("SECONDEGO_UI_TOKEN").unwrap_or_else(|_| "local-development-token".into());
     let port = env::var("SECONDEGO_GATEWAY_PORT")
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(8787);
+    let ui_root = env::var_os("SECONDEGO_UI_DIST")
+        .map(PathBuf::from)
+        .filter(|path| path.is_dir());
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     let runs: Arc<Mutex<HashMap<Uuid, RunRecord>>> = Arc::new(Mutex::new(HashMap::new()));
     eprintln!("SecondEgo Rust gateway listening on http://127.0.0.1:{port}");
     for stream in listener.incoming().flatten() {
         let token = token.clone();
         let runs = runs.clone();
+        let ui_root = ui_root.clone();
         thread::spawn(move || {
-            let _ = handle(stream, &token, &runs);
+            let _ = handle(stream, &token, &runs, ui_root.as_deref());
         });
     }
     Ok(())
@@ -47,9 +62,18 @@ fn handle(
     mut stream: TcpStream,
     token: &str,
     runs: &Arc<Mutex<HashMap<Uuid, RunRecord>>>,
+    ui_root: Option<&Path>,
 ) -> std::io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     let request = read_request(&mut stream)?;
+    if request.method == "GET" {
+        let route = request.path.split('?').next().unwrap_or_default();
+        if route == "/" || route.starts_with("/assets/") {
+            if let Some(ui_root) = ui_root {
+                return serve_ui(&mut stream, ui_root, route);
+            }
+        }
+    }
     // CORS preflight requests intentionally carry no application token. They
     // only ask whether the renderer may send the authenticated request.
     if request.method == "OPTIONS" {
@@ -72,6 +96,34 @@ fn handle(
         ("GET", path) if path.starts_with("/api/runs/") => get_run(&mut stream, path, runs),
         _ => respond(&mut stream, 404, serde_json::json!({"error":"not found"})),
     }
+}
+
+fn serve_ui(stream: &mut TcpStream, root: &Path, route: &str) -> std::io::Result<()> {
+    let root = root.canonicalize()?;
+    let relative = if route == "/" {
+        PathBuf::from("index.html")
+    } else {
+        PathBuf::from(route.trim_start_matches('/'))
+    };
+    let candidate = root.join(relative).canonicalize();
+    let Ok(candidate) = candidate else {
+        return respond(stream, 404, serde_json::json!({"error":"asset not found"}));
+    };
+    if !candidate.starts_with(&root) || !candidate.is_file() {
+        return respond(stream, 404, serde_json::json!({"error":"asset not found"}));
+    }
+    let body = fs::read(&candidate)?;
+    let content_type = match candidate
+        .extension()
+        .and_then(|extension| extension.to_str())
+    {
+        Some("html") => "text/html; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("js") => "text/javascript; charset=utf-8",
+        Some("json") => "application/json",
+        _ => "application/octet-stream",
+    };
+    respond_bytes(stream, 200, content_type, &body)
 }
 
 fn create_run(
@@ -315,6 +367,15 @@ fn respond(stream: &mut TcpStream, status: u16, body: serde_json::Value) -> std:
         serde_json::to_vec(&body)
             .unwrap_or_else(|_| b"{\"error\":\"serialization failed\"}".to_vec())
     };
+    respond_bytes(stream, status, "application/json", &data)
+}
+
+fn respond_bytes(
+    stream: &mut TcpStream,
+    status: u16,
+    content_type: &str,
+    data: &[u8],
+) -> std::io::Result<()> {
     let reason = match status {
         204 => "No Content",
         200 => "OK",
@@ -326,10 +387,10 @@ fn respond(stream: &mut TcpStream, status: u16, body: serde_json::Value) -> std:
     };
     write!(
         stream,
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, X-SecondEgo-Token\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        data.len()
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, X-SecondEgo-Token\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        data.len(),
     )?;
-    stream.write_all(&data)
+    stream.write_all(data)
 }
 
 #[cfg(test)]

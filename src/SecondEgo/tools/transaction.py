@@ -6,6 +6,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from SecondEgo.lifecycle import OwnedTempLease
+
 from .policy import WorkspacePolicy
 
 
@@ -41,6 +43,7 @@ class GitAttemptTransaction:
         self.max_patch_bytes = max_patch_bytes
         self.max_file_bytes = max_file_bytes
         self._state_dir: Path | None = None
+        self._state_lease: OwnedTempLease | None = None
         self._attempt_root: Path | None = None
 
     @property
@@ -62,6 +65,7 @@ class GitAttemptTransaction:
             raise TransactionBlocked("transaction requires a repository with an initial commit")
 
         state_dir = Path(tempfile.mkdtemp(prefix="secondego-attempt-"))
+        state_lease = OwnedTempLease(state_dir, "attempt")
         attempt_root = state_dir / "workspace"
         try:
             _run_git(
@@ -69,9 +73,10 @@ class GitAttemptTransaction:
                 self.workspace.root,
             )
         except Exception:
-            shutil.rmtree(state_dir, ignore_errors=True)
+            state_lease.cleanup()
             raise
         self._state_dir = state_dir
+        self._state_lease = state_lease
         self._attempt_root = attempt_root
         return WorkspacePolicy(attempt_root)
 
@@ -144,7 +149,11 @@ class GitAttemptTransaction:
         try:
             _run_git(("worktree", "remove", "--force", str(attempt_root)), self.workspace.root)
         finally:
-            shutil.rmtree(state_dir, ignore_errors=True)
+            if self._state_lease is not None:
+                self._state_lease.cleanup()
+                self._state_lease = None
+            else:
+                shutil.rmtree(state_dir, ignore_errors=True)
             self._attempt_root = None
             self._state_dir = None
 

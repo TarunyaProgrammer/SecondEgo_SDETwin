@@ -1,5 +1,6 @@
 import pytest
 import asyncio
+import os
 import subprocess
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from SecondEgo.repository.scanner import RepositoryScanner
 from SecondEgo.repository.index import RepositoryIndexer
 from SecondEgo.repository.retrieval import RepositoryRetriever
 from SecondEgo.repository.source import RepositorySourceError, resolve_repository
+from SecondEgo.lifecycle import GcConfig, OwnedTempLease, collect_garbage
 from SecondEgo.storage.sqlite import SQLiteRunStore
 from SecondEgo.storage.redaction import redact_sensitive
 from SecondEgo.verification.contracts import FailureClass, VerificationResult
@@ -129,6 +131,46 @@ def test_repository_source_shallow_clones_github_url(monkeypatch) -> None:
     assert resolved.root.name == "project"
     assert "--depth" in calls[0]
     assert "--no-tags" in calls[0]
+
+
+def test_garbage_collector_reclaims_only_stale_owned_directories(tmp_path) -> None:
+    stale = tmp_path / "secondego-remote-stale"
+    stale.mkdir()
+    (stale / ".secondego-owned").write_text("{}\n", encoding="utf-8")
+    (stale / "payload").write_text("clone", encoding="utf-8")
+    os.utime(stale, (0, 0))
+
+    unowned = tmp_path / "secondego-remote-unowned"
+    unowned.mkdir()
+    os.utime(unowned, (0, 0))
+
+    recent = tmp_path / "secondego-remote-recent"
+    recent.mkdir()
+    (recent / ".secondego-owned").write_text("{}\n", encoding="utf-8")
+
+    report = collect_garbage(GcConfig(temp_root=tmp_path, retention_seconds=1))
+
+    assert report.deleted == 1
+    assert report.skipped_unowned == 1
+    assert report.skipped_recent == 1
+    assert not stale.exists()
+    assert unowned.exists()
+    assert recent.exists()
+
+
+def test_garbage_collector_does_not_remove_an_active_lease(tmp_path) -> None:
+    active = tmp_path / "secondego-attempt-active"
+    active.mkdir()
+    lease = OwnedTempLease(active, "attempt")
+    os.utime(active, (0, 0))
+
+    report = collect_garbage(GcConfig(temp_root=tmp_path, retention_seconds=0))
+
+    assert report.deleted == 0
+    assert report.skipped_active == 1
+    assert active.exists()
+    lease.cleanup()
+    assert not active.exists()
 
 
 def test_gateway_registry_accepts_valid_request_without_running_model(monkeypatch, tmp_path) -> None:

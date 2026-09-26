@@ -12,7 +12,7 @@ const notchMode = process.platform === "darwin" && process.env.SECONDEGO_DESKTOP
 
 const NOTCH_SIZE = {
   closed: { width: 236, height: 38 },
-  open: { width: 920, height: 820 },
+  open: { width: 760, height: 620 },
 };
 
 function notchBounds(expanded) {
@@ -83,7 +83,12 @@ function createWindow(token) {
 ipcMain.handle("secondego:notch-expanded", (_event, expanded) => {
   if (!notchMode || !mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.setBounds(notchBounds(Boolean(expanded)), true);
-  if (expanded) mainWindow.showInactive();
+  if (expanded) {
+    mainWindow.show();
+    mainWindow.focus();
+  } else {
+    mainWindow.showInactive();
+  }
 });
 
 function startGateway() {

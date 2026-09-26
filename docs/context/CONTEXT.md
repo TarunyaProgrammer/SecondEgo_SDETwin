@@ -20,6 +20,7 @@ Implemented vertical slice:
 - provider transport failures converted into bounded terminal evidence instead of TUI crashes;
 - optional loopback-only observer gateway and browser UI that consume serialized engine events without adding model/tool calls;
 - local path and public HTTPS GitHub source acquisition with bounded shallow clones;
+- crash-safe garbage collection for owned remote clones and detached attempts;
 - redacted bounded telemetry and generated-file filtering at the transaction boundary;
 - SQLite schema version 1 for final run state, events, and evidence;
 - Rust crates for contracts, indexing, bounded context, model providers, tools/transactions, verification, runtime, storage, and CLI;
@@ -53,12 +54,14 @@ diagnosis-informed recovery over UI work or additional infrastructure.
 10. Read the evaluator-supplied credential only from `AI_API_KEY`; never persist or log it.
 11. Keep the evaluation path text-only. `make run` launches the terminal UI, which collects a local repository path or public HTTPS GitHub URL and issue before starting one autonomous run.
 12. Keep presentation optional. `make run` defaults to `UI_MODE=headless`; `UI_MODE=events` or CLI `--ui` only observes compact engine events and must not add model calls, tool calls, or engine decisions.
+13. Keep the desktop surface opt-in. `UI=off` is the default for `make run`; `make ui` or `make run UI=on` starts the notch observer explicitly.
 
 ## Evaluation interface
 
 - `make setup` creates `.venv`, installs the Python compatibility dependencies and project, and builds the Rust CLI/gateway in release mode.
 - `make run` builds the Rust release CLI if needed, prompts for the repository path and issue, and uses `AI_API_KEY` for Gemini-backed planning. `ENGINE=python make run` explicitly selects the compatibility TUI.
 - `make test` runs the contract suite.
+- `make ui` builds and launches the optional macOS notch observer; `make run UI=on` is the equivalent switch through the standard launcher.
 - `SECONDEGO_MODEL` overrides the default configured Gemini model when the organizers prescribe a different text model.
 - No committed file contains an API credential; `.env.example` contains empty placeholders only.
 
@@ -70,7 +73,7 @@ diagnosis-informed recovery over UI work or additional infrastructure.
 - Exact evaluation tool-permission policy and sandbox boundary.
 - Evaluation tasks, benchmark fixtures, and final telemetry/report schemas.
 - The transactional runtime currently requires a clean Git repository root with an initial commit; non-Git and dirty targets intentionally block mutation until a bounded journal fallback exists.
-- Remote repositories are acquired as bounded shallow clones in a temporary local directory. SQLite records run state/evidence and may later catalog clone lifecycle metadata; it does not store repository contents.
+- Remote repositories are acquired as bounded shallow clones in a temporary local directory. Normal completion removes them; the bounded collector reclaims crash leftovers without touching active leases. SQLite records run state/evidence and does not store repository contents.
 - Desktop transport contract and Electron/React shell implementation.
 - Rust migration and cutover are tracked in [`RUST_MIGRATION_PLAN.md`](RUST_MIGRATION_PLAN.md); `make run` now exercises Rust by default and `make rust-run` remains the explicit development entry point.
 
@@ -82,6 +85,8 @@ When a design decision changes, update this file with the decision and rationale
 
 - [`CONTEXT-1.md`](CONTEXT-1.md): initial architecture proposal and rationale.
 - [`CONTEXT-2.md`](CONTEXT-2.md): desktop product-shell and end-to-end experience proposal.
+- [`GARBAGE_COLLECTION.md`](GARBAGE_COLLECTION.md): crash-safe temporary clone and worktree ownership/retention policy.
 - [`LCC_ARCHITECTURE.md`](LCC_ARCHITECTURE.md): LCC evaluation runtime decision and implementation order.
 - [`LCC_EVALUATION_MODEL.md`](LCC_EVALUATION_MODEL.md): evaluator/repository separation and local evaluation workflow notes.
 - [`ContextSubmission.md`](ContextSubmission.md): evaluator-provided submission requirements; do not commit credentials.
+- [`GARBAGE_COLLECTION.md`](GARBAGE_COLLECTION.md): ownership, locking, retention, and cleanup policy.

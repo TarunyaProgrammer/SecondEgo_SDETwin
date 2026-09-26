@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 use secondego_core::ActionProposal;
 use serde::{Deserialize, Serialize};
 
+pub mod gc;
+
 const DEFAULT_MAX_FILE_BYTES: u64 = 512 * 1024;
 const DEFAULT_MAX_OUTPUT_BYTES: usize = 256 * 1024;
 
@@ -583,6 +585,7 @@ pub struct GitAttemptTransaction {
     pub max_patch_bytes: usize,
     pub max_file_bytes: u64,
     state_dir: Option<tempfile::TempDir>,
+    state_lease: Option<gc::OwnedTempLease>,
     attempt_root: Option<PathBuf>,
 }
 
@@ -593,6 +596,7 @@ impl GitAttemptTransaction {
             max_patch_bytes: 2_000_000,
             max_file_bytes: DEFAULT_MAX_FILE_BYTES,
             state_dir: None,
+            state_lease: None,
             attempt_root: None,
         }
     }
@@ -648,6 +652,8 @@ impl GitAttemptTransaction {
             .prefix("secondego-attempt-")
             .tempdir()
             .map_err(|error| PolicyError::UnsupportedAction(error.to_string()))?;
+        let state_lease = gc::OwnedTempLease::create(state_dir.path(), "attempt")
+            .map_err(|error| PolicyError::UnsupportedAction(error.to_string()))?;
         let attempt_root = state_dir.path().join("workspace");
         let attempt_string = attempt_root.to_string_lossy().to_string();
         if let Err(error) = git_checked(
@@ -659,6 +665,7 @@ impl GitAttemptTransaction {
         }
         let attempt_policy = WorkspacePolicy::new(&attempt_root)?;
         self.state_dir = Some(state_dir);
+        self.state_lease = Some(state_lease);
         self.attempt_root = Some(attempt_root);
         Ok(attempt_policy)
     }
@@ -734,6 +741,7 @@ impl GitAttemptTransaction {
                 &["worktree", "remove", "--force", &path],
                 Duration::from_secs(30),
             );
+            self.state_lease.take();
             self.state_dir.take();
             if let Err(error) = cleanup_result {
                 return Err(error);

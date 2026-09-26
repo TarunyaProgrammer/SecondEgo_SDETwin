@@ -6,7 +6,7 @@ use secondego_model::{ModelProvider, ProviderContext, ProviderError};
 use secondego_repository::RepositoryIndexer;
 use secondego_tools::{
     CommandPolicy, CommandRunner, FileTool, GitAttemptTransaction, PolicyError, SearchTool,
-    ToolResult, ToolRouter, WorkspacePolicy,
+    ToolResult, ToolRouter, WorkspacePolicy, gc::OwnedTempLease,
 };
 use secondego_verification::{VerificationEngine, VerificationResult};
 use std::path::Path;
@@ -16,11 +16,17 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MAX_CLONE_BYTES: u64 = 1_000_000_000;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ResolvedRepository {
     pub source: String,
     pub root: std::path::PathBuf,
     pub cloned: bool,
+    _lease: Option<OwnedTempLease>,
+}
+
+/// Reclaim stale SecondEgo-owned temp directories before a new run starts.
+pub fn collect_garbage() -> secondego_tools::gc::GcReport {
+    secondego_tools::gc::collect_garbage()
 }
 
 /// Resolve a local path or acquire a bounded shallow clone of a public GitHub repository.
@@ -33,7 +39,13 @@ pub fn resolve_repository(source: impl AsRef<str>) -> Result<ResolvedRepository,
     }
     if let Some(path) = github_path(value)? {
         let target = unique_clone_target(&path.1)?;
-        let clone_root = target.parent().map(std::path::Path::to_path_buf);
+        let clone_root = target
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .ok_or_else(|| RuntimeError::Repository("invalid clone target".into()))?;
+        let lease = OwnedTempLease::create(&clone_root, "remote").map_err(|error| {
+            RuntimeError::Repository(format!("could not reserve clone directory: {error}"))
+        })?;
         let clone_url = format!("https://github.com/{}/{}.git", path.0, path.1);
         let mut child = Command::new("git")
             .args([
@@ -71,9 +83,6 @@ pub fn resolve_repository(source: impl AsRef<str>) -> Result<ResolvedRepository,
                         .chars()
                         .take(300)
                         .collect::<String>();
-                    if let Some(root) = &clone_root {
-                        let _ = std::fs::remove_dir_all(root);
-                    }
                     return Err(RuntimeError::Repository(format!(
                         "GitHub clone failed: {detail}"
                     )));
@@ -83,9 +92,6 @@ pub fn resolve_repository(source: impl AsRef<str>) -> Result<ResolvedRepository,
             if Instant::now() >= deadline {
                 let _ = child.kill();
                 let _ = child.wait();
-                if let Some(root) = &clone_root {
-                    let _ = std::fs::remove_dir_all(root);
-                }
                 return Err(RuntimeError::Repository(
                     "GitHub clone timed out after 180 seconds".into(),
                 ));
@@ -93,17 +99,11 @@ pub fn resolve_repository(source: impl AsRef<str>) -> Result<ResolvedRepository,
             std::thread::sleep(Duration::from_millis(100));
         }
         if !target.join(".git").is_dir() {
-            if let Some(root) = &clone_root {
-                let _ = std::fs::remove_dir_all(root);
-            }
             return Err(RuntimeError::Repository(
                 "GitHub clone did not produce a Git repository".into(),
             ));
         }
         if directory_size(&target)? > MAX_CLONE_BYTES {
-            if let Some(root) = &clone_root {
-                let _ = std::fs::remove_dir_all(root);
-            }
             return Err(RuntimeError::Repository(
                 "cloned repository exceeds the 1 GB safety limit".into(),
             ));
@@ -112,6 +112,7 @@ pub fn resolve_repository(source: impl AsRef<str>) -> Result<ResolvedRepository,
             source: value.into(),
             root: target,
             cloned: true,
+            _lease: Some(lease),
         });
     }
     if value.contains("://") {
@@ -131,6 +132,7 @@ pub fn resolve_repository(source: impl AsRef<str>) -> Result<ResolvedRepository,
         source: value.into(),
         root,
         cloned: false,
+        _lease: None,
     })
 }
 

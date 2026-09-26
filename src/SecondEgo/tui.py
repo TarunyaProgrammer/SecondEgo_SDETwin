@@ -8,6 +8,7 @@ from SecondEgo.config import configured_model, configured_presentation_mode
 from SecondEgo.core.state import AcceptanceCriterion
 from SecondEgo.core.events import EngineEvent
 from SecondEgo.repository.source import RepositorySourceError, resolve_repository
+from SecondEgo.lifecycle import collect_garbage
 
 
 def _print_event(event: EngineEvent) -> None:
@@ -56,6 +57,9 @@ def _read_multiline_issue() -> str:
 
 
 def main() -> int:
+    gc = collect_garbage()
+    if gc.deleted:
+        print(f"  {_paint('90', f'garbage collector reclaimed {gc.deleted} stale temp directories')}")
     presentation_mode = configured_presentation_mode()
     _banner()
     repository_text = input(_paint("36", "Repository path or GitHub URL › ")).strip() or "."
@@ -73,32 +77,37 @@ def main() -> int:
             event_sink=_print_event if presentation_mode.value == "events" else None,
         )
     except (RepositorySourceError, ValueError) as exc:
+        if "repository" in locals():
+            repository.cleanup()
         print(f"Invalid repository: {exc}")
         return 2
-    result = asyncio.run(
-        engine.run_with_planner(
-            task=issue,
-            acceptance_criteria=(AcceptanceCriterion("Implement and verify the supplied issue"),),
-            planner=build_gemini_planner(engine.resources, configured_model()),
+    try:
+        result = asyncio.run(
+            engine.run_with_planner(
+                task=issue,
+                acceptance_criteria=(AcceptanceCriterion("Implement and verify the supplied issue"),),
+                planner=build_gemini_planner(engine.resources, configured_model()),
+            )
         )
-    )
-    print(f"\n  {_paint('90', 'RUN COMPLETE')}  {result.state.status.value}  ·  {result.state.phase.value}")
-    print(
-        json.dumps(
-            {
-                "run_id": result.state.run_id,
-                "status": result.state.status.value,
-                "termination_reason": result.state.termination_reason,
-                "changed_paths": sorted(result.state.changed_paths),
-                "verification": {
-                    "passed": result.verification.passed,
-                    "failure_class": result.verification.failure_class.value,
+        print(f"\n  {_paint('90', 'RUN COMPLETE')}  {result.state.status.value}  ·  {result.state.phase.value}")
+        print(
+            json.dumps(
+                {
+                    "run_id": result.state.run_id,
+                    "status": result.state.status.value,
+                    "termination_reason": result.state.termination_reason,
+                    "changed_paths": sorted(result.state.changed_paths),
+                    "verification": {
+                        "passed": result.verification.passed,
+                        "failure_class": result.verification.failure_class.value,
+                    },
                 },
-            },
-            indent=2,
+                indent=2,
+            )
         )
-    )
-    return 0 if result.verification.passed else 1
+        return 0 if result.verification.passed else 1
+    finally:
+        repository.cleanup()
 
 
 if __name__ == "__main__":

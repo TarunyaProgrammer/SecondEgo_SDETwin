@@ -20,6 +20,7 @@ from SecondEgo.core.events import EngineEvent
 from SecondEgo.core.state import AcceptanceCriterion
 from SecondEgo.repository.source import RepositorySourceError, resolve_repository, validate_repository_source
 from SecondEgo.storage.redaction import redact_sensitive
+from SecondEgo.lifecycle import collect_garbage
 
 
 MAX_BODY_BYTES = 32_768
@@ -104,6 +105,7 @@ class RunRegistry:
             return self._runs.get(request_id)
 
     def _run(self, record: RunRecord) -> None:
+        resolved = None
         try:
             resolved = resolve_repository(record.repository)
             with record.lock:
@@ -130,6 +132,9 @@ class RunRegistry:
             with record.lock:
                 record.status = "FAILED"
                 record.error = f"{type(exc).__name__}: {redact_sensitive(str(exc))[:500]}"
+        finally:
+            if resolved is not None:
+                resolved.cleanup()
 
 
 def _result_payload(result: Any) -> dict[str, Any]:
@@ -340,6 +345,9 @@ class DesktopGateway:
 
 
 def main() -> int:
+    gc = collect_garbage()
+    if gc.deleted:
+        print(f"SecondEgo garbage collector reclaimed {gc.deleted} stale temp directories", flush=True)
     parser = argparse.ArgumentParser(description="Run the optional SecondEgo local observer UI.")
     parser.add_argument("--host", default="127.0.0.1", help="bind address; loopback is recommended")
     parser.add_argument("--port", default=8787, type=int)

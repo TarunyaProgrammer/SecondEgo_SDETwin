@@ -23,6 +23,10 @@ opens a multi-line mission editor. Paste or type the complete issue and finish
 with a line containing `.done` (Ctrl-D also ends input). The harness then shows
 live phase/tool evidence and a final machine-readable JSON report.
 
+The evaluator-facing default is headless: `make run` does not start Electron,
+the notch shell, or any browser window. If you want the entire local judge flow
+in one command, use `make judge`.
+
 Run the regression suite separately:
 
 ```bash
@@ -35,8 +39,10 @@ The required Makefile interface is:
 | --- | --- |
 | `make setup` | Create the Python environment, install dependencies, and build the Rust CLI and gateway. |
 | `make run` | Launch the default Rust evaluation harness. |
+| `make judge` | Run setup and then launch the same headless harness in one command. |
 | `make test` | Run the Python contract/evaluation tests. |
 | `make clean` | Remove generated Python/build artifacts. |
+| `make gc` | Collect stale SecondEgo-owned temp clones/worktrees using the bounded retention policy. |
 
 Rust-specific checks are also available:
 
@@ -122,7 +128,8 @@ make run
 
 Remote sources are acquired as bounded shallow clones into a temporary local
 Git repository. The normal clean-worktree transaction and verification path is
-then used. SecondEgo does not push changes back to GitHub.
+then used. Successful runs remove the clone; the crash-safe collector reclaims
+stale leftovers. SecondEgo does not push changes back to GitHub.
 
 Remote acquisition currently supports public HTTPS GitHub URLs only. It rejects
 credentials, query strings, unsupported protocols, and malformed repository
@@ -214,6 +221,18 @@ make run UI_MODE=events
 The terminal interface is intentionally compact and state-led. It shows the
 current execution phase, tool/verification events, and final outcome without
 inventing progress percentages or agent activity.
+
+The desktop UI is an explicit opt-in switch. It is off by default:
+
+```bash
+make ui                 # build and open the macOS notch companion
+make run UI=on          # same opt-in through the standard launcher
+make run UI_MODE=events # headless run with compact terminal events
+```
+
+`UI=off` is the default and is the mode the evaluator should use. The UI is an
+observer only; turning it on never changes planning, tools, permissions, or
+verification.
 
 The optional browser observer is started with:
 
@@ -312,6 +331,7 @@ present.
 - [`evaluation/README.md`](evaluation/README.md): deterministic target-repository rehearsal.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): contribution workflow.
 - [`SECURITY.md`](SECURITY.md): security expectations and reporting.
+- [`docs/context/GARBAGE_COLLECTION.md`](docs/context/GARBAGE_COLLECTION.md): temporary-state lifecycle policy.
 
 ## License
 

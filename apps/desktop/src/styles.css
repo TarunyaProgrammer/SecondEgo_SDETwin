@@ -60,12 +60,34 @@ body.notch-mode #root { min-height: 100vh; }
 .notch-shell.notch-closed .notch-drawer,
 .notch-shell.notch-closed > :not(.command-notch) { display: none; }
 .notch-shell.notch-closed .command-notch { border-radius: 0 0 17px 17px; }
-.notch-shell.notch-open { width: min(920px, calc(100vw - 24px)); max-height: 820px; overflow: auto; padding-bottom: 16px; }
+.notch-shell.notch-open { width: min(760px, calc(100vw - 24px)); max-height: 620px; overflow: auto; padding-bottom: 10px; }
 .notch-shell.notch-open .command-notch { border-radius: 0 0 18px 18px; }
-.notch-shell.notch-open .notch-drawer { grid-template-columns: .8fr 1.35fr .7fr; gap: 18px; padding: 18px 20px 20px; }
-.notch-shell.notch-open .notch-intro h2 { font-size: 19px; }
-.notch-shell.notch-open .village-layout { grid-template-columns: 1.6fr .65fr; gap: 12px; margin: 12px; }
-.notch-shell.notch-open .village-map { height: 430px; }
-.notch-shell.notch-open .stage-header { padding: 13px 15px; }
-.notch-shell.notch-open .mission-panel { padding: 15px; }
+.notch-shell.notch-open .notch-drawer { grid-template-columns: .85fr 1.3fr .72fr; gap: 14px; padding: 14px 16px 16px; }
+.notch-shell.notch-open .notch-intro h2 { font-size: 17px; line-height: 1.05; }
+.notch-shell.notch-open .notch-intro p { margin: 8px 0 0; font-size: 11px; line-height: 1.35; }
+.notch-shell.notch-open .notch-fields { gap: 8px; }
+.notch-shell.notch-open input, .notch-shell.notch-open textarea { padding: 8px 9px; font-size: 11px; }
+.notch-shell.notch-open .notch-fields textarea { min-height: 56px; }
+.notch-shell.notch-open .advanced-fields summary { margin-bottom: 8px; }
+.notch-shell.notch-open .start-button { padding: 10px 8px; font-size: 10px; }
+.notch-shell.notch-open .village-layout { grid-template-columns: 1.55fr .72fr; gap: 10px; margin: 10px; }
+.notch-shell.notch-open .village-map { height: 290px; }
+.notch-shell.notch-open .worker-understand { left: 4%; top: 53%; }
+.notch-shell.notch-open .worker-explore { left: 34%; top: 10%; }
+.notch-shell.notch-open .worker-plan { right: 4%; top: 19%; }
+.notch-shell.notch-open .worker-execute { right: 4%; bottom: 22%; top: auto; }
+.notch-shell.notch-open .worker-verify { left: 7%; bottom: 9%; }
+.notch-shell.notch-open .worker-recover { left: 47%; bottom: 2%; }
+.notch-shell.notch-open .worker-copy { min-width: 76px; }
+.notch-shell.notch-open .worker-copy strong { font-size: 11px; }
+.notch-shell.notch-open .worker-copy span { font-size: 8px; }
+.notch-shell.notch-open .stage-header { padding: 10px 12px; }
+.notch-shell.notch-open .stage-header h2 { font-size: 18px; }
+.notch-shell.notch-open .mission-panel { padding: 12px; }
+.notch-shell.notch-open .mission-status { font-size: 25px; margin: 12px 0 8px; }
+.notch-shell.notch-open .mission-issue { min-height: 40px; margin: 0 0 10px; font-size: 11px; line-height: 1.35; }
+.notch-shell.notch-open .phase-list { margin-top: 10px; }
+.notch-shell.notch-open .phase-row { padding: 5px 0; font-size: 9px; }
+.notch-shell.notch-open .phase-row small { font-size: 8px; }
+.notch-shell.notch-open .mission-note { margin-top: 10px; font-size: 9px; line-height: 1.35; }
 .notch-shell.notch-open .evidence-grid, .notch-shell.notch-open .evidence-panel { display: none; }

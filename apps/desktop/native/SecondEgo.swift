@@ -1,5 +1,11 @@
 import Cocoa
+import Foundation
 import WebKit
+
+final class NotchWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+}
 
 final class NotchController: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     private let root: URL
@@ -19,18 +25,19 @@ final class NotchController: NSObject, WKScriptMessageHandler, WKNavigationDeleg
         startGateway()
 
         let configuration = WKWebViewConfiguration()
-        let bridge = "window.secondEgoWindow={setExpanded:function(expanded){window.webkit.messageHandlers.secondEgoWindow.postMessage(!!expanded);return Promise.resolve();}};"
+        let bridge = "window.secondEgoWindow={setExpanded:function(expanded){window.webkit.messageHandlers.secondEgoWindow.postMessage(!!expanded);return Promise.resolve();}};window.addEventListener('error',function(event){window.webkit.messageHandlers.secondEgoConsole.postMessage(String(event.message||'WebKit JavaScript error'));});window.addEventListener('unhandledrejection',function(event){window.webkit.messageHandlers.secondEgoConsole.postMessage(String(event.reason||'Unhandled promise rejection'));});"
         configuration.userContentController.addUserScript(
             WKUserScript(source: bridge, injectionTime: .atDocumentStart, forMainFrameOnly: true)
         )
         configuration.userContentController.add(self, name: "secondEgoWindow")
+        configuration.userContentController.add(self, name: "secondEgoConsole")
 
         webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = self
         webView.autoresizingMask = [.width, .height]
         webView.setValue(false, forKey: "drawsBackground")
 
-        window = NSWindow(
+        window = NotchWindow(
             contentRect: bounds(expanded: false),
             styleMask: [.borderless],
             backing: .buffered,
@@ -50,14 +57,13 @@ final class NotchController: NSObject, WKScriptMessageHandler, WKNavigationDeleg
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
 
-        let index = root.appendingPathComponent("apps/desktop/dist/index.html")
-        var components = URLComponents(url: index, resolvingAgainstBaseURL: false)!
+        var components = URLComponents(string: "http://127.0.0.1:\(port)/")!
         components.queryItems = [
             URLQueryItem(name: "notch", value: "1"),
             URLQueryItem(name: "token", value: token),
             URLQueryItem(name: "gateway", value: "http://127.0.0.1:\(port)"),
         ]
-        webView.loadFileURL(components.url!, allowingReadAccessTo: root.appendingPathComponent("apps/desktop/dist"))
+        loadWhenGatewayIsReady(components.url!, attempt: 0)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -73,14 +79,41 @@ final class NotchController: NSObject, WKScriptMessageHandler, WKNavigationDeleg
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        if message.name == "secondEgoConsole" {
+            NSLog("SecondEgo UI JavaScript error: %@", String(describing: message.body))
+            return
+        }
         guard message.name == "secondEgoWindow", let expanded = message.body as? Bool else { return }
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.window.setFrame(self.bounds(expanded: expanded), display: true, animate: true)
             NSApp.activate(ignoringOtherApps: true)
             NSRunningApplication.current.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
-            self.window.orderFrontRegardless()
+            if expanded {
+                self.window.makeKeyAndOrderFront(nil)
+                self.webView.window?.makeFirstResponder(self.webView)
+            } else {
+                self.window.orderFrontRegardless()
+            }
         }
+    }
+
+    private func loadWhenGatewayIsReady(_ url: URL, attempt: Int) {
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/api/health")!)
+        request.setValue(token, forHTTPHeaderField: "X-SecondEgo-Token")
+        URLSession.shared.dataTask(with: request) { [weak self] _, response, _ in
+            let ready = (response as? HTTPURLResponse)?.statusCode == 200
+            if ready || attempt >= 60 {
+                DispatchQueue.main.async {
+                    if !ready { NSLog("SecondEgo gateway readiness timed out; loading UI anyway") }
+                    self?.webView.load(URLRequest(url: url))
+                }
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                self?.loadWhenGatewayIsReady(url, attempt: attempt + 1)
+            }
+        }.resume()
     }
 
     func stop() {
@@ -90,8 +123,8 @@ final class NotchController: NSObject, WKScriptMessageHandler, WKNavigationDeleg
     private func bounds(expanded: Bool) -> NSRect {
         let screen = NSScreen.main ?? NSScreen.screens[0]
         let screenFrame = screen.frame
-        let width: CGFloat = expanded ? 920 : 236
-        let height: CGFloat = expanded ? 820 : 38
+        let width: CGFloat = expanded ? 760 : 236
+        let height: CGFloat = expanded ? 620 : 38
         return NSRect(
             x: screenFrame.midX - width / 2,
             y: screenFrame.maxY - height,
@@ -112,6 +145,7 @@ final class NotchController: NSObject, WKScriptMessageHandler, WKNavigationDeleg
         var environment = ProcessInfo.processInfo.environment
         environment["SECONDEGO_UI_TOKEN"] = token
         environment["SECONDEGO_GATEWAY_PORT"] = port
+        environment["SECONDEGO_UI_DIST"] = root.appendingPathComponent("apps/desktop/dist").path
         process.environment = environment
         process.standardOutput = FileHandle.standardOutput
         process.standardError = FileHandle.standardError

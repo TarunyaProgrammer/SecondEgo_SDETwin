@@ -10,6 +10,7 @@ from SecondEgo.config import configured_model
 from SecondEgo.core.events import EngineEvent
 from SecondEgo.core.state import AcceptanceCriterion
 from SecondEgo.model.base import ActionProposal
+from SecondEgo.lifecycle import collect_garbage
 from SecondEgo.orchestration.engine import HarnessEngine
 from SecondEgo.repository.source import RepositorySourceError, resolve_repository
 from SecondEgo.storage.redaction import redact_sensitive
@@ -17,6 +18,9 @@ from SecondEgo.verification.contracts import FailureRecord
 
 
 def main() -> int:
+    gc = collect_garbage()
+    if gc.deleted:
+        print(f"SecondEgo garbage collector reclaimed {gc.deleted} stale temp directories", file=sys.stderr)
     parser = argparse.ArgumentParser(description="Run SecondEgo with an auditable action plan.")
     parser.add_argument("solve", help="literal command: solve")
     parser.add_argument("--repo", required=True, help="target repository path or HTTPS GitHub URL")
@@ -45,41 +49,44 @@ def main() -> int:
     if repository.cloned:
         print(f"SecondEgo cloned repository to: {repository.root}", file=sys.stderr)
 
-    resources = build_resources(
-        max_model_calls=arguments.max_model_calls,
-        max_tool_calls=arguments.max_tool_calls,
-        max_retries=arguments.max_retries,
-    )
-    engine = build_engine(
-        repository.root,
-        resources=resources,
-        state_db=arguments.state_db,
-        event_sink=_print_event if arguments.ui else None,
-    )
-    if arguments.plan:
-        plan = _load_plan(arguments.plan)
-        result = engine.run(
-            task=arguments.issue,
-            acceptance_criteria=tuple(
-                AcceptanceCriterion(description=item) for item in plan.get("acceptance_criteria", [])
-            ),
-            actions=tuple(_proposal(item) for item in plan.get("actions", [])),
-            verification_commands=tuple(
-                tuple(command) for command in plan.get("verification_commands", [])
-            ),
-            recovery_actions=tuple(_proposal(item) for item in plan.get("recovery_actions", [])),
+    try:
+        resources = build_resources(
+            max_model_calls=arguments.max_model_calls,
+            max_tool_calls=arguments.max_tool_calls,
+            max_retries=arguments.max_retries,
         )
-    else:
-        planner = build_gemini_planner(resources, arguments.model)
-        result = asyncio.run(
-            engine.run_with_planner(
+        engine = build_engine(
+            repository.root,
+            resources=resources,
+            state_db=arguments.state_db,
+            event_sink=_print_event if arguments.ui else None,
+        )
+        if arguments.plan:
+            plan = _load_plan(arguments.plan)
+            result = engine.run(
                 task=arguments.issue,
-                acceptance_criteria=(),
-                planner=planner,
+                acceptance_criteria=tuple(
+                    AcceptanceCriterion(description=item) for item in plan.get("acceptance_criteria", [])
+                ),
+                actions=tuple(_proposal(item) for item in plan.get("actions", [])),
+                verification_commands=tuple(
+                    tuple(command) for command in plan.get("verification_commands", [])
+                ),
+                recovery_actions=tuple(_proposal(item) for item in plan.get("recovery_actions", [])),
             )
-        )
-    print(json.dumps(_report(result), indent=2, default=str))
-    return 0 if result.verification.passed else 1
+        else:
+            planner = build_gemini_planner(resources, arguments.model)
+            result = asyncio.run(
+                engine.run_with_planner(
+                    task=arguments.issue,
+                    acceptance_criteria=(),
+                    planner=planner,
+                )
+            )
+        print(json.dumps(_report(result), indent=2, default=str))
+        return 0 if result.verification.passed else 1
+    finally:
+        repository.cleanup()
 
 
 def _load_plan(path: Path) -> dict[str, Any]:

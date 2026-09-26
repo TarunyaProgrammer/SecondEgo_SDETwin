@@ -5,10 +5,17 @@ use std::path::PathBuf;
 
 use secondego_core::ActionProposal;
 use secondego_model::{GeminiProvider, ScriptedProvider};
-use secondego_runtime::{RustEngine, resolve_repository};
+use secondego_runtime::{RustEngine, collect_garbage, resolve_repository};
 
 fn main() {
     let arguments: Vec<String> = env::args().skip(1).collect();
+    let gc = collect_garbage();
+    if gc.deleted > 0 {
+        eprintln!(
+            "SecondEgo garbage collector: reclaimed {} stale temp directories",
+            gc.deleted
+        );
+    }
     let interactive = arguments.iter().any(|argument| argument == "--interactive");
     if interactive {
         install_cancel_handler();

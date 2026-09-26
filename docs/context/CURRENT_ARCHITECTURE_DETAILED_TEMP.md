@@ -133,6 +133,8 @@ The required commands are:
 | --- | --- |
 | `make setup` | Creates `.venv`, installs the Python compatibility dependencies and project, and builds the Rust CLI/gateway in release mode |
 | `make run` | Builds the Rust release CLI if needed, prompts for the repository path and issue, and runs the Rust engine; `ENGINE=python` selects the compatibility TUI |
+| `make ui` | Explicitly builds and launches the optional macOS notch observer; UI is off by default |
+| `make run UI=on` | Uses the same standard launcher with the optional notch observer enabled |
 | `make test` | Runs the full contract suite with pytest |
 | `make clean` | Removes generated virtualenv/build/cache artifacts |
 
@@ -838,6 +840,7 @@ The engine now has an explicit presentation boundary:
 ```text
 make run                  -> Rust headless/default evaluator path
 make run UI_MODE=events   -> same run plus compact event display
+make run UI=on            -> explicit opt-in notch observer
 make desktop              -> optional loopback browser observer
 ```
 
