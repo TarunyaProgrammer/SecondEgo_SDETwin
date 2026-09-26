@@ -37,6 +37,9 @@ class CommandPolicy:
 
     @classmethod
     def default(cls) -> "CommandPolicy":
+        # Include versioned python3.x executables so sys.executable resolves
+        # correctly on any Python 3 install (e.g. python3.12, python3.14).
+        versioned_pythons = {f"python3.{minor}" for minor in range(9, 20)}
         return cls(
             allowed_executables=frozenset(
                 {
@@ -50,6 +53,7 @@ class CommandPolicy:
                     "uv",
                 }
             )
+            | versioned_pythons
         )
 
     def validate(self, argv: Iterable[str], timeout_seconds: float) -> tuple[str, ...]:
