@@ -1,0 +1,2 @@
+"""Validated tool contracts."""
+
