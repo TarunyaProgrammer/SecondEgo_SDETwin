@@ -75,7 +75,7 @@ impl Default for CommandPolicy {
     fn default() -> Self {
         Self {
             allowed_executables: [
-                "git", "npm", "pnpm", "pytest", "python", "python3", "ruff", "uv",
+                "cargo", "git", "npm", "pnpm", "pytest", "python", "python3", "ruff", "uv",
             ]
             .into_iter()
             .map(str::to_owned)
@@ -886,6 +886,14 @@ mod tests {
     #[test]
     fn command_policy_requires_allowlisted_argv() {
         let policy = CommandPolicy::default();
+        assert!(
+            policy
+                .validate(
+                    &["cargo".into(), "test".into(), "--offline".into()],
+                    Duration::from_secs(1)
+                )
+                .is_ok()
+        );
         assert_eq!(
             policy.validate(&["curl".into()], Duration::from_secs(1)),
             Err(PolicyError::ExecutableNotAllowlisted("curl".into()))
