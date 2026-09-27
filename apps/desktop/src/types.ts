@@ -26,6 +26,22 @@ export type RunResult = {
   resource_usage: Record<string, number>;
   verification: Verification;
   evidence: Array<Record<string, unknown>>;
+  target_mutated?: boolean;
+  lenses?: string[];
+  findings?: DiscoveryFinding[];
+};
+
+export type DiscoveryFinding = {
+  id: string;
+  kind: string;
+  status: string;
+  title: string;
+  summary: string;
+  severity: string;
+  confidence: number;
+  affected_paths: string[];
+  evidence: Array<{ reference: string; path: string; line_start: number; line_end: number; summary: string; confidence: number }>;
+  verification_plan: string[];
 };
 
 export type RunView = {
@@ -33,6 +49,7 @@ export type RunView = {
   repository: string;
   issue: string;
   model: string;
+  mode?: "task" | "discover";
   status: string;
   events: EngineEvent[];
   result: RunResult | null;

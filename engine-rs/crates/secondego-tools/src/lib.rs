@@ -753,6 +753,15 @@ impl GitAttemptTransaction {
     }
 }
 
+// Runtime error paths must never leave an editable worktree behind. Explicit
+// `finish` remains the normal path; this is the final safety net for an early
+// return, cancellation, or unexpected panic after `begin` succeeds.
+impl Drop for GitAttemptTransaction {
+    fn drop(&mut self) {
+        self.abort();
+    }
+}
+
 fn git_checked(cwd: &Path, args: &[&str], timeout: Duration) -> Result<ToolResult, PolicyError> {
     git_checked_with_limit(cwd, args, timeout, DEFAULT_MAX_OUTPUT_BYTES)
 }
@@ -963,6 +972,33 @@ mod tests {
             fs::read_to_string(root.path().join("README.md")).unwrap(),
             "before\n"
         );
+    }
+
+    #[test]
+    fn dropped_active_transaction_removes_its_detached_worktree() {
+        let root = tempfile::tempdir().unwrap();
+        run_git(root.path(), &["init", "-q"]);
+        run_git(root.path(), &["config", "user.email", "test@example.com"]);
+        run_git(root.path(), &["config", "user.name", "SecondEgo Test"]);
+        run_git(root.path(), &["config", "commit.gpgsign", "false"]);
+        fs::write(root.path().join("README.md"), "before\n").unwrap();
+        run_git(root.path(), &["add", "README.md"]);
+        run_git(root.path(), &["commit", "-qm", "initial"]);
+        let attempt_root = {
+            let policy = WorkspacePolicy::new(root.path()).unwrap();
+            let mut transaction = GitAttemptTransaction::new(policy);
+            let attempt = transaction.begin().unwrap();
+            attempt.root
+        };
+
+        assert!(!attempt_root.exists());
+        let worktrees = Command::new("git")
+            .args(["worktree", "list", "--porcelain"])
+            .current_dir(root.path())
+            .output()
+            .unwrap();
+        assert!(worktrees.status.success());
+        assert!(!String::from_utf8_lossy(&worktrees.stdout).contains("secondego-attempt-"));
     }
 
     fn run_git(cwd: &Path, args: &[&str]) {

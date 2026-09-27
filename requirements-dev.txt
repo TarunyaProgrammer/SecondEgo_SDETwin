@@ -1,0 +1,3 @@
+# Test-only dependencies. The headless Rust evaluator harness does not require
+# Python packages at runtime.
+pytest>=8

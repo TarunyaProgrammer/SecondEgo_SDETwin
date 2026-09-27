@@ -2,16 +2,25 @@ use std::env;
 use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::thread;
+use std::time::Duration;
 
 use secondego_core::ActionProposal;
-use secondego_model::{ConfiguredProvider, ScriptedProvider};
+use secondego_model::{ConfiguredProvider, ProviderKind, ScriptedProvider, configured_model};
 use secondego_runtime::discovery::{DiscoveryLens, DiscoveryRequest, discover};
-use secondego_runtime::{RustEngine, collect_garbage, resolve_repository};
+use secondego_runtime::{
+    CancellationToken, RuntimeError, RustEngine, collect_garbage, resolve_repository,
+    resolve_repository_with_cancellation,
+};
 
-const CORAL: &str = "38;2;238;101;71";
+const CORAL: &str = "38;2;255;205;0";
 const PARCHEMENT: &str = "38;2;255;241;216";
-const PEACH: &str = "38;2;255;185;156";
-const MUTED: &str = "38;2;166;131;119";
+const PEACH: &str = "38;2;223;143;45";
+const MUTED: &str = "38;2;170;143;92";
+static INTERRUPT_REQUESTED: AtomicBool = AtomicBool::new(false);
+static RUN_ACTIVE: AtomicBool = AtomicBool::new(false);
+static PARENT_TERMINAL_PGRP: AtomicI32 = AtomicI32::new(0);
 
 fn main() {
     let arguments: Vec<String> = env::args().skip(1).collect();
@@ -41,8 +50,19 @@ fn main() {
         return;
     }
     let interactive = arguments.iter().any(|argument| argument == "--interactive");
+    let cancellation = CancellationToken::default();
     if interactive {
         install_cancel_handler();
+    }
+    let _terminal_foreground = interactive.then(take_terminal_foreground);
+    if interactive {
+        let bridge = cancellation.clone();
+        thread::spawn(move || {
+            while !INTERRUPT_REQUESTED.load(Ordering::Acquire) {
+                thread::sleep(Duration::from_millis(50));
+            }
+            bridge.cancel();
+        });
         print_banner();
     }
     let workspace = value(&arguments, "--workspace")
@@ -58,24 +78,61 @@ fn main() {
         print_goodbye("No mission entered. The village is going to sleep.");
         return;
     }
+    let script = value(&arguments, "--script");
+    let model_identity = if script.is_some() {
+        ("scripted".to_owned(), "local fixture plan".to_owned())
+    } else {
+        let provider = match ProviderKind::from_environment() {
+            Ok(provider) => provider,
+            Err(error) => {
+                restore_terminal_foreground();
+                eprintln!("SecondEgo configuration error: {error}");
+                std::process::exit(2);
+            }
+        };
+        let model = match configured_model() {
+            Ok(model) => model,
+            Err(error) => {
+                restore_terminal_foreground();
+                eprintln!("SecondEgo configuration error: {error}");
+                std::process::exit(2);
+            }
+        };
+        (provider.name().to_owned(), model)
+    };
+    if interactive {
+        RUN_ACTIVE.store(true, Ordering::Release);
+    }
     let events = value(&arguments, "--ui").as_deref() == Some("events");
     let state_db = value(&arguments, "--state-db");
-    let resolved = match resolve_repository(&workspace) {
+    let resolved = match resolve_repository_with_cancellation(&workspace, Some(&cancellation)) {
         Ok(repository) => repository,
+        Err(RuntimeError::Cancelled) => {
+            RUN_ACTIVE.store(false, Ordering::Release);
+            print_goodbye("The run was stopped before repository setup began.");
+            return;
+        }
         Err(error) => {
+            RUN_ACTIVE.store(false, Ordering::Release);
+            restore_terminal_foreground();
             eprintln!("SecondEgo repository error: {error}");
             std::process::exit(2);
         }
     };
     if interactive {
-        print_run_card(&resolved.root, resolved.cloned);
+        print_run_card(
+            &resolved.root,
+            resolved.cloned,
+            &model_identity.0,
+            &model_identity.1,
+        );
     } else if resolved.cloned {
         eprintln!(
             "SecondEgo cloned repository to: {}",
             resolved.root.display()
         );
     }
-    let result = match value(&arguments, "--script") {
+    let result = match script {
         Some(script_path) => run_scripted(
             resolved.root,
             task,
@@ -83,10 +140,24 @@ fn main() {
             events,
             state_db,
             interactive,
+            cancellation,
         ),
-        None => run_configured(resolved.root, task, events, state_db, interactive),
+        None => run_configured(
+            resolved.root,
+            task,
+            events,
+            state_db,
+            interactive,
+            cancellation,
+        ),
     };
+    RUN_ACTIVE.store(false, Ordering::Release);
     if let Err(error) = result {
+        if error.to_string() == "run cancelled by user" {
+            print_goodbye("The run was stopped safely and its isolated changes were discarded.");
+            return;
+        }
+        restore_terminal_foreground();
         eprintln!("SecondEgo failed: {error}");
         std::process::exit(1);
     }
@@ -163,6 +234,7 @@ fn run_scripted(
     events: bool,
     state_db: Option<String>,
     interactive: bool,
+    cancellation: CancellationToken,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let value: serde_json::Value = serde_json::from_str(&fs::read_to_string(script)?)?;
     let proposal = if value.get("action").is_some() {
@@ -174,7 +246,8 @@ fn run_scripted(
             rationale: "replayable fixture plan".into(),
         }
     };
-    let mut engine = RustEngine::new(ScriptedProvider::new(vec![proposal]));
+    let mut engine =
+        RustEngine::new(ScriptedProvider::new(vec![proposal])).with_cancellation(cancellation);
     if interactive && !events {
         engine = engine.with_event_sink(print_live_event);
     }
@@ -187,8 +260,10 @@ fn run_configured(
     events: bool,
     state_db: Option<String>,
     interactive: bool,
+    cancellation: CancellationToken,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut engine = RustEngine::new(ConfiguredProvider::from_environment()?);
+    let mut engine =
+        RustEngine::new(ConfiguredProvider::from_environment()?).with_cancellation(cancellation);
     if interactive && !events {
         engine = engine.with_event_sink(print_live_event);
     }
@@ -249,7 +324,7 @@ fn prompt_multiline() -> String {
     );
     let mut lines = Vec::new();
     loop {
-        print!("  {} ", paint(CORAL, "│"));
+        print!("  {} ", paint(CORAL, ">"));
         let _ = io::stdout().flush();
         let mut line = String::new();
         match io::stdin().read_line(&mut line) {
@@ -266,7 +341,50 @@ fn prompt_multiline() -> String {
     lines.join("\n").trim().to_owned()
 }
 
+/// Keeps Ctrl-C scoped to the interactive harness instead of the Make process
+/// that launched it. This is a no-op for redirected/non-terminal input.
+struct TerminalForegroundGuard;
+
+impl Drop for TerminalForegroundGuard {
+    fn drop(&mut self) {
+        restore_terminal_foreground();
+    }
+}
+
+fn take_terminal_foreground() -> TerminalForegroundGuard {
+    if unsafe { libc::isatty(libc::STDIN_FILENO) } != 1 {
+        return TerminalForegroundGuard;
+    }
+    let parent_group = unsafe { libc::tcgetpgrp(libc::STDIN_FILENO) };
+    if parent_group <= 0 {
+        return TerminalForegroundGuard;
+    }
+    unsafe {
+        // Moving to a new process group makes this harness, not Make, the
+        // terminal's foreground recipient of SIGINT. Ignore SIGTTOU while
+        // transferring that foreground ownership.
+        libc::signal(libc::SIGTTOU, libc::SIG_IGN);
+        if libc::setpgid(0, 0) == 0 {
+            let harness_group = libc::getpgrp();
+            if harness_group > 0 && libc::tcsetpgrp(libc::STDIN_FILENO, harness_group) == 0 {
+                PARENT_TERMINAL_PGRP.store(parent_group, Ordering::Release);
+            }
+        }
+    }
+    TerminalForegroundGuard
+}
+
+fn restore_terminal_foreground() {
+    let parent_group = PARENT_TERMINAL_PGRP.swap(0, Ordering::AcqRel);
+    if parent_group > 0 {
+        unsafe {
+            libc::tcsetpgrp(libc::STDIN_FILENO, parent_group);
+        }
+    }
+}
+
 fn install_cancel_handler() {
+    INTERRUPT_REQUESTED.store(false, Ordering::Release);
     unsafe {
         libc::signal(
             libc::SIGINT,
@@ -276,11 +394,47 @@ fn install_cancel_handler() {
 }
 
 extern "C" fn handle_sigint(_: libc::c_int) {
-    const MESSAGE: &[u8] =
+    const STOP_REQUESTED: &[u8] =
+        b"\n  \x1b[38;2;255;185;156mStop requested. Finishing the current bounded operation; press Ctrl-C again to force quit.\x1b[0m\n";
+    const FORCE_QUIT: &[u8] = b"\n  \x1b[38;2;255;185;156mForce quit.\x1b[0m\n";
+    const PROMPT_EXIT: &[u8] =
         b"\n  \x1b[38;2;255;185;156mGoodbye for now - the village is resting.\x1b[0m\n";
+    if !RUN_ACTIVE.load(Ordering::Acquire) {
+        // Input reads can be restarted after SIGINT. At a prompt there is no
+        // transaction to protect, so exit instead of leaving a stuck read.
+        unsafe {
+            libc::write(
+                libc::STDERR_FILENO,
+                PROMPT_EXIT.as_ptr().cast(),
+                PROMPT_EXIT.len(),
+            );
+            let parent_group = PARENT_TERMINAL_PGRP.swap(0, Ordering::AcqRel);
+            if parent_group > 0 {
+                libc::tcsetpgrp(libc::STDIN_FILENO, parent_group);
+            }
+            libc::_exit(130);
+        }
+    }
+    if INTERRUPT_REQUESTED.swap(true, Ordering::AcqRel) {
+        unsafe {
+            libc::write(
+                libc::STDERR_FILENO,
+                FORCE_QUIT.as_ptr().cast(),
+                FORCE_QUIT.len(),
+            );
+            let parent_group = PARENT_TERMINAL_PGRP.swap(0, Ordering::AcqRel);
+            if parent_group > 0 {
+                libc::tcsetpgrp(libc::STDIN_FILENO, parent_group);
+            }
+            libc::_exit(130);
+        }
+    }
     unsafe {
-        libc::write(libc::STDERR_FILENO, MESSAGE.as_ptr().cast(), MESSAGE.len());
-        libc::_exit(130);
+        libc::write(
+            libc::STDERR_FILENO,
+            STOP_REQUESTED.as_ptr().cast(),
+            STOP_REQUESTED.len(),
+        );
     }
 }
 
@@ -298,49 +452,93 @@ fn print_banner() {
         "{}",
         paint(
             CORAL,
-            "╭────────────────────── SECOND EGO ──────────────────────╮"
-        )
-    );
-    println!(
-        "{}",
-        paint(
-            PARCHEMENT,
-            "│  [ ] VERIFIED CODING HARNESS                              │"
-        )
-    );
-    println!(
-        "{}",
-        paint(
-            PEACH,
-            "│  understand > explore > plan > execute > verify         │"
-        )
-    );
-    println!(
-        "{}",
-        paint(
-            MUTED,
-            "│  local-first, bounded, inspectable repository runs      │"
+            " ███████╗███████╗ ██████╗ ██████╗ ███╗   ██╗██████╗      ███████╗ ██████╗  ██████╗ "
         )
     );
     println!(
         "{}",
         paint(
             CORAL,
-            "╰────────────────────────────────────────────────────────╯"
+            " ██╔════╝██╔════╝██╔════╝██╔═══██╗████╗  ██║██╔══██╗     ██╔════╝██╔════╝ ██╔═══██╗"
         )
     );
     println!(
-        "  {}  Type Ctrl-C to cancel.\n",
+        "{}",
+        paint(
+            PEACH,
+            " ███████╗█████╗  ██║     ██║   ██║██╔██╗ ██║██║  ██║     █████╗  ██║  ███╗██║   ██║"
+        )
+    );
+    println!(
+        "{}",
+        paint(
+            MUTED,
+            " ╚════██║██╔══╝  ██║     ██║   ██║██║╚██╗██║██║  ██║     ██╔══╝  ██║   ██║██║   ██║"
+        )
+    );
+    println!(
+        "{}",
+        paint(
+            CORAL,
+            " ███████║███████╗╚██████╗╚██████╔╝██║ ╚████║██████╔╝     ███████╗╚██████╔╝╚██████╔╝"
+        )
+    );
+    println!(
+        "{}",
+        paint(
+            CORAL,
+            " ╚══════╝╚══════╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝╚═════╝      ╚══════╝ ╚═════╝  ╚═════╝ "
+        )
+    );
+    println!(
+        "{}",
+        paint(
+            PEACH,
+            "╭────────────────── SECOND EGO / VERIFIED CODING HARNESS ──────────────────╮"
+        )
+    );
+    println!(
+        "{}",
+        paint(
+            PARCHEMENT,
+            "│  ENGINE     Rust state machine + provider boundary                       │"
+        )
+    );
+    println!(
+        "{}",
+        paint(
+            PEACH,
+            "│  PIPELINE   understand > explore > plan > execute > verify               │"
+        )
+    );
+    println!(
+        "{}",
+        paint(
+            MUTED,
+            "│  EVIDENCE   repository index · bounded tools · verification               │"
+        )
+    );
+    println!(
+        "{}",
+        paint(
+            PEACH,
+            "╰─────────────────────────────────────────────────────────────────────────╯"
+        )
+    );
+    println!(
+        "  {}  Ctrl-C exits immediately at input; during a run, press once to stop safely.\n",
         paint(MUTED, "RUST ENGINE / INTERACTIVE")
     );
 }
 
-fn print_run_card(root: &std::path::Path, cloned: bool) {
+fn print_run_card(root: &std::path::Path, cloned: bool, provider: &str, model: &str) {
     let source = if cloned {
         "remote repository · shallow clone"
     } else {
         "local repository"
     };
+    let root = panel_value(&root.display().to_string(), 61);
+    let model = panel_value(model, 45);
     println!(
         "{}",
         paint(
@@ -355,11 +553,12 @@ fn print_run_card(root: &std::path::Path, cloned: bool) {
             &format!("│  ENGINE   Rust state machine + provider boundary                       │")
         )
     );
-    println!("{}", paint(PEACH, &format!("│  SOURCE   {source:<61}│")));
     println!(
         "{}",
-        paint(PEACH, &format!("│  ROOT     {:<61}│", root.display()))
+        paint(PEACH, &format!("│  MODEL    {provider:<13} {model}│"))
     );
+    println!("{}", paint(PEACH, &format!("│  SOURCE   {source:<61}│")));
+    println!("{}", paint(PEACH, &format!("│  ROOT     {root}│")));
     println!(
         "{}",
         paint(
@@ -376,6 +575,18 @@ fn print_run_card(root: &std::path::Path, cloned: bool) {
     );
 }
 
+fn panel_value(value: &str, width: usize) -> String {
+    let count = value.chars().count();
+    if count <= width {
+        return format!("{value:<width$}");
+    }
+    let shortened = value
+        .chars()
+        .take(width.saturating_sub(1))
+        .collect::<String>();
+    format!("{shortened}…")
+}
+
 fn print_live_event(event: &secondego_core::EngineEvent) {
     let icon = match event.event_type.as_str() {
         "tool.completed" => "→",
@@ -383,11 +594,23 @@ fn print_live_event(event: &secondego_core::EngineEvent) {
         "run.terminated" => "■",
         _ => "·",
     };
+    let message = event
+        .payload
+        .get("message")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            event
+                .payload
+                .get("reason")
+                .and_then(serde_json::Value::as_str)
+        })
+        .unwrap_or(&event.event_type);
     println!(
-        "  {} {:<10} {}",
+        "  {} {:<10} {:<22} {}",
         paint(CORAL, icon),
         paint(MUTED, &format!("{:?}", event.phase)),
-        event.event_type
+        event.event_type,
+        message
     );
 }
 

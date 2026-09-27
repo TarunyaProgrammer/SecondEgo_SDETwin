@@ -18,6 +18,10 @@ make setup
 make run
 ```
 
+The concise evaluator contract, host prerequisites, dependency behaviour, and
+submission checklist are in [SUBMISSION.md](SUBMISSION.md). No `.env` file or
+optional desktop dependency is required for this path.
+
 `make run` launches the Rust terminal harness, prompts for the repository, then
 opens a multi-line mission editor. Paste or type the complete issue and finish
 with a line containing `.done` (Ctrl-D also ends input). The harness then shows
@@ -57,7 +61,7 @@ The required Makefile interface is:
 
 | Command | Purpose |
 | --- | --- |
-| `make setup` | Create the Python environment, install dependencies, and build the Rust CLI and gateway. |
+| `make setup` | Build the locked Rust CLI and gateway required by evaluation. |
 | `make run` | Launch the default Rust evaluation harness. |
 | `make help` | Show the CLI commands and the discovery showcase plan. |
 | `make discover REPO=...` | Run read-only issue discovery against a repository. |
@@ -78,9 +82,9 @@ make rust-build-release
 
 The harness expects:
 
-- Python 3.12 or newer;
-- Rust/Cargo;
+- Rust/Cargo 1.85 or newer;
 - Node.js/npm only when building the optional desktop shell;
+- Python 3.12 or newer only for `make test` or the optional Python compatibility shell;
 - Git;
 - a clean Git repository with an initial commit;
 - the prescribed text-model credential in `AI_API_KEY`.
@@ -90,24 +94,29 @@ tests, model, and evaluation rules. A GitHub URL is supported for development
 rehearsals, but external network access, private-repository credentials, and
 additional model providers must not be assumed during the official evaluation.
 
-The default provider is DeepSeek and the default model is `deepseek-flash`.
-An organizer-prescribed model can be selected without changing orchestration:
+The evaluator default is DeepSeek with `deepseek-flash`. The Rust runtime uses
+these defaults unless the organizer provides an explicit DeepSeek model override:
 
 ```bash
 export SECONDEGO_PROVIDER=deepseek
 export SECONDEGO_MODEL="<PRESCRIBED_MODEL>"
 ```
 
-The evaluator credential is always read from `AI_API_KEY`; it is never stored
-by the app. Gemini remains available only as an explicit development opt-in:
+The harness reads the API key only from `AI_API_KEY`. Credentials must not be
+committed, included in prompts, or written to run evidence.
+
+For local Gemini development, an ignored `.env` may contain a Gemini key and
+matching selection. It is used only when the same variables are not already
+exported by the shell; the evaluator path remains DeepSeek by default:
 
 ```bash
-export SECONDEGO_PROVIDER=gemini
-.venv/bin/pip install '.[gemini]'
+AI_API_KEY="<LOCAL_GEMINI_KEY>"
+SECONDEGO_PROVIDER=gemini
+SECONDEGO_MODEL=gemini-3.8-flash
 ```
 
-The harness reads the API key only from `AI_API_KEY`. Credentials must not be
-committed, placed in `.env`, included in prompts, or written to run evidence.
+Run `make config` to display the resolved provider/model and whether a key is
+present. It never prints the key.
 
 ## Execution flow
 

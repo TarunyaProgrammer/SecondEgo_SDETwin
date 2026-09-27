@@ -14,14 +14,17 @@ use serde_json::Value;
 const DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com";
 const DEEPSEEK_DEFAULT_MODEL: &str = "deepseek-flash";
 const GEMINI_DEFAULT_MODEL: &str = "gemini-3.8-flash";
+const MAX_RATIONALE_CHARS: usize = 2_000;
+const FALLBACK_RATIONALE: &str = "No rationale supplied by model.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderError {
     MissingApiKey,
     UnsupportedProvider(String),
-    Transport,
+    Transport(String),
     InvalidResponse,
     InvalidAction(String),
+    ModelProviderMismatch { provider: String, model: String },
     ScriptExhausted,
 }
 
@@ -36,7 +39,11 @@ impl std::fmt::Display for ProviderError {
                 formatter,
                 "unsupported model provider: {provider}; use deepseek or gemini"
             ),
-            Self::Transport => write!(formatter, "model request failed"),
+            Self::Transport(detail) => write!(formatter, "model request failed: {detail}"),
+            Self::ModelProviderMismatch { provider, model } => write!(
+                formatter,
+                "model '{model}' does not belong to provider '{provider}'; set SECONDEGO_PROVIDER explicitly or choose a matching SECONDEGO_MODEL"
+            ),
             Self::InvalidResponse => write!(formatter, "model returned an invalid response"),
             Self::InvalidAction(message) => write!(formatter, "invalid model action: {message}"),
             Self::ScriptExhausted => {
@@ -56,7 +63,17 @@ pub enum ProviderKind {
 
 impl ProviderKind {
     pub fn from_environment() -> Result<Self, ProviderError> {
-        let value = std::env::var("SECONDEGO_PROVIDER").unwrap_or_else(|_| "deepseek".into());
+        let value = std::env::var("SECONDEGO_PROVIDER")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| {
+                let model = std::env::var("SECONDEGO_MODEL").unwrap_or_default();
+                if model.trim().to_ascii_lowercase().starts_with("gemini-") {
+                    "gemini".into()
+                } else {
+                    "deepseek".into()
+                }
+            });
         match value.trim().to_ascii_lowercase().as_str() {
             "" | "deepseek" => Ok(Self::DeepSeek),
             "gemini" => Ok(Self::Gemini),
@@ -81,10 +98,27 @@ impl ProviderKind {
 
 pub fn configured_model() -> Result<String, ProviderError> {
     let provider = ProviderKind::from_environment()?;
-    Ok(std::env::var("SECONDEGO_MODEL")
+    let model = std::env::var("SECONDEGO_MODEL")
         .ok()
         .filter(|model| !model.trim().is_empty())
-        .unwrap_or_else(|| provider.default_model().into()))
+        .unwrap_or_else(|| provider.default_model().into());
+    validate_model_for_provider(provider, &model)?;
+    Ok(model)
+}
+
+fn validate_model_for_provider(provider: ProviderKind, model: &str) -> Result<(), ProviderError> {
+    let normalized = model.trim().to_ascii_lowercase();
+    let mismatch = match provider {
+        ProviderKind::DeepSeek => normalized.starts_with("gemini-"),
+        ProviderKind::Gemini => normalized.starts_with("deepseek-"),
+    };
+    if mismatch {
+        return Err(ProviderError::ModelProviderMismatch {
+            provider: provider.name().into(),
+            model: model.into(),
+        });
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -164,6 +198,7 @@ impl ModelProvider for DeepSeekProvider {
         let key = resolve_api_key(&self.api_key)?;
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
         let response = post_json(
+            "DeepSeek",
             &url,
             &key,
             deepseek_request(&self.model, prompt),
@@ -200,41 +235,76 @@ impl ModelProvider for GeminiProvider {
         _context: &ProviderContext,
     ) -> Result<ActionProposal, ProviderError> {
         let api_key = resolve_api_key(&self.api_key)?;
-        let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-            self.model, api_key
-        );
-        let request = serde_json::json!({
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"responseMimeType": "application/json"}
-        });
+        let url = gemini_endpoint(&self.model);
+        let request = gemini_request(prompt);
         let client = Client::builder()
             .timeout(self.timeout)
             .build()
-            .map_err(|_| ProviderError::Transport)?;
+            .map_err(|error| ProviderError::Transport(error.to_string()))?;
         let response = client
             .post(url)
+            .header("x-goog-api-key", api_key)
             .json(&request)
             .send()
-            .map_err(|_| ProviderError::Transport)?;
+            .map_err(|error| ProviderError::Transport(error.to_string()))?;
         if !response.status().is_success() {
-            return Err(ProviderError::Transport);
+            return Err(http_status_error("Gemini", response.status()));
         }
         let payload: Value = response
             .json()
             .map_err(|_| ProviderError::InvalidResponse)?;
-        let text = payload
-            .get("candidates")
-            .and_then(Value::as_array)
-            .and_then(|items| items.first())
-            .and_then(|candidate| candidate.get("content"))
-            .and_then(|content| content.get("parts"))
-            .and_then(Value::as_array)
-            .and_then(|parts| parts.first())
-            .and_then(|part| part.get("text"))
-            .and_then(Value::as_str)
-            .ok_or(ProviderError::InvalidResponse)?;
-        parse_action(text)
+        parse_action(&parse_gemini_content(&payload)?)
+    }
+}
+
+fn gemini_endpoint(model: &str) -> String {
+    format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent")
+}
+
+fn gemini_request(prompt: &str) -> Value {
+    // Keep the schema shallow: `arguments` intentionally remains a dynamic
+    // object because its exact shape depends on the bounded plan action. The
+    // runtime still validates every nested field before executing anything.
+    serde_json::json!({
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseSchema": {
+                "type": "OBJECT",
+                "properties": {
+                    "action": {"type": "STRING", "enum": ["submit_plan"]},
+                    "arguments": {"type": "OBJECT"},
+                    "rationale": {"type": "STRING"}
+                },
+                "required": ["action", "arguments", "rationale"]
+            }
+        }
+    })
+}
+
+fn parse_gemini_content(payload: &Value) -> Result<String, ProviderError> {
+    let parts = payload
+        .get("candidates")
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+        .and_then(|candidate| candidate.get("content"))
+        .and_then(|content| content.get("parts"))
+        .and_then(Value::as_array)
+        .ok_or(ProviderError::InvalidResponse)?;
+    let text = parts
+        .iter()
+        .filter(|part| {
+            !part
+                .get("thought")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
+        .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .collect::<String>();
+    if text.trim().is_empty() {
+        Err(ProviderError::InvalidResponse)
+    } else {
+        Ok(text)
     }
 }
 
@@ -246,18 +316,35 @@ pub enum ConfiguredProvider {
 
 impl ConfiguredProvider {
     pub fn from_environment() -> Result<Self, ProviderError> {
-        match ProviderKind::from_environment()? {
-            ProviderKind::DeepSeek => Ok(Self::DeepSeek(DeepSeekProvider::default())),
-            ProviderKind::Gemini => Ok(Self::Gemini(GeminiProvider::default())),
-        }
+        let kind = ProviderKind::from_environment()?;
+        let model = std::env::var("SECONDEGO_MODEL")
+            .ok()
+            .filter(|model| !model.trim().is_empty())
+            .unwrap_or_else(|| kind.default_model().into());
+        validate_model_for_provider(kind, &model)?;
+        Ok(match kind {
+            ProviderKind::DeepSeek => Self::DeepSeek(DeepSeekProvider {
+                model,
+                ..DeepSeekProvider::default()
+            }),
+            ProviderKind::Gemini => Self::Gemini(GeminiProvider {
+                model,
+                ..GeminiProvider::default()
+            }),
+        })
     }
 
-    pub fn with_model(mut self, model: String) -> Self {
+    pub fn with_model(mut self, model: String) -> Result<Self, ProviderError> {
+        let kind = match &self {
+            Self::DeepSeek(_) => ProviderKind::DeepSeek,
+            Self::Gemini(_) => ProviderKind::Gemini,
+        };
+        validate_model_for_provider(kind, &model)?;
         match &mut self {
             Self::DeepSeek(provider) => provider.model = model,
             Self::Gemini(provider) => provider.model = model,
         }
-        self
+        Ok(self)
     }
 }
 
@@ -283,6 +370,7 @@ fn resolve_api_key(explicit: &Option<String>) -> Result<String, ProviderError> {
 }
 
 fn post_json(
+    provider: &str,
     url: &str,
     api_key: &str,
     request: Value,
@@ -291,17 +379,26 @@ fn post_json(
     let client = Client::builder()
         .timeout(timeout)
         .build()
-        .map_err(|_| ProviderError::Transport)?;
+        .map_err(|error| ProviderError::Transport(error.to_string()))?;
     let response = client
         .post(url)
         .bearer_auth(api_key)
         .json(&request)
         .send()
-        .map_err(|_| ProviderError::Transport)?;
+        .map_err(|error| ProviderError::Transport(error.to_string()))?;
     if !response.status().is_success() {
-        return Err(ProviderError::Transport);
+        return Err(http_status_error(provider, response.status()));
     }
     response.json().map_err(|_| ProviderError::InvalidResponse)
+}
+
+fn http_status_error(provider: &str, status: reqwest::StatusCode) -> ProviderError {
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        return ProviderError::Transport(format!(
+            "{provider} authentication failed (HTTP {status}). Verify that AI_API_KEY belongs to {provider}; the key is not printed."
+        ));
+    }
+    ProviderError::Transport(format!("{provider} returned HTTP {status}"))
 }
 
 fn deepseek_request(model: &str, prompt: &str) -> Value {
@@ -329,24 +426,65 @@ fn parse_openai_content(payload: &Value) -> Result<&str, ProviderError> {
 }
 
 pub fn parse_action(text: &str) -> Result<ActionProposal, ProviderError> {
-    let value: Value = serde_json::from_str(text).map_err(|_| ProviderError::InvalidResponse)?;
+    let value = parse_structured_json(text)?;
     let action = value
         .get("action")
         .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|action| !action.is_empty())
         .ok_or_else(|| ProviderError::InvalidAction("action must be a string".into()))?;
     let arguments = value
         .get("arguments")
         .and_then(Value::as_object)
         .ok_or_else(|| ProviderError::InvalidAction("arguments must be an object".into()))?;
-    let rationale = value
-        .get("rationale")
-        .and_then(Value::as_str)
-        .ok_or_else(|| ProviderError::InvalidAction("rationale must be a string".into()))?;
     Ok(ActionProposal {
         action: action.into(),
         arguments: Value::Object(arguments.clone()),
-        rationale: rationale.into(),
+        // Rationale never authorizes a tool or a diff. Some providers still
+        // emit it as a list/object despite a schema request, so normalize it
+        // rather than terminating a safe, otherwise-valid plan.
+        rationale: normalize_rationale(value.get("rationale")),
     })
+}
+
+fn parse_structured_json(text: &str) -> Result<Value, ProviderError> {
+    let trimmed = text.trim();
+    let json = if let Some(fenced) = trimmed.strip_prefix("```") {
+        let body_start = fenced.find('\n').ok_or(ProviderError::InvalidResponse)? + 1;
+        fenced[body_start..]
+            .strip_suffix("```")
+            .map(str::trim)
+            .ok_or(ProviderError::InvalidResponse)?
+    } else {
+        trimmed
+    };
+    serde_json::from_str(json).map_err(|_| ProviderError::InvalidResponse)
+}
+
+fn normalize_rationale(value: Option<&Value>) -> String {
+    let rationale = match value {
+        Some(Value::String(text)) => text.trim().to_owned(),
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join(" "),
+        Some(Value::Object(object)) => ["summary", "reason", "text", "rationale"]
+            .into_iter()
+            .find_map(|field| object.get(field).and_then(Value::as_str))
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_owned(),
+        _ => String::new(),
+    };
+    let rationale = if rationale.is_empty() {
+        FALLBACK_RATIONALE.into()
+    } else {
+        rationale
+    };
+    rationale.chars().take(MAX_RATIONALE_CHARS).collect()
 }
 
 #[cfg(test)]
@@ -365,6 +503,48 @@ mod tests {
         assert_eq!(request["response_format"]["type"], "json_object");
         assert_eq!(request["thinking"]["type"], "disabled");
         assert_eq!(request["messages"][1]["content"], "make a plan");
+    }
+
+    #[test]
+    fn gemini_endpoint_never_embeds_the_api_key() {
+        let endpoint = gemini_endpoint("gemini-3.8-flash");
+        assert_eq!(
+            endpoint,
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent"
+        );
+        assert!(!endpoint.contains("key="));
+    }
+
+    #[test]
+    fn gemini_request_requires_the_safe_top_level_contract() {
+        let request = gemini_request("make a plan");
+        assert_eq!(
+            request["generationConfig"]["responseMimeType"],
+            "application/json"
+        );
+        assert_eq!(
+            request["generationConfig"]["responseSchema"]["properties"]["action"]["enum"],
+            serde_json::json!(["submit_plan"])
+        );
+        assert_eq!(
+            request["generationConfig"]["responseSchema"]["properties"]["rationale"]["type"],
+            "STRING"
+        );
+    }
+
+    #[test]
+    fn gemini_content_ignores_thought_parts_and_concatenates_response_parts() {
+        let payload = serde_json::json!({
+            "candidates": [{"content": {"parts": [
+                {"text": "internal", "thought": true},
+                {"text": "{\"action\":"},
+                {"text": "\"submit_plan\",\"arguments\":{},\"rationale\":\"plan\"}"}
+            ]}}]
+        });
+        assert_eq!(
+            parse_gemini_content(&payload).unwrap(),
+            r#"{"action":"submit_plan","arguments":{},"rationale":"plan"}"#
+        );
     }
 
     #[test]
@@ -409,5 +589,41 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn action_parser_accepts_fenced_json_and_normalizes_non_authoritative_rationale() {
+        let proposal = parse_action(
+            "```json\n{\"action\":\"submit_plan\",\"arguments\":{},\"rationale\":[\"inspect cache\",\"then verify\"]}\n```",
+        )
+        .unwrap();
+        assert_eq!(proposal.action, "submit_plan");
+        assert_eq!(proposal.rationale, "inspect cache then verify");
+
+        let fallback =
+            parse_action(r#"{"action":"submit_plan","arguments":{},"rationale":{"detail":true}}"#)
+                .unwrap();
+        assert_eq!(fallback.rationale, FALLBACK_RATIONALE);
+    }
+
+    #[test]
+    fn action_parser_keeps_executable_fields_strict() {
+        assert!(matches!(
+            parse_action(r#"{"action":"","arguments":{},"rationale":"x"}"#),
+            Err(ProviderError::InvalidAction(_))
+        ));
+        assert!(matches!(
+            parse_action(r#"{"action":"submit_plan","arguments":[],"rationale":"x"}"#),
+            Err(ProviderError::InvalidAction(_))
+        ));
+    }
+
+    #[test]
+    fn configured_provider_rejects_a_cross_provider_model_override() {
+        let provider = ConfiguredProvider::DeepSeek(DeepSeekProvider::default());
+        assert!(matches!(
+            provider.with_model("gemini-3.8-flash".into()),
+            Err(ProviderError::ModelProviderMismatch { .. })
+        ));
     }
 }

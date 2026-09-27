@@ -10,8 +10,10 @@ use std::time::Duration;
 
 use secondego_core::EngineEvent;
 use secondego_model::{ConfiguredProvider, configured_model};
+use secondego_runtime::discovery::{DiscoveryLens, DiscoveryRequest, discover};
 use secondego_runtime::{
-    RunReport, RustEngine, collect_garbage, resolve_repository, validate_repository_source,
+    CancellationToken, RunReport, RuntimeError, RustEngine, collect_garbage,
+    resolve_repository_with_cancellation, validate_repository_source,
 };
 use uuid::Uuid;
 
@@ -24,8 +26,9 @@ struct RunRecord {
     model: String,
     status: String,
     events: Vec<EngineEvent>,
-    report: Option<RunReport>,
+    report: Option<serde_json::Value>,
     error: Option<String>,
+    cancellation: CancellationToken,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -93,6 +96,9 @@ fn handle(
             serde_json::json!({"ok":true,"api_version":1,"engine":"rust"}),
         ),
         ("POST", "/api/runs") => create_run(&mut stream, request.body, runs),
+        ("POST", path) if path.starts_with("/api/runs/") && path.ends_with("/cancel") => {
+            cancel_run(&mut stream, path, runs)
+        }
         ("GET", path) if path.starts_with("/api/runs/") => get_run(&mut stream, path, runs),
         _ => respond(&mut stream, 404, serde_json::json!({"error":"not found"})),
     }
@@ -141,8 +147,10 @@ fn create_run(
     if let Err(error) = validate_repository_source(&request.repository) {
         return respond(stream, 400, serde_json::json!({"error":error.to_string()}));
     }
+    let is_discovery = request.mode.as_deref() == Some("discover");
     let model = match request.model.filter(|model| !model.trim().is_empty()) {
         Some(model) => model,
+        None if is_discovery => "deterministic-discovery".into(),
         None => match configured_model() {
             Ok(model) => model,
             Err(error) => {
@@ -151,6 +159,7 @@ fn create_run(
         },
     };
     let id = Uuid::new_v4();
+    let cancellation = CancellationToken::default();
     runs.lock().unwrap().insert(
         id,
         RunRecord {
@@ -161,28 +170,78 @@ fn create_run(
             events: Vec::new(),
             report: None,
             error: None,
+            cancellation: cancellation.clone(),
         },
     );
     let runs_for_thread = runs.clone();
     let record_repository = request.repository.clone();
     let record_issue = request.issue.clone();
     let record_model = model.clone();
+    let record_mode = request.mode.clone().unwrap_or_else(|| "task".into());
+    let discovery_lenses = request.lenses.clone();
+    let discovery_max_findings = request.max_findings.unwrap_or(20);
     let event_runs = runs.clone();
+    let run_cancellation = cancellation.clone();
     thread::spawn(move || {
-        let resolved = match resolve_repository(&record_repository) {
-            Ok(value) => value,
-            Err(error) => {
-                if let Ok(mut all_runs) = runs_for_thread.lock() {
-                    if let Some(record) = all_runs.get_mut(&id) {
-                        record.status = "FAILED".into();
-                        record.error = Some(error.to_string());
+        let resolved =
+            match resolve_repository_with_cancellation(&record_repository, Some(&run_cancellation))
+            {
+                Ok(value) => value,
+                Err(error) => {
+                    if let Ok(mut all_runs) = runs_for_thread.lock() {
+                        if let Some(record) = all_runs.get_mut(&id) {
+                            let cancelled = matches!(error, RuntimeError::Cancelled);
+                            record.status = if cancelled { "CANCELLED" } else { "FAILED" }.into();
+                            record.error = (!cancelled).then(|| error.to_string());
+                        }
                     }
+                    return;
                 }
-                return;
+            };
+        if record_mode == "discover" {
+            let lenses = discovery_lenses
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|value| DiscoveryLens::parse(&value))
+                .collect();
+            let result = discover(
+                &resolved.root,
+                DiscoveryRequest {
+                    lenses,
+                    max_findings: discovery_max_findings,
+                },
+            );
+            let record = match result {
+                Ok(report) => RunRecord {
+                    repository: resolved.root.to_string_lossy().into_owned(),
+                    issue: record_issue,
+                    model: record_model,
+                    status: "COMPLETE".into(),
+                    events: report.events.clone(),
+                    report: serde_json::to_value(report).ok(),
+                    error: None,
+                    cancellation: run_cancellation.clone(),
+                },
+                Err(error) => RunRecord {
+                    repository: record_repository,
+                    issue: record_issue,
+                    model: record_model,
+                    status: "FAILED".into(),
+                    events: Vec::new(),
+                    report: None,
+                    error: Some(error),
+                    cancellation: run_cancellation.clone(),
+                },
+            };
+            if let Ok(mut all_runs) = runs_for_thread.lock() {
+                all_runs.insert(id, record);
             }
-        };
-        let provider = match ConfiguredProvider::from_environment() {
-            Ok(provider) => provider.with_model(model),
+            return;
+        }
+        let provider = match ConfiguredProvider::from_environment()
+            .and_then(|provider| provider.with_model(model))
+        {
+            Ok(provider) => provider,
             Err(error) => {
                 if let Ok(mut all_runs) = runs_for_thread.lock() {
                     if let Some(record) = all_runs.get_mut(&id) {
@@ -197,15 +256,19 @@ fn create_run(
             if let Ok(mut all_runs) = event_runs.lock() {
                 if let Some(record) = all_runs.get_mut(&id) {
                     record.events.push(event.clone());
-                    record.status = if event.status.is_terminal() {
-                        "COMPLETE".into()
-                    } else {
-                        "RUNNING".into()
-                    };
+                    record.status = match event.status {
+                        secondego_core::TerminalStatus::Complete => "COMPLETE",
+                        secondego_core::TerminalStatus::Failed => "FAILED",
+                        secondego_core::TerminalStatus::Cancelled => "CANCELLED",
+                        secondego_core::TerminalStatus::Blocked => "BLOCKED",
+                        secondego_core::TerminalStatus::Running => "RUNNING",
+                    }
+                    .into();
                 }
             }
         };
         let mut engine = RustEngine::new(provider).with_event_sink(event_sink);
+        engine = engine.with_cancellation(run_cancellation.clone());
         let result = engine.run(request.issue, resolved.root.clone());
         let events = runs_for_thread
             .lock()
@@ -213,24 +276,39 @@ fn create_run(
             .and_then(|all_runs| all_runs.get(&id).map(|record| record.events.clone()))
             .unwrap_or_default();
         let record = match result {
-            Ok(report) => RunRecord {
-                repository: resolved.root.to_string_lossy().into_owned(),
-                issue: record_issue.clone(),
-                model: record_model.clone(),
-                status: "COMPLETE".into(),
-                events,
-                report: Some(report),
-                error: None,
-            },
-            Err(error) => RunRecord {
-                repository: record_repository,
-                issue: record_issue,
-                model: record_model,
-                status: "FAILED".into(),
-                events,
-                report: None,
-                error: Some(error.to_string()),
-            },
+            Ok(report) => {
+                let verified = report.verification_passed;
+                let error = (!verified).then(|| {
+                    report
+                        .verification
+                        .failure_summary
+                        .clone()
+                        .unwrap_or_else(|| "verification failed; attempt diff was discarded".into())
+                });
+                RunRecord {
+                    repository: resolved.root.to_string_lossy().into_owned(),
+                    issue: record_issue.clone(),
+                    model: record_model.clone(),
+                    status: if verified { "COMPLETE" } else { "FAILED" }.into(),
+                    events,
+                    report: Some(result_payload(&report)),
+                    error,
+                    cancellation: run_cancellation.clone(),
+                }
+            }
+            Err(error) => {
+                let cancelled = matches!(error, RuntimeError::Cancelled);
+                RunRecord {
+                    repository: record_repository,
+                    issue: record_issue,
+                    model: record_model,
+                    status: if cancelled { "CANCELLED" } else { "FAILED" }.into(),
+                    events,
+                    report: None,
+                    error: (!cancelled).then(|| error.to_string()),
+                    cancellation: run_cancellation.clone(),
+                }
+            }
         };
         if let Ok(mut all_runs) = runs_for_thread.lock() {
             all_runs.insert(id, record);
@@ -266,7 +344,7 @@ fn get_run(
         })
         .unwrap_or(0);
     let events: Vec<EngineEvent> = record.events.iter().skip(offset).cloned().collect();
-    let result = record.report.as_ref().map(result_payload);
+    let result = record.report.clone();
     respond(
         stream,
         200,
@@ -274,22 +352,77 @@ fn get_run(
     )
 }
 
-#[derive(serde::Deserialize)]
+fn cancel_run(
+    stream: &mut TcpStream,
+    path: &str,
+    runs: &Arc<Mutex<HashMap<Uuid, RunRecord>>>,
+) -> std::io::Result<()> {
+    let route_path = path.split('?').next().unwrap_or(path);
+    let parts: Vec<_> = route_path.trim_start_matches('/').split('/').collect();
+    let Ok(id) = parts.get(2).unwrap_or(&"").parse::<Uuid>() else {
+        return respond(stream, 400, serde_json::json!({"error":"invalid run id"}));
+    };
+    let Some(record) = runs.lock().unwrap().get(&id).cloned() else {
+        return respond(stream, 404, serde_json::json!({"error":"run not found"}));
+    };
+    if matches!(
+        record.status.as_str(),
+        "COMPLETE" | "FAILED" | "CANCELLED" | "BLOCKED"
+    ) {
+        return respond(
+            stream,
+            409,
+            serde_json::json!({"error":"run is already terminal", "status":record.status}),
+        );
+    }
+    record.cancellation.cancel();
+    if let Ok(mut all_runs) = runs.lock() {
+        if let Some(current) = all_runs.get_mut(&id) {
+            current.status = "CANCEL_REQUESTED".into();
+        }
+    }
+    respond(
+        stream,
+        202,
+        serde_json::json!({"request_id":id,"status":"CANCEL_REQUESTED"}),
+    )
+}
+
+#[derive(Default, serde::Deserialize)]
 struct StartRequest {
     repository: String,
     issue: String,
     model: Option<String>,
+    mode: Option<String>,
+    lenses: Option<Vec<String>>,
+    max_findings: Option<usize>,
 }
 
 fn validate_start_request(request: &StartRequest) -> Result<(), &'static str> {
-    if request.issue.trim().is_empty() || request.repository.trim().is_empty() {
-        return Err("issue and repository are required");
+    let is_discovery = request.mode.as_deref() == Some("discover");
+    if request.repository.trim().is_empty() || (!is_discovery && request.issue.trim().is_empty()) {
+        return Err("repository is required and task issue must be non-empty");
     }
     if request.issue.chars().count() > 12_000 || request.repository.chars().count() > 4_096 {
         return Err("request exceeds field limits");
     }
     if request.model.as_deref().unwrap_or_default().chars().count() > 256 {
         return Err("model identifier exceeds field limits");
+    }
+    if request.mode.as_deref().unwrap_or("task") != "task"
+        && request.mode.as_deref() != Some("discover")
+    {
+        return Err("mode must be task or discover");
+    }
+    if request
+        .lenses
+        .as_ref()
+        .is_some_and(|lenses| lenses.len() > 8)
+    {
+        return Err("too many discovery lenses");
+    }
+    if request.max_findings.unwrap_or(20) > 40 {
+        return Err("max_findings must be 40 or less");
     }
     Ok(())
 }
@@ -419,7 +552,8 @@ mod tests {
             validate_start_request(&StartRequest {
                 repository: "".into(),
                 issue: "task".into(),
-                model: None
+                model: None,
+                ..Default::default()
             })
             .is_err()
         );
@@ -427,7 +561,8 @@ mod tests {
             validate_start_request(&StartRequest {
                 repository: "/tmp/repo".into(),
                 issue: "x".repeat(12_001),
-                model: None
+                model: None,
+                ..Default::default()
             })
             .is_err()
         );
@@ -435,7 +570,8 @@ mod tests {
             validate_start_request(&StartRequest {
                 repository: "/tmp/repo".into(),
                 issue: "task".into(),
-                model: Some("x".repeat(257))
+                model: Some("x".repeat(257)),
+                ..Default::default()
             })
             .is_err()
         );
@@ -447,7 +583,19 @@ mod tests {
             validate_start_request(&StartRequest {
                 repository: "/tmp/repo".into(),
                 issue: "fix pagination".into(),
-                model: Some("deepseek-flash".into())
+                model: Some("deepseek-flash".into()),
+                ..Default::default()
+            })
+            .is_ok()
+        );
+        assert!(
+            validate_start_request(&StartRequest {
+                repository: "/tmp/repo".into(),
+                issue: String::new(),
+                mode: Some("discover".into()),
+                lenses: Some(vec!["error".into(), "test".into()]),
+                max_findings: Some(10),
+                ..Default::default()
             })
             .is_ok()
         );
