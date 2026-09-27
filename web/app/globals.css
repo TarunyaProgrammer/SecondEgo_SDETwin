@@ -383,6 +383,64 @@ button { color: inherit; }
   .reference-panel__text .button { font-size: 8px; }
 }
 
+/* Readability pass: keep the compact interface while bringing small copy up to a comfortable size. */
+body { font-size: 16px; }
+.site-nav__links a, .site-nav__actions, .button { font-size: 14px; }
+.eyebrow { font-size: 11px; }
+.hero__subhead { font-size: 17px; }
+.hero__artifact-copy { font-size: clamp(11px, 1vw, 12px); }
+.hero__artifact-top .mono, .hero__artifact-bottom, .hero__artifact-bottom strong { font-size: 10px; }
+.hero__scroll-note, .tech-section__label { font-size: 10px; }
+.stat-card__top { font-size: 10px; }
+.stat-card__label { font-size: 13px; }
+.stat-card__note { font-size: 11px; }
+.section-heading__aside, .section-heading__center-copy { font-size: 15px; }
+.phase-tabs__index, .phase-panel__kicker, .pipeline-overview__label { font-size: 10px; }
+.phase-tabs__label { font-size: 14px; }
+.phase-tabs__summary { font-size: 11px; }
+.phase-panel__copy > p:last-child { font-size: 14px; }
+.pipeline-node__index { font-size: 10px; }
+.pipeline-node__label { font-size: 12px; }
+.pipeline-node__detail { font-size: 10px; }
+.code-window__title { font-size: 10px; }
+.code-window__language { font-size: 9px; }
+.code-window__body { font-size: 11px; }
+.phase-panel__footnote { font-size: 11px; }
+.capability-card__top { font-size: 10px; }
+.capability-card__tag { font-size: 9px; }
+.capability-card__description { font-size: 13px; }
+.text-link { font-size: 12px; }
+.reference-panel__intro { font-size: 14px; }
+.reference-panel__text .button, .final-cta .button { font-size: 12px; }
+.reference-panel__disclosure { font-size: 9px; }
+.reference-panel__visual-head { font-size: 10px; }
+.reference-panel__result, .reference-panel__live, .reference-panel__result strong { font-size: 9px; }
+.final-cta__content > p:not(.eyebrow) { font-size: 15px; }
+.footer-brand p, .footer-column a, .footer-github { font-size: 12px; }
+.footer-column h3 { font-size: 12px; }
+.newsletter-box__title { font-size: 13px; }
+.newsletter-box > p:not(.newsletter-box__title, .newsletter-box__message) { font-size: 11px; }
+.newsletter-form input { font-size: 12px; }
+.newsletter-box__message, .footer-bottom { font-size: 9px; }
+
+@media (max-width: 700px) {
+  .mobile-menu a { font-size: 15px; }
+  .hero__subhead { font-size: 16px; }
+  .hero__actions .button { font-size: 12px; }
+  .tech-section__label { font-size: 9px; }
+  .section-heading__aside, .section-heading__center-copy { font-size: 14px; }
+  .phase-tabs__index { font-size: 9px; }
+  .phase-tabs__label { font-size: 11px; }
+  .phase-panel__copy > p:last-child { font-size: 13px; }
+  .pipeline-node__label { font-size: 11px; }
+  .code-window__body { font-size: 10px; }
+  .reference-panel__intro { font-size: 13px; }
+  .reference-panel__text .button { font-size: 11px; }
+  .reference-panel__visual .pipeline-node__label { font-size: 10px; }
+  .reference-panel__visual .pipeline-node__detail { font-size: 9px; }
+  .final-cta__content > p:not(.eyebrow) { font-size: 14px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
