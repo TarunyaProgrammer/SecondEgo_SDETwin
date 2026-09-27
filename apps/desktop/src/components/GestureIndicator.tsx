@@ -82,26 +82,11 @@ export function GestureIndicator({
           </header>
           <p className="gesture-help-desc">Hold hand clearly in camera view to trigger commands:</p>
           <ul className="gesture-list">
-            <li onClick={() => onTriggerManual?.("thumbs_up")}>
-              <span className="g-icon">👍</span>
-              <div><b>Thumbs Up</b><small>Expand notch mission control</small></div>
-            </li>
-            <li onClick={() => onTriggerManual?.("thumbs_down")}>
-              <span className="g-icon">👎</span>
-              <div><b>Thumbs Down</b><small>Collapse into notch</small></div>
-            </li>
-            <li onClick={() => onTriggerManual?.("fist")}>
-              <span className="g-icon">✊</span>
-              <div><b>Fist</b><small>Start verified agent run</small></div>
-            </li>
-            <li onClick={() => onTriggerManual?.("open_palm")}>
-              <span className="g-icon">✋</span>
-              <div><b>Open Palm</b><small>Stop or cancel run</small></div>
-            </li>
-            <li onClick={() => onTriggerManual?.("point")}>
-              <span className="g-icon">☝</span>
-              <div><b>Point</b><small>Focus repository / task input</small></div>
-            </li>
+            <li><button type="button" onClick={() => onTriggerManual?.("thumbs_up")}><span className="g-icon">👍</span><span><b>Thumbs Up</b><small>Expand mission control</small></span></button></li>
+            <li><button type="button" onClick={() => onTriggerManual?.("thumbs_down")}><span className="g-icon">👎</span><span><b>Thumbs Down</b><small>Collapse the companion</small></span></button></li>
+            <li><button type="button" onClick={() => onTriggerManual?.("fist")}><span className="g-icon">✊</span><span><b>Fist</b><small>Start the prepared run</small></span></button></li>
+            <li><button type="button" onClick={() => onTriggerManual?.("open_palm")}><span className="g-icon">✋</span><span><b>Open Palm</b><small>Stop or cancel the run</small></span></button></li>
+            <li><button type="button" onClick={() => onTriggerManual?.("point")}><span className="g-icon">☝</span><span><b>Point</b><small>Focus the next input</small></span></button></li>
           </ul>
           {error && <p className="gesture-error-note">{error}</p>}
         </div>

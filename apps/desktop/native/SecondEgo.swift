@@ -43,10 +43,13 @@ final class NotchController: NSObject, WKScriptMessageHandler, WKNavigationDeleg
             backing: .buffered,
             defer: false
         )
-        window.isOpaque = true
-        window.backgroundColor = NSColor(calibratedWhite: 0.035, alpha: 1.0)
+        // The WebView renders the capsule. Keeping the native host transparent
+        // prevents an oversized window from appearing as a dark strip behind
+        // a closed notch while the renderer and host synchronize their size.
+        window.isOpaque = false
+        window.backgroundColor = .clear
         window.hasShadow = false
-        window.level = .statusBar
+        window.level = .popUpMenu
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         window.isMovable = false
         window.hidesOnDeactivate = false
@@ -86,7 +89,7 @@ final class NotchController: NSObject, WKScriptMessageHandler, WKNavigationDeleg
         guard message.name == "secondEgoWindow", let expanded = message.body as? Bool else { return }
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            self.window.setFrame(self.bounds(expanded: expanded), display: true, animate: true)
+            self.setNotchFrame(expanded: expanded)
             NSApp.activate(ignoringOtherApps: true)
             NSRunningApplication.current.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
             if expanded {
@@ -121,7 +124,7 @@ final class NotchController: NSObject, WKScriptMessageHandler, WKNavigationDeleg
     }
 
     private func bounds(expanded: Bool) -> NSRect {
-        let screen = NSScreen.main ?? NSScreen.screens[0]
+        let screen = notchScreen()
         let screenFrame = screen.frame
         let desiredWidth: CGFloat = expanded ? 1024 : 260
         let desiredHeight: CGFloat = expanded ? 720 : 46
@@ -133,6 +136,29 @@ final class NotchController: NSObject, WKScriptMessageHandler, WKNavigationDeleg
             width: width,
             height: height
         )
+    }
+
+    private func setNotchFrame(expanded: Bool) {
+        let frame = bounds(expanded: expanded)
+        // Avoid animated intermediate frames: they can desynchronize the
+        // renderer's closed capsule from the native window during a gesture.
+        window.setFrame(frame, display: true, animate: false)
+        // Explicitly re-anchor after every resize. This is more reliable than
+        // relying on a status-bar-level window to retain its screen origin.
+        window.setFrameTopLeftPoint(NSPoint(x: frame.minX, y: notchScreen().frame.maxY))
+    }
+
+    private func notchScreen() -> NSScreen {
+        let referencePoint: NSPoint
+        if let window {
+            let frame = window.frame
+            referencePoint = NSPoint(x: frame.midX, y: frame.midY)
+        } else {
+            referencePoint = NSEvent.mouseLocation
+        }
+        return NSScreen.screens.first(where: { $0.frame.contains(referencePoint) })
+            ?? NSScreen.main
+            ?? NSScreen.screens[0]
     }
 
     private func startGateway() {

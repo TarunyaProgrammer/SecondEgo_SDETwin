@@ -18,7 +18,8 @@ make desktop-electron
 
 On macOS, `make desktop-electron` builds and starts a small native AppKit/WebKit
 shell as a notch companion: it appears as a floating capsule centered at the
-top edge, expands downward when hovered, and stays above other windows. It is
+top edge, expands downward when clicked, and stays above other windows. Camera
+gestures are optional shortcuts controlled from the companion settings. It is
 assembled as a native `.app` bundle, avoiding Electron/Chromium startup
 differences across macOS releases. On non-macOS systems, the same target uses
 Electron. The browser observer started by `make desktop` remains a normal page.

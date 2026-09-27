@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import logoUrl from "./assets/secondego-logo.png";
 import { GestureIndicator } from "./components/GestureIndicator";
 import { useGestureControl } from "./hooks/useGestureControl";
@@ -94,10 +94,11 @@ function App() {
   const [stopping, setStopping] = useState(false);
   const [error, setError] = useState("");
   const [notchOpen, setNotchOpen] = useState(!notchMode);
+  const [showSettings, setShowSettings] = useState(false);
   const offsetRef = useRef(0);
   const api = useMemo(() => gateway.replace(/\/$/, ""), [gateway]);
 
-  const handleGestureAction = (action: GestureActionType, _event: GestureEvent) => {
+  const handleGestureAction = useCallback((action: GestureActionType, _event: GestureEvent) => {
     switch (action) {
       case "expand_notch":
         setNotchOpen(true);
@@ -142,7 +143,7 @@ function App() {
         document.querySelector(".village-map")?.scrollBy({ top: 80, behavior: "smooth" });
         break;
     }
-  };
+  }, [busy, issue, repository]);
 
   const gestureControl = useGestureControl({
     notchMode,
@@ -159,6 +160,19 @@ function App() {
     }
     return () => document.body.classList.remove("notch-mode");
   }, [busy, notchMode, notchOpen, run]);
+
+  useEffect(() => {
+    if (!notchMode) return;
+    if (!notchOpen) setShowSettings(false);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && notchOpen && !busy) {
+        setShowSettings(false);
+        setNotchOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [busy, notchMode, notchOpen]);
 
   useEffect(() => {
     const requestId = run?.request_id;
@@ -268,8 +282,6 @@ function App() {
   return (
     <main
       className={`app-shell ${notchMode ? `notch-shell ${notchOpen ? "is-open" : "is-closed"}` : ""}`}
-      onMouseEnter={() => notchMode && setNotchOpen(true)}
-      onMouseLeave={() => notchMode && !busy && setNotchOpen(false)}
     >
       <header className="app-header">
         <div className="brand"><img src={logoUrl} alt="SecondEgo" /><span><strong>SecondEgo</strong><small>local coding harness</small></span></div>
@@ -277,11 +289,16 @@ function App() {
       </header>
 
       <section className="command-surface">
-        <button className="notch-trigger" type="button" onClick={() => setNotchOpen((open) => !open)} aria-expanded={notchOpen}>
+        <button className="notch-trigger" type="button" onClick={() => {
+          setNotchOpen((open) => {
+            if (open) setShowSettings(false);
+            return !open;
+          });
+        }} aria-expanded={notchOpen} aria-controls={notchMode ? "mission-control" : undefined}>
           <span className="trigger-mark" aria-hidden="true" /><span>{notchOpen ? "SecondEgo / Mission control" : "Open mission control"}</span><small className={statusTone}>{run ? statusLabel : "headless"}</small>
         </button>
         {notchMode && (
-          <div className="notch-gesture-anchor">
+          <div className="notch-controls">
             <GestureIndicator
               enabled={gestureControl.enabled}
               active={gestureControl.active}
@@ -292,9 +309,21 @@ function App() {
               onTriggerManual={gestureControl.triggerManualGesture}
               onOpenNotch={() => setNotchOpen(true)}
             />
+            <button className="notch-settings-button" type="button" aria-label="Open companion settings" aria-expanded={showSettings} aria-controls="notch-settings" onClick={() => {
+              setNotchOpen(true);
+              setShowSettings((open) => !open);
+            }}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.12 2.12-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.04 1.56V20.5h-3v-.28A1.7 1.7 0 0 0 10.66 18.66a1.7 1.7 0 0 0-1.88.34l-.06.06-2.12-2.12.06-.06A1.7 1.7 0 0 0 7 15a1.7 1.7 0 0 0-1.56-1.04h-.28v-3h.28A1.7 1.7 0 0 0 7 9.92a1.7 1.7 0 0 0-.34-1.88L6.6 7.98l2.12-2.12.06.06a1.7 1.7 0 0 0 1.88.34 1.7 1.7 0 0 0 1.04-1.56V4.42h3v.28a1.7 1.7 0 0 0 1.04 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.12 2.12-.06.06a1.7 1.7 0 0 0-.34 1.88 1.7 1.7 0 0 0 1.56 1.04h.28v3h-.28A1.7 1.7 0 0 0 19.4 15Z" /></svg>
+            </button>
           </div>
         )}
-       {notchOpen && <form className="mission-form" onSubmit={submit}>
+        {notchMode && notchOpen && showSettings && <aside className="notch-settings" id="notch-settings" role="dialog" aria-label="Companion settings">
+          <header><span>Companion settings</span><button type="button" onClick={() => setShowSettings(false)} aria-label="Close companion settings">×</button></header>
+          <section><strong>Camera gestures</strong><p>Optional shortcuts. Clicking the capsule always works without a camera.</p><button className={`settings-switch ${gestureControl.enabled ? "is-on" : ""}`} type="button" role="switch" aria-checked={gestureControl.enabled} onClick={gestureControl.toggleEnabled}><i aria-hidden="true" /><span>{gestureControl.enabled ? "On" : "Off"}</span></button></section>
+          <section><strong>Control style</strong><p>Click to open or close. Hover never changes the window state.</p></section>
+          <section><strong>Headless evaluator</strong><p>Run <code>make run</code> in Terminal for the evaluator path. The companion never changes engine permissions or execution state.</p></section>
+        </aside>}
+       {notchOpen && <form id="mission-control" className="mission-form" onSubmit={submit}>
           <div className="mission-copy"><div className="mode-switch" role="tablist" aria-label="Mission type"><button type="button" className={mode === "task" ? "selected" : ""} onClick={() => setMode("task")}>Fix a task</button><button type="button" className={mode === "discover" ? "selected" : ""} onClick={() => setMode("discover")}>Scan issues</button></div><h1>{mode === "discover" ? <>What needs<br />attention?</> : <>What shall we<br />build?</>}</h1><p>{mode === "discover" ? "Map suspicious paths, test gaps, and structural risks without touching the repository." : "Give SecondEgo a repository and a goal. Its plan, changes, and proof stay in view."}</p></div>
           <div className="mission-inputs">
             <label>Repository<input id="repository-input" value={repository} onChange={(event) => setRepository(event.target.value)} placeholder="/path/to/repository or https://github.com/owner/repo" autoComplete="url" required /></label>

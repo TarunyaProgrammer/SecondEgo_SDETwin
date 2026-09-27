@@ -32,9 +32,11 @@ export function useGestureControl({
     if (!notchMode) return false;
     try {
       const stored = localStorage.getItem("secondego_notch_gestures");
-      return stored !== null ? stored === "1" : true;
+      // Camera access is an optional shortcut, never a prerequisite for using
+      // the companion. New installations start click-first and opt in here.
+      return stored !== null ? stored === "1" : false;
     } catch {
-      return true;
+      return false;
     }
   });
 
@@ -49,6 +51,11 @@ export function useGestureControl({
   const cooldownRef = useRef<{ [gesture: string]: number }>({});
   const debounceHistoryRef = useRef<string[]>([]);
   const lastFiredTimeRef = useRef<number>(0);
+  const onActionRef = useRef(onAction);
+
+  useEffect(() => {
+    onActionRef.current = onAction;
+  }, [onAction]);
 
   const setEnabled = useCallback((val: boolean) => {
     setEnabledState(val);
@@ -89,14 +96,16 @@ export function useGestureControl({
       };
 
       setLastGesture(event);
-      onAction(mapping.action, event);
+      // Keep the camera and native listeners alive while the parent form
+      // changes. Recreating them on every keystroke loses gesture events.
+      onActionRef.current(mapping.action, event);
 
       // Auto-clear gesture HUD after 2.5 seconds
       window.setTimeout(() => {
         setLastGesture((curr) => (curr?.timestamp === event.timestamp ? null : curr));
       }, 2500);
     },
-    [onAction]
+    []
   );
 
   const triggerManualGesture = useCallback(
