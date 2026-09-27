@@ -5,20 +5,21 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        ink: "#0A0B0D",
-        panel: "#101216",
-        raised: "#15181E",
-        paper: "#F5F5F5",
-        muted: "#9298A4",
-        line: "rgba(255,255,255,.1)",
-        accent: "#82AFFF",
+        ink: "#0B0D10",
+        panel: "#171716",
+        raised: "#1D1C1A",
+        paper: "#F4ECDF",
+        muted: "#B2A79A",
+        line: "rgba(241,228,209,.12)",
+        accent: "#FF6D54",
       },
       fontFamily: {
         sans: ["var(--font-geist-sans)", "Arial", "sans-serif"],
         mono: ["var(--font-geist-mono)", "monospace"],
+        editorial: ["Iowan Old Style", "Palatino Linotype", "Book Antiqua", "Georgia", "serif"],
       },
       boxShadow: {
-        glow: "0 0 40px rgba(105, 156, 255, .12)",
+        glow: "0 0 40px rgba(255, 112, 88, .12)",
       },
       borderRadius: {
         card: "12px",
