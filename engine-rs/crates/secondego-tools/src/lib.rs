@@ -12,16 +12,19 @@ pub mod gc;
 
 const DEFAULT_MAX_FILE_BYTES: u64 = 512 * 1024;
 const DEFAULT_MAX_OUTPUT_BYTES: usize = 256 * 1024;
+const PATCH_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyError {
     WorkspaceNotDirectory,
     PathEscapesWorkspace,
+    SensitivePath,
     EmptyCommand,
     ExecutableNotAllowlisted(String),
     InvalidTimeout,
     ArgumentContainsNul,
     FileTooLarge,
+    InvalidPatch,
     UnsupportedAction(String),
 }
 
@@ -296,6 +299,13 @@ impl FileTool {
                 );
             }
         };
+        if is_sensitive_path(&path, &self.workspace.root) {
+            return ToolResult::failure(
+                "read_file",
+                PolicyError::SensitivePath.to_string(),
+                started.elapsed().as_millis(),
+            );
+        }
         let metadata = match fs::metadata(&path) {
             Ok(metadata) => metadata,
             Err(error) => {
@@ -352,6 +362,13 @@ impl FileTool {
                 );
             }
         };
+        if is_sensitive_path(&path, &self.workspace.root) {
+            return ToolResult::failure(
+                "edit_file",
+                PolicyError::SensitivePath.to_string(),
+                started.elapsed().as_millis(),
+            );
+        }
         if let Some(parent) = path.parent() {
             if let Err(error) = fs::create_dir_all(parent) {
                 return ToolResult::failure(
@@ -377,6 +394,64 @@ impl FileTool {
                 error.to_string(),
                 started.elapsed().as_millis(),
             ),
+        }
+    }
+
+    /// Apply a bounded unified diff after validating every target path. Patch
+    /// context prevents stale model observations from replacing an entire file.
+    pub fn apply_patch(&self, patch: &str) -> ToolResult {
+        let started = Instant::now();
+        if patch.len() as u64 > self.max_file_bytes {
+            return ToolResult::failure(
+                "apply_patch",
+                "patch exceeds file limit",
+                started.elapsed().as_millis(),
+            );
+        }
+        let paths = match patch_paths(patch) {
+            Ok(paths) => paths,
+            Err(error) => {
+                return ToolResult::failure(
+                    "apply_patch",
+                    error.to_string(),
+                    started.elapsed().as_millis(),
+                );
+            }
+        };
+        for path in &paths {
+            let resolved = match self.workspace.resolve(path) {
+                Ok(path) => path,
+                Err(error) => {
+                    return ToolResult::failure(
+                        "apply_patch",
+                        error.to_string(),
+                        started.elapsed().as_millis(),
+                    );
+                }
+            };
+            if is_sensitive_path(&resolved, &self.workspace.root) {
+                return ToolResult::failure(
+                    "apply_patch",
+                    PolicyError::SensitivePath.to_string(),
+                    started.elapsed().as_millis(),
+                );
+            }
+        }
+        if let Err(error) = apply_git_patch(&self.workspace.root, patch, true) {
+            return ToolResult::failure("apply_patch", error, started.elapsed().as_millis());
+        }
+        if let Err(error) = apply_git_patch(&self.workspace.root, patch, false) {
+            return ToolResult::failure("apply_patch", error, started.elapsed().as_millis());
+        }
+        ToolResult {
+            tool: "apply_patch".into(),
+            success: true,
+            exit_code: Some(0),
+            stdout: String::new(),
+            stderr: String::new(),
+            changed_paths: paths,
+            duration_ms: started.elapsed().as_millis(),
+            truncated: false,
         }
     }
 }
@@ -408,6 +483,9 @@ impl SearchTool {
                 [".git", ".venv", "node_modules", "__pycache__", "target"]
                     .contains(&part.as_os_str().to_str().unwrap_or_default())
             }) {
+                continue;
+            }
+            if is_sensitive_path(entry.path(), &self.workspace.root) {
                 continue;
             }
             let Ok(content) = fs::read_to_string(entry.path()) else {
@@ -496,6 +574,12 @@ impl ToolRouter {
                         PolicyError::UnsupportedAction("file content required".into())
                     })?,
             )),
+            "apply_patch" => Ok(self.files.apply_patch(
+                arguments
+                    .get("patch")
+                    .and_then(|value| value.as_str())
+                    .ok_or_else(|| PolicyError::UnsupportedAction("apply_patch patch".into()))?,
+            )),
             "search_code" => Ok(ToolResult {
                 tool: "search_code".into(),
                 success: true,
@@ -549,6 +633,104 @@ impl ToolRouter {
                 ))
             }
             _ => Err(PolicyError::UnsupportedAction(proposal.action.clone())),
+        }
+    }
+}
+
+fn is_sensitive_path(path: &Path, root: &Path) -> bool {
+    let relative = path.strip_prefix(root).unwrap_or(path);
+    relative.components().any(|part| {
+        let name = part.as_os_str().to_str().unwrap_or_default();
+        name == ".git"
+            || name == ".env"
+            || name.starts_with(".env.")
+            || matches!(
+                name,
+                "credentials.json" | "secrets.json" | "id_rsa" | "id_ed25519"
+            )
+    })
+}
+
+fn patch_paths(patch: &str) -> Result<Vec<String>, PolicyError> {
+    let mut paths = Vec::new();
+    for line in patch.lines() {
+        let Some(rest) = line.strip_prefix("diff --git ") else {
+            continue;
+        };
+        let mut items = rest.split_whitespace();
+        let before = items.next().ok_or(PolicyError::InvalidPatch)?;
+        let after = items.next().ok_or(PolicyError::InvalidPatch)?;
+        if items.next().is_some()
+            || !before.starts_with("a/")
+            || !after.starts_with("b/")
+            || before.len() <= 2
+            || after.len() <= 2
+        {
+            return Err(PolicyError::InvalidPatch);
+        }
+        for candidate in [&before[2..], &after[2..]] {
+            if !paths.iter().any(|path| path == candidate) {
+                paths.push(candidate.to_owned());
+            }
+        }
+    }
+    if paths.is_empty() {
+        return Err(PolicyError::InvalidPatch);
+    }
+    Ok(paths)
+}
+
+fn apply_git_patch(root: &Path, patch: &str, check_only: bool) -> Result<(), String> {
+    let mut command = Command::new("git");
+    command
+        .args(["apply", "--whitespace=nowarn"])
+        .current_dir(root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if check_only {
+        command.arg("--check");
+    }
+    command.arg("-");
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("git apply could not start: {error}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        stdin
+            .write_all(patch.as_bytes())
+            .map_err(|error| format!("git apply could not receive patch: {error}"))?;
+    }
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let output = child
+                    .wait_with_output()
+                    .map_err(|error| format!("git apply output failed: {error}"))?;
+                if status.success() {
+                    return Ok(());
+                }
+                let detail = String::from_utf8_lossy(&output.stderr)
+                    .chars()
+                    .take(4_000)
+                    .collect::<String>();
+                return Err(if detail.trim().is_empty() {
+                    "git apply rejected the patch".into()
+                } else {
+                    detail
+                });
+            }
+            Ok(None) if started.elapsed() >= PATCH_TIMEOUT => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("git apply timed out".into());
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(10)),
+            Err(error) => {
+                let _ = child.kill();
+                return Err(format!("git apply status failed: {error}"));
+            }
         }
     }
 }
@@ -929,6 +1111,40 @@ mod tests {
         };
         assert!(files.write("src/value.py", "VALUE = 1\n").success);
         assert_eq!(files.read("src/value.py").stdout, "VALUE = 1\n");
+    }
+
+    #[test]
+    fn file_tool_blocks_sensitive_files_from_model_access() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join(".env"), "AI_API_KEY=secret\n").unwrap();
+        let workspace = WorkspacePolicy::new(root.path()).unwrap();
+        let files = FileTool {
+            workspace,
+            max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+        };
+        let result = files.read(".env");
+        assert!(!result.success);
+        assert!(result.stderr.contains("SensitivePath"));
+    }
+
+    #[test]
+    fn unified_patch_edits_only_validated_workspace_paths() {
+        let root = tempfile::tempdir().unwrap();
+        run_git(root.path(), &["init", "-q"]);
+        fs::write(root.path().join("value.py"), "VALUE = 1\n").unwrap();
+        let workspace = WorkspacePolicy::new(root.path()).unwrap();
+        let files = FileTool {
+            workspace,
+            max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+        };
+        let patch = "diff --git a/value.py b/value.py\nindex 8d8ce11..b9a6fe5 100644\n--- a/value.py\n+++ b/value.py\n@@ -1 +1 @@\n-VALUE = 1\n+VALUE = 2\n";
+        let result = files.apply_patch(patch);
+        assert!(result.success, "{}", result.stderr);
+        assert_eq!(result.changed_paths, vec!["value.py"]);
+        assert_eq!(
+            fs::read_to_string(root.path().join("value.py")).unwrap(),
+            "VALUE = 2\n"
+        );
     }
 
     #[test]

@@ -173,6 +173,12 @@ body.notch-mode { min-width: 0; overflow: hidden; background: transparent; } bod
 .gesture-list li small { display: block; font-size: 8px; color: #8b949e; }
 .gesture-error-note { margin-top: 8px; color: #f85149; font-size: 9px; }
 
+.voice-state { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; color: var(--quiet); font: 700 9px/1 var(--sans); letter-spacing: .05em; text-transform: uppercase; white-space: nowrap; }
+.voice-state > i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .72; }
+.voice-generating > i, .voice-speaking > i { color: var(--warm); box-shadow: 0 0 9px currentColor; animation: pulse-live 1.2s ease-in-out infinite; }
+.voice-unavailable { color: #f85149; }
+.voice-disabled { color: var(--quiet); opacity: .68; }
+
 @keyframes pulse-live { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.6; transform: scale(0.9); } }
 @keyframes toast-in { from { opacity: 0; transform: translateY(-4px) scale(0.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
 

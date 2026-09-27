@@ -14,6 +14,7 @@ use secondego_runtime::discovery::{DiscoveryLens, DiscoveryRequest, discover};
 use secondego_runtime::{
     CancellationToken, RunReport, RuntimeError, RustEngine, collect_garbage,
     resolve_repository_with_cancellation, validate_repository_source,
+    voice::{VoiceService, VoiceStatusHandle},
 };
 use uuid::Uuid;
 
@@ -29,6 +30,7 @@ struct RunRecord {
     report: Option<serde_json::Value>,
     error: Option<String>,
     cancellation: CancellationToken,
+    voice: VoiceStatusHandle,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -49,13 +51,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .filter(|path| path.is_dir());
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     let runs: Arc<Mutex<HashMap<Uuid, RunRecord>>> = Arc::new(Mutex::new(HashMap::new()));
+    // Voice is presentation-only, but its background worker must be shared by
+    // the long-lived gateway rather than leaked once for every submitted run.
+    let voice = Arc::new(VoiceService::from_env());
     eprintln!("SecondEgo Rust gateway listening on http://127.0.0.1:{port}");
     for stream in listener.incoming().flatten() {
         let token = token.clone();
         let runs = runs.clone();
         let ui_root = ui_root.clone();
+        let voice = voice.clone();
         thread::spawn(move || {
-            let _ = handle(stream, &token, &runs, ui_root.as_deref());
+            let _ = handle(stream, &token, &runs, ui_root.as_deref(), &voice);
         });
     }
     Ok(())
@@ -66,6 +72,7 @@ fn handle(
     token: &str,
     runs: &Arc<Mutex<HashMap<Uuid, RunRecord>>>,
     ui_root: Option<&Path>,
+    voice: &Arc<VoiceService>,
 ) -> std::io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     let request = read_request(&mut stream)?;
@@ -95,7 +102,7 @@ fn handle(
             200,
             serde_json::json!({"ok":true,"api_version":1,"engine":"rust"}),
         ),
-        ("POST", "/api/runs") => create_run(&mut stream, request.body, runs),
+        ("POST", "/api/runs") => create_run(&mut stream, request.body, runs, voice),
         ("POST", path) if path.starts_with("/api/runs/") && path.ends_with("/cancel") => {
             cancel_run(&mut stream, path, runs)
         }
@@ -136,6 +143,7 @@ fn create_run(
     stream: &mut TcpStream,
     body: Vec<u8>,
     runs: &Arc<Mutex<HashMap<Uuid, RunRecord>>>,
+    voice: &VoiceService,
 ) -> std::io::Result<()> {
     let request: StartRequest = match serde_json::from_slice(&body) {
         Ok(value) => value,
@@ -160,6 +168,7 @@ fn create_run(
     };
     let id = Uuid::new_v4();
     let cancellation = CancellationToken::default();
+    let voice_status = voice.status_handle();
     runs.lock().unwrap().insert(
         id,
         RunRecord {
@@ -171,6 +180,7 @@ fn create_run(
             report: None,
             error: None,
             cancellation: cancellation.clone(),
+            voice: voice_status.clone(),
         },
     );
     let runs_for_thread = runs.clone();
@@ -182,6 +192,7 @@ fn create_run(
     let discovery_max_findings = request.max_findings.unwrap_or(20);
     let event_runs = runs.clone();
     let run_cancellation = cancellation.clone();
+    let run_voice = voice.clone();
     thread::spawn(move || {
         let resolved =
             match resolve_repository_with_cancellation(&record_repository, Some(&run_cancellation))
@@ -221,6 +232,7 @@ fn create_run(
                     report: serde_json::to_value(report).ok(),
                     error: None,
                     cancellation: run_cancellation.clone(),
+                    voice: voice_status.clone(),
                 },
                 Err(error) => RunRecord {
                     repository: record_repository,
@@ -231,6 +243,7 @@ fn create_run(
                     report: None,
                     error: Some(error),
                     cancellation: run_cancellation.clone(),
+                    voice: voice_status.clone(),
                 },
             };
             if let Ok(mut all_runs) = runs_for_thread.lock() {
@@ -267,7 +280,9 @@ fn create_run(
                 }
             }
         };
-        let mut engine = RustEngine::new(provider).with_event_sink(event_sink);
+        let mut engine = RustEngine::new(provider)
+            .with_event_sink(event_sink)
+            .with_voice(run_voice.clone());
         engine = engine.with_cancellation(run_cancellation.clone());
         let result = engine.run(request.issue, resolved.root.clone());
         let events = runs_for_thread
@@ -294,6 +309,7 @@ fn create_run(
                     report: Some(result_payload(&report)),
                     error,
                     cancellation: run_cancellation.clone(),
+                    voice: voice_status.clone(),
                 }
             }
             Err(error) => {
@@ -307,6 +323,7 @@ fn create_run(
                     report: None,
                     error: (!cancelled).then(|| error.to_string()),
                     cancellation: run_cancellation.clone(),
+                    voice: voice_status.clone(),
                 }
             }
         };
@@ -348,7 +365,7 @@ fn get_run(
     respond(
         stream,
         200,
-        serde_json::json!({"request_id":id,"repository":record.repository,"issue":record.issue,"model":record.model,"status":record.status,"events":events,"result":result,"error":record.error}),
+        serde_json::json!({"request_id":id,"repository":record.repository,"issue":record.issue,"model":record.model,"status":record.status,"events":events,"result":result,"error":record.error,"voice":record.voice.snapshot(id)}),
     )
 }
 
@@ -434,6 +451,7 @@ fn result_payload(report: &RunReport) -> serde_json::Value {
         "phase": serde_json::to_value(report.state.phase).unwrap_or_else(|_| serde_json::json!("VERIFY")),
         "termination_reason": report.state.termination_reason,
         "changed_paths": report.changed_paths,
+        "diff_transferred": report.diff_transferred,
         "resource_usage": report.resource_usage,
         "verification": report.verification,
         "evidence": report.evidence,
@@ -623,6 +641,7 @@ mod tests {
             resource_usage: std::collections::BTreeMap::new(),
             verification_passed: true,
             changed_paths: vec!["src/example.py".into()],
+            diff_transferred: true,
             tool_results: Vec::new(),
             index_files: 1,
             index_symbols: 1,
@@ -638,6 +657,7 @@ mod tests {
                 .unwrap_or(false)
         );
         assert!(payload.get("changed_paths").is_some());
+        assert_eq!(payload["diff_transferred"], true);
         assert!(payload.get("evidence").is_some());
     }
 }

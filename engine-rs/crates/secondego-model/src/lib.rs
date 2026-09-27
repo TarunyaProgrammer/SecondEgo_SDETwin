@@ -21,6 +21,8 @@ const FALLBACK_RATIONALE: &str = "No rationale supplied by model.";
 pub enum ProviderError {
     MissingApiKey,
     UnsupportedProvider(String),
+    Authentication { provider: String, status: u16 },
+    HttpStatus { provider: String, status: u16 },
     Transport(String),
     InvalidResponse,
     InvalidAction(String),
@@ -39,6 +41,13 @@ impl std::fmt::Display for ProviderError {
                 formatter,
                 "unsupported model provider: {provider}; use deepseek or gemini"
             ),
+            Self::Authentication { provider, status } => write!(
+                formatter,
+                "{provider} authentication failed (HTTP {status}). Verify that AI_API_KEY belongs to {provider}; the key is not printed."
+            ),
+            Self::HttpStatus { provider, status } => {
+                write!(formatter, "{provider} returned HTTP {status}")
+            }
             Self::Transport(detail) => write!(formatter, "model request failed: {detail}"),
             Self::ModelProviderMismatch { provider, model } => write!(
                 formatter,
@@ -54,6 +63,21 @@ impl std::fmt::Display for ProviderError {
 }
 
 impl std::error::Error for ProviderError {}
+
+impl ProviderError {
+    /// Errors that can plausibly succeed without changing the request. The
+    /// runtime owns the bounded retry budget; providers only classify errors.
+    pub fn is_transient(&self) -> bool {
+        matches!(
+            self,
+            Self::Transport(_)
+                | Self::HttpStatus {
+                    status: 429 | 500 | 502 | 503 | 504,
+                    ..
+                }
+        )
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderKind {
@@ -272,7 +296,7 @@ fn gemini_request(prompt: &str) -> Value {
             "responseSchema": {
                 "type": "OBJECT",
                 "properties": {
-                    "action": {"type": "STRING", "enum": ["submit_plan"]},
+                    "action": {"type": "STRING", "enum": ["read_file", "search_code", "submit_plan", "submit_recovery"]},
                     "arguments": {"type": "OBJECT"},
                     "rationale": {"type": "STRING"}
                 },
@@ -394,11 +418,15 @@ fn post_json(
 
 fn http_status_error(provider: &str, status: reqwest::StatusCode) -> ProviderError {
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-        return ProviderError::Transport(format!(
-            "{provider} authentication failed (HTTP {status}). Verify that AI_API_KEY belongs to {provider}; the key is not printed."
-        ));
+        return ProviderError::Authentication {
+            provider: provider.into(),
+            status: status.as_u16(),
+        };
     }
-    ProviderError::Transport(format!("{provider} returned HTTP {status}"))
+    ProviderError::HttpStatus {
+        provider: provider.into(),
+        status: status.as_u16(),
+    }
 }
 
 fn deepseek_request(model: &str, prompt: &str) -> Value {
@@ -524,7 +552,7 @@ mod tests {
         );
         assert_eq!(
             request["generationConfig"]["responseSchema"]["properties"]["action"]["enum"],
-            serde_json::json!(["submit_plan"])
+            serde_json::json!(["read_file", "search_code", "submit_plan", "submit_recovery"])
         );
         assert_eq!(
             request["generationConfig"]["responseSchema"]["properties"]["rationale"]["type"],
@@ -625,5 +653,31 @@ mod tests {
             provider.with_model("gemini-3.8-flash".into()),
             Err(ProviderError::ModelProviderMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn provider_classifies_only_safe_http_errors_as_transient() {
+        assert!(
+            ProviderError::HttpStatus {
+                provider: "Gemini".into(),
+                status: 503,
+            }
+            .is_transient()
+        );
+        assert!(ProviderError::Transport("connection reset".into()).is_transient());
+        assert!(
+            !ProviderError::Authentication {
+                provider: "DeepSeek".into(),
+                status: 401,
+            }
+            .is_transient()
+        );
+        assert!(
+            !ProviderError::HttpStatus {
+                provider: "Gemini".into(),
+                status: 400,
+            }
+            .is_transient()
+        );
     }
 }

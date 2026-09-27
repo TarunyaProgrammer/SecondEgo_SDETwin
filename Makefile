@@ -20,6 +20,16 @@ if [ -f ".env" ]; then \
 				if [ -z "$${SECONDEGO_PROVIDER:-}" ]; then SECONDEGO_PROVIDER=$${dotenv_line#SECONDEGO_PROVIDER=}; export SECONDEGO_PROVIDER; fi ;; \
 			SECONDEGO_MODEL=*) \
 				if [ -z "$${SECONDEGO_MODEL:-}" ]; then SECONDEGO_MODEL=$${dotenv_line#SECONDEGO_MODEL=}; export SECONDEGO_MODEL; fi ;; \
+			VOICE_ENABLED=*) \
+				if [ -z "$${VOICE_ENABLED:-}" ]; then VOICE_ENABLED=$${dotenv_line#VOICE_ENABLED=}; export VOICE_ENABLED; fi ;; \
+			GEMINI_API_KEY=*) \
+				if [ -z "$${GEMINI_API_KEY:-}" ]; then GEMINI_API_KEY=$${dotenv_line#GEMINI_API_KEY=}; export GEMINI_API_KEY; fi ;; \
+			GEMINI_TTS_MODEL=*) \
+				if [ -z "$${GEMINI_TTS_MODEL:-}" ]; then GEMINI_TTS_MODEL=$${dotenv_line#GEMINI_TTS_MODEL=}; export GEMINI_TTS_MODEL; fi ;; \
+			VOICE_TIMEOUT=*) \
+				if [ -z "$${VOICE_TIMEOUT:-}" ]; then VOICE_TIMEOUT=$${dotenv_line#VOICE_TIMEOUT=}; export VOICE_TIMEOUT; fi ;; \
+			VOICE_MAX_QUEUE_SIZE=*) \
+				if [ -z "$${VOICE_MAX_QUEUE_SIZE:-}" ]; then VOICE_MAX_QUEUE_SIZE=$${dotenv_line#VOICE_MAX_QUEUE_SIZE=}; export VOICE_MAX_QUEUE_SIZE; fi ;; \
 		esac; \
 	done < ".env"; \
 fi;
@@ -64,7 +74,10 @@ config:
 	if [ -z "$$provider" ]; then case "$$model" in gemini-*) provider=gemini ;; *) provider=deepseek ;; esac; fi; \
 	if [ -z "$$model" ]; then case "$$provider" in gemini) model=gemini-3.8-flash ;; *) model=deepseek-flash ;; esac; fi; \
 	if [ -n "$${AI_API_KEY:-}" ]; then key_status=present; else key_status=missing; fi; \
-	printf 'SecondEgo configuration: provider=%s model=%s AI_API_KEY=%s\n' "$$provider" "$$model" "$$key_status"
+	if [ "$${VOICE_ENABLED:-false}" = "true" ] || [ "$${VOICE_ENABLED:-false}" = "1" ]; then voice_status=enabled; else voice_status=disabled; fi; \
+	if [ -n "$${GEMINI_API_KEY:-}" ]; then voice_key_status=present; else voice_key_status=missing; fi; \
+	voice_model="$${GEMINI_TTS_MODEL:-gemini-3.8-flash-lite-tts}"; \
+	printf 'SecondEgo configuration: provider=%s model=%s AI_API_KEY=%s voice=%s voice_model=%s GEMINI_API_KEY=%s\n' "$$provider" "$$model" "$$key_status" "$$voice_status" "$$voice_model" "$$voice_key_status"
 
 run:
 	@$(LOAD_LOCAL_ENV) \

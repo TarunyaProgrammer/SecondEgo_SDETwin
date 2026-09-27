@@ -11,7 +11,7 @@ use secondego_model::{ConfiguredProvider, ProviderKind, ScriptedProvider, config
 use secondego_runtime::discovery::{DiscoveryLens, DiscoveryRequest, discover};
 use secondego_runtime::{
     CancellationToken, RuntimeError, RustEngine, collect_garbage, resolve_repository,
-    resolve_repository_with_cancellation,
+    resolve_repository_with_cancellation, voice::VoiceService,
 };
 
 const CORAL: &str = "38;2;255;205;0";
@@ -246,8 +246,9 @@ fn run_scripted(
             rationale: "replayable fixture plan".into(),
         }
     };
-    let mut engine =
-        RustEngine::new(ScriptedProvider::new(vec![proposal])).with_cancellation(cancellation);
+    let mut engine = RustEngine::new(ScriptedProvider::new(vec![proposal]))
+        .with_cancellation(cancellation)
+        .with_voice(VoiceService::from_env());
     if interactive && !events {
         engine = engine.with_event_sink(print_live_event);
     }
@@ -262,8 +263,9 @@ fn run_configured(
     interactive: bool,
     cancellation: CancellationToken,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut engine =
-        RustEngine::new(ConfiguredProvider::from_environment()?).with_cancellation(cancellation);
+    let mut engine = RustEngine::new(ConfiguredProvider::from_environment()?)
+        .with_cancellation(cancellation)
+        .with_voice(VoiceService::from_env());
     if interactive && !events {
         engine = engine.with_event_sink(print_live_event);
     }

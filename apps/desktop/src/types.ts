@@ -9,6 +9,14 @@ export type EngineEvent = {
   payload: Record<string, unknown>;
 };
 
+export type VoiceSnapshot = {
+  enabled: boolean;
+  provider: string;
+  state: "DISABLED" | "IDLE" | "GENERATING" | "SPEAKING" | "UNAVAILABLE";
+  queue_length: number;
+  last_error: string | null;
+};
+
 export type Verification = {
   passed: boolean;
   failure_class: string;
@@ -54,6 +62,7 @@ export type RunView = {
   events: EngineEvent[];
   result: RunResult | null;
   error: string | null;
+  voice?: VoiceSnapshot;
 };
 
 export type GestureActionType =
@@ -90,4 +99,3 @@ declare global {
     };
   }
 }
-

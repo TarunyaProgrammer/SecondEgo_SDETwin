@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import logoUrl from "./assets/secondego-logo.png";
 import { GestureIndicator } from "./components/GestureIndicator";
 import { useGestureControl } from "./hooks/useGestureControl";
-import type { DiscoveryFinding, EngineEvent, GestureActionType, GestureEvent, RunView } from "./types";
+import type { DiscoveryFinding, EngineEvent, GestureActionType, GestureEvent, RunView, VoiceSnapshot } from "./types";
 
 const defaultGateway =
   new URLSearchParams(window.location.search).get("gateway") ||
@@ -49,6 +49,14 @@ function label(event?: EngineEvent): string {
 
 function time(value: string): string {
   return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function voiceLabel(voice?: VoiceSnapshot): string {
+  if (!voice || voice.state === "DISABLED") return "voice disabled";
+  if (voice.state === "GENERATING") return "voice generating";
+  if (voice.state === "SPEAKING") return "voice speaking";
+  if (voice.state === "UNAVAILABLE") return "voice unavailable";
+  return "voice idle";
 }
 
 function WorkerSprite({ worker, state }: { worker: Worker; state: WorkerState }) {
@@ -315,7 +323,7 @@ function App() {
 
         <aside className={`run-panel ${statusTone} ${run ? "has-run" : "is-welcome"}`}>
           {run ? <>
-         <div className="run-heading"><span className="kicker">Run state</span><strong><i />{statusLabel}</strong>{busy && !complete && <button className="stop-action" type="button" onClick={() => void cancelRun()} disabled={stopping}>{stopping ? "Stopping…" : "Stop run"}</button>}</div>
+         <div className="run-heading"><span className="kicker">Run state</span><strong><i />{statusLabel}</strong><span className={`voice-state voice-${(run.voice?.state || "DISABLED").toLowerCase()}`} aria-label={`Voice ${voiceLabel(run.voice)}`}><i />{voiceLabel(run.voice)}</span>{busy && !complete && <button className="stop-action" type="button" onClick={() => void cancelRun()} disabled={stopping}>{stopping ? "Stopping…" : "Stop run"}</button>}</div>
          <dl className="run-metrics">
            <div><dt>Current phase</dt><dd>{activePhase || "—"}</dd></div>
            <div><dt>Current agent</dt><dd>{activeWorker ? activeWorker.name : "—"}</dd></div>

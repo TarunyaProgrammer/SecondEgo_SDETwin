@@ -289,6 +289,40 @@ make desktop-electron
 The renderer only submits bounded requests and displays engine events. It does
 not hold model keys, execute shell commands, or write repository files directly.
 
+## Optional Gemini TTS narration
+
+SecondEgo includes an optional voice output adapter for demonstrations. It
+subscribes to structured engine events, selects a small set of deterministic
+local narration templates, and sends only the selected short narration text to
+the Google Gemini API for text-to-speech. Gemini TTS is not used for coding,
+reasoning, planning, repository analysis, issue discovery, tool selection,
+agent orchestration, recovery, summarization, context management, or user
+input processing. There is no microphone or speech-to-text path.
+
+Voice is disabled by default and is not part of the correctness-critical
+evaluation path:
+
+```bash
+VOICE_ENABLED=false
+
+# For a local demonstration only:
+VOICE_ENABLED=true
+GEMINI_API_KEY="<GOOGLE_AI_STUDIO_KEY>"
+GEMINI_TTS_MODEL=gemini-3.8-flash-lite-tts
+```
+
+The key is read only by the Rust engine/gateway and is never exposed to the
+Electron renderer, telemetry, logs, prompts, or run evidence. When voice is
+enabled, narration is queued on a bounded background worker and audio playback
+is isolated from the coding loop. Missing credentials, network failures,
+timeouts, malformed audio, and playback failures reduce voice to an
+unavailable presentation state; they cannot fail or stop a coding run.
+
+The desktop observer shows `voice disabled`, `voice generating`, `voice
+speaking`, `voice idle`, or `voice unavailable` as provider state. The UI does
+not control agent execution. Disable voice for evaluation environments unless
+the organizers explicitly permit external TTS services.
+
 ## Architecture
 
 ```text
