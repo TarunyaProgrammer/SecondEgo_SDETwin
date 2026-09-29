@@ -394,8 +394,8 @@ fn planning_context_profile(prompt_token_limit: Option<u32>) -> PlanningContextP
             state_tokens,
             response_tokens: 2_000,
         },
-        initial_evidence_files: 4,
-        source_excerpt_chars: 1_200,
+        initial_evidence_files: 3,
+        source_excerpt_chars: 2_000,
     }
 }
 
@@ -2567,8 +2567,8 @@ mod tests {
             profile.budget.total_tokens - profile.budget.response_tokens,
             3_500
         );
-        assert_eq!(profile.initial_evidence_files, 4);
-        assert_eq!(profile.source_excerpt_chars, 1_200);
+        assert_eq!(profile.initial_evidence_files, 3);
+        assert_eq!(profile.source_excerpt_chars, 2_000);
     }
 
     const TASKFLOW_STATUS_TASK: &str = "In TaskFlow, project task lists can return stale data after a task's status is successfully changed.
