@@ -638,74 +638,111 @@ impl<P: ModelProvider> RustEngine<P> {
             },
             runner,
         };
-        if let Err(error) = execute_actions(
+        let verifier = VerificationEngine {
+            runner: &router.runner,
+        };
+        let execution_result = execute_actions(
             &mut self.resources,
             &router,
             &plan.actions,
             self.cancellation.as_ref(),
             &mut tools_used,
-        ) {
-            return self.abort_transaction_error(
-                &mut transaction,
-                &mut machine,
-                &mut events,
-                "execute.actions",
-                error,
-            );
-        }
-        self.activity(
-            &mut events,
-            &machine.state,
-            "activity.completed",
-            "execute.actions",
-            "Validated actions completed",
         );
-        if let Err(error) = self.check_cancel(&mut machine, &mut events) {
-            transaction.abort();
-            return Err(error);
-        }
-        self.append_event(
-            &mut events,
-            machine
-                .move_to(Phase::Verify, "run bounded verification commands")
-                .map_err(|error| RuntimeError::State(error.to_string()))?,
-        );
-        self.activity(
-            &mut events,
-            &machine.state,
-            "activity.started",
-            "verification.run",
-            &format!(
-                "Running {} verification command(s)",
-                plan.verification_commands.len()
-            ),
-        );
-        let verifier = VerificationEngine {
-            runner: &router.runner,
-        };
-        for _ in &plan.verification_commands {
-            if let Err(resource_error) = self.resources.record_tool_call() {
+
+        let mut verification = if let Err(error) = execution_result {
+            if matches!(error, RuntimeError::Cancelled | RuntimeError::Resource(_)) {
                 return self.abort_transaction_error(
                     &mut transaction,
                     &mut machine,
                     &mut events,
-                    "resource.tool",
-                    RuntimeError::Resource(resource_error.to_string()),
+                    "execute.actions",
+                    error,
                 );
             }
-        }
-        let mut verification = verifier.run(&plan.verification_commands);
-        self.activity(
-            &mut events,
-            &machine.state,
-            "activity.completed",
-            "verification.run",
-            if verification.passed {
-                "Verification passed"
-            } else {
-                "Verification produced a failure record"
-            },
-        );
+            transaction.abort();
+            self.activity(
+                &mut events,
+                &machine.state,
+                "activity.failed",
+                "execute.actions",
+                &error.to_string(),
+            );
+            secondego_verification::VerificationResult {
+                passed: false,
+                commands: Vec::new(),
+                passed_tests: 0,
+                failed_tests: 1,
+                failure_class: secondego_verification::FailureClass::ToolFailure,
+                failure_summary: Some(format!("Action execution failed: {}", error)),
+                failure_record: Some(secondego_verification::FailureRecord {
+                    failure_class: secondego_verification::FailureClass::ToolFailure,
+                    summary: format!("Action execution failed: {}", error),
+                    failing_tests: Vec::new(),
+                    error_locations: Vec::new(),
+                    fingerprint: None,
+                    changed_paths: Vec::new(),
+                }),
+                evidence: vec![secondego_verification::VerificationEvidence {
+                    command: Vec::new(),
+                    success: false,
+                    exit_code: None,
+                    duration_ms: 0,
+                    output: format!("Action execution failed: {}", error),
+                }],
+            }
+        } else {
+            self.activity(
+                &mut events,
+                &machine.state,
+                "activity.completed",
+                "execute.actions",
+                "Validated actions completed",
+            );
+            if let Err(error) = self.check_cancel(&mut machine, &mut events) {
+                transaction.abort();
+                return Err(error);
+            }
+            self.append_event(
+                &mut events,
+                machine
+                    .move_to(Phase::Verify, "run bounded verification commands")
+                    .map_err(|error| RuntimeError::State(error.to_string()))?,
+            );
+            self.activity(
+                &mut events,
+                &machine.state,
+                "activity.started",
+                "verification.run",
+                &format!(
+                    "Running {} verification command(s)",
+                    plan.verification_commands.len()
+                ),
+            );
+            for _ in &plan.verification_commands {
+                if let Err(resource_error) = self.resources.record_tool_call() {
+                    return self.abort_transaction_error(
+                        &mut transaction,
+                        &mut machine,
+                        &mut events,
+                        "resource.tool",
+                        RuntimeError::Resource(resource_error.to_string()),
+                    );
+                }
+            }
+            let v = verifier.run(&plan.verification_commands);
+            self.activity(
+                &mut events,
+                &machine.state,
+                "activity.completed",
+                "verification.run",
+                if v.passed {
+                    "Verification passed"
+                } else {
+                    "Verification produced a failure record"
+                },
+            );
+            v
+        };
         if !verification.passed {
             if let Err(error) = self.check_cancel(&mut machine, &mut events) {
                 transaction.abort();
@@ -1665,19 +1702,15 @@ fn execute_actions(
 
 fn validate_plan_actions(plan: &ActionPlan, router: &ToolRouter) -> Result<(), RuntimeError> {
     for action in &plan.actions {
+        let args = match action.arguments.as_object() {
+            Some(obj) => obj,
+            None => return Err(RuntimeError::Plan(format!("{}: arguments must be an object", action.action))),
+        };
         if action.action == "replace_text" {
-            let path_str = action
-                .arguments
-                .get("path")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default();
-            let old_text = action
-                .arguments
-                .get("old_text")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default();
+            let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or_default();
+            let old_text = args.get("old_text").and_then(|v| v.as_str()).unwrap_or_default();
             if path_str.is_empty() || old_text.is_empty() {
-                continue;
+                return Err(RuntimeError::Plan("replace_text: path and old_text arguments are required and must not be empty.".into()));
             }
             if let Ok(resolved) = router.files.workspace.resolve(path_str) {
                 if resolved.is_file() {
@@ -1688,11 +1721,7 @@ fn validate_plan_actions(plan: &ActionPlan, router: &ToolRouter) -> Result<(), R
                                 "replace_text: {path_str}: old_text must match exactly once in the file; found 0 matches; requested={old_text:?}. Copy the exact lines verbatim from the source file."
                             )));
                         } else if count > 1 {
-                            let new_text = action
-                                .arguments
-                                .get("new_text")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or_default();
+                            let new_text = args.get("new_text").and_then(|v| v.as_str()).unwrap_or_default();
                             if !new_text.starts_with(old_text) {
                                 return Err(RuntimeError::Plan(format!(
                                     "replace_text: {path_str}: old_text is ambiguous; found {count} matches. Include more surrounding lines to match uniquely once."
@@ -1702,6 +1731,47 @@ fn validate_plan_actions(plan: &ActionPlan, router: &ToolRouter) -> Result<(), R
                     }
                 }
             }
+        } else if action.action == "append_text" {
+            let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or_default();
+            let content = args.get("content").and_then(|v| v.as_str()).unwrap_or_default();
+            if path_str.is_empty() || content.is_empty() {
+                return Err(RuntimeError::Plan("append_text: path and content arguments are required and must not be empty.".into()));
+            }
+            if let Ok(resolved) = router.files.workspace.resolve(path_str) {
+                if resolved.is_file() {
+                    if let Ok(existing) = std::fs::read_to_string(&resolved) {
+                        if existing.ends_with(content) {
+                            return Err(RuntimeError::Plan(format!(
+                                "append_text: {path_str}: content is already present at the end of the file."
+                            )));
+                        }
+                    }
+                }
+            }
+        } else if action.action == "apply_patch" {
+            let patch = args.get("patch").and_then(|v| v.as_str()).unwrap_or_default();
+            if patch.is_empty() {
+                return Err(RuntimeError::Plan("apply_patch: patch argument is required and must not be empty.".into()));
+            }
+            if let Err(error) = validate_unified_patch(patch) {
+                return Err(RuntimeError::Plan(format!(
+                    "apply_patch: invalid unified diff patch format: {error}"
+                )));
+            }
+        } else if action.action == "edit_file" || action.action == "write_file" {
+            let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or_default();
+            let content = args.get("content").and_then(|v| v.as_str()).unwrap_or_default();
+            if path_str.is_empty() || content.is_empty() {
+                return Err(RuntimeError::Plan(format!(
+                    "{}: path and content arguments are required and must not be empty.", action.action
+                )));
+            }
+        } else if action.action == "run_command" {
+            if args.get("argv").and_then(|v| v.as_array()).is_none() {
+                return Err(RuntimeError::Plan("run_command: argv array argument is required.".into()));
+            }
+        } else if !["read_file", "search_code", "git_diff", "git_status"].contains(&action.action.as_str()) {
+            return Err(RuntimeError::Plan(format!("unsupported action: {}", action.action)));
         }
     }
     Ok(())
