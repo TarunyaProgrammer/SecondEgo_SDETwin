@@ -23,7 +23,32 @@ static INTERRUPT_REQUESTED: AtomicBool = AtomicBool::new(false);
 static RUN_ACTIVE: AtomicBool = AtomicBool::new(false);
 static PARENT_TERMINAL_PGRP: AtomicI32 = AtomicI32::new(0);
 
+fn augment_env_path() {
+    if let Some(path) = env::var_os("PATH") {
+        let mut paths = env::split_paths(&path).collect::<Vec<_>>();
+        let home = env::var("HOME").unwrap_or_default();
+        let common = vec![
+            format!("{}/.cargo/bin", home),
+            format!("{}/.local/bin", home),
+            "/opt/homebrew/bin".to_string(),
+            "/usr/local/bin".to_string(),
+        ];
+        for dir in common {
+            let p = PathBuf::from(dir);
+            if !paths.contains(&p) {
+                paths.push(p);
+            }
+        }
+        if let Ok(new_path) = env::join_paths(paths) {
+            unsafe {
+                env::set_var("PATH", new_path);
+            }
+        }
+    }
+}
+
 fn main() {
+    augment_env_path();
     let arguments: Vec<String> = env::args().skip(1).collect();
     if arguments
         .iter()

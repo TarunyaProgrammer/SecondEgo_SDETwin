@@ -166,7 +166,7 @@ issue
   -> understand
   -> explore repository
   -> plan structured actions
-  -> execute in detached Git worktree
+  -> execute in detached Git worktree (execution failures trigger adaptive recovery)
   -> run verification commands
   -> diagnose and perform bounded recovery when configured
   -> transfer only verified changes
@@ -176,7 +176,7 @@ issue
 The terminal reports explicit terminal outcomes:
 
 - `COMPLETE`: verification passed and the verified diff was transferred;
-- `FAILED`: execution or verification failed;
+- `FAILED`: the harness could not recover from execution or verification failures within the allowed budget;
 - `BLOCKED`: a safety, environment, repository, or policy requirement prevented execution;
 - `CANCELLED`: execution was cancelled.
 
