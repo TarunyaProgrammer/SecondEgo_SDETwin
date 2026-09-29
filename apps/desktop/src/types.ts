@@ -106,7 +106,7 @@ export type GestureServiceStatus = {
 
 export type LandmarkGestureSignal = {
   schema_version: 1;
-  gesture: "thumbs_up" | "thumbs_down" | "open_palm";
+  gesture: "fist" | "open_palm" | "four_fingers";
   hand: "Left" | "Right";
   confidence: number;
   timestamp: string;

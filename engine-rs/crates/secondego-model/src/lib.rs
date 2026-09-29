@@ -994,12 +994,10 @@ fn groq_response_schema(phase: &str) -> Value {
                 "properties": {
                     "actions": {
                         "type": "array",
-                        "minItems": 1,
                         "items": action_schema.clone()
                     },
                     "verification_commands": {
                         "type": "array",
-                        "minItems": 1,
                         "items": {
                             "type": "array",
                             "items": {"type": "string"}

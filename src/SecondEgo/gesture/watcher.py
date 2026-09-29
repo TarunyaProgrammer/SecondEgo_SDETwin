@@ -166,7 +166,11 @@ class GestureWatcher:
             )
             logger.info("Downloading MediaPipe hand-landmarker model …")
             try:
-                urllib.request.urlretrieve(url, model_path)
+                import ssl
+                context = ssl._create_unverified_context()
+                with urllib.request.urlopen(url, context=context) as response:
+                    with open(model_path, "wb") as f:
+                        f.write(response.read())
                 logger.info("Model saved to %s", model_path)
             except Exception as exc:  # noqa: BLE001
                 # Clean up partial file so next run re-tries

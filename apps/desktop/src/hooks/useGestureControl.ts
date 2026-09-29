@@ -9,9 +9,9 @@ import type {
 } from "../types";
 
 const GESTURE_ACTION_MAP: Record<string, { action: GestureActionType; label: string }> = {
-  thumbs_up: { action: "expand_notch", label: "Thumbs up · Expand notch" },
-  thumbs_down: { action: "collapse_notch", label: "Thumbs down · Collapse notch" },
   open_palm: { action: "expand_notch", label: "Open palm · Expand notch" },
+  four_fingers: { action: "expand_notch", label: "Fingers together · Expand notch" },
+  fist: { action: "collapse_notch", label: "Closed fist · Collapse notch" },
 };
 
 const gestureServiceStates = new Set<GestureServiceState>([
@@ -50,7 +50,7 @@ function isLandmarkSignal(value: unknown): value is LandmarkGestureSignal {
   if (!value || typeof value !== "object") return false;
   const signal = value as Partial<LandmarkGestureSignal>;
   return signal.schema_version === 1
-    && (signal.gesture === "thumbs_up" || signal.gesture === "thumbs_down" || signal.gesture === "open_palm")
+    && (signal.gesture === "open_palm" || signal.gesture === "four_fingers" || signal.gesture === "fist")
     && (signal.hand === "Left" || signal.hand === "Right")
     && typeof signal.confidence === "number"
     && typeof signal.timestamp === "string";
