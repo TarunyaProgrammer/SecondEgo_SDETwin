@@ -7,7 +7,7 @@ final class NotchWindow: NSWindow {
     override var canBecomeMain: Bool { true }
 }
 
-final class NotchController: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
+final class NotchController: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NSWindowDelegate {
     private let root: URL
     private let token = UUID().uuidString
     private let port: String
@@ -25,7 +25,7 @@ final class NotchController: NSObject, WKScriptMessageHandler, WKNavigationDeleg
         startGateway()
 
         let configuration = WKWebViewConfiguration()
-        let bridge = "window.secondEgoWindow={setExpanded:function(expanded){window.webkit.messageHandlers.secondEgoWindow.postMessage(!!expanded);return Promise.resolve();}};window.addEventListener('error',function(event){window.webkit.messageHandlers.secondEgoConsole.postMessage(String(event.message||'WebKit JavaScript error'));});window.addEventListener('unhandledrejection',function(event){window.webkit.messageHandlers.secondEgoConsole.postMessage(String(event.reason||'Unhandled promise rejection'));});"
+        let bridge = "window.__secondEgoNotchCollapse=null;window.secondEgoWindow={setExpanded:function(expanded){window.webkit.messageHandlers.secondEgoWindow.postMessage(!!expanded);return Promise.resolve();},onNotchCollapse:function(callback){window.__secondEgoNotchCollapse=callback;return function(){if(window.__secondEgoNotchCollapse===callback)window.__secondEgoNotchCollapse=null;};}};window.addEventListener('error',function(event){window.webkit.messageHandlers.secondEgoConsole.postMessage(String(event.message||'WebKit JavaScript error'));});window.addEventListener('unhandledrejection',function(event){window.webkit.messageHandlers.secondEgoConsole.postMessage(String(event.reason||'Unhandled promise rejection'));});"
         configuration.userContentController.addUserScript(
             WKUserScript(source: bridge, injectionTime: .atDocumentStart, forMainFrameOnly: true)
         )
@@ -53,6 +53,7 @@ final class NotchController: NSObject, WKScriptMessageHandler, WKNavigationDeleg
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         window.isMovable = false
         window.hidesOnDeactivate = false
+        window.delegate = self
         webView.frame = NSRect(origin: .zero, size: bounds(expanded: false).size)
         window.contentView = webView
         NSApp.activate(ignoringOtherApps: true)
@@ -79,6 +80,12 @@ final class NotchController: NSObject, WKScriptMessageHandler, WKNavigationDeleg
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         NSLog("SecondEgo UI failed before load: %@", error.localizedDescription)
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        guard window != nil else { return }
+        setNotchFrame(expanded: false)
+        webView.evaluateJavaScript("window.__secondEgoNotchCollapse && window.__secondEgoNotchCollapse();", completionHandler: nil)
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -126,8 +133,8 @@ final class NotchController: NSObject, WKScriptMessageHandler, WKNavigationDeleg
     private func bounds(expanded: Bool) -> NSRect {
         let screen = notchScreen()
         let screenFrame = screen.frame
-        let desiredWidth: CGFloat = expanded ? 1024 : 260
-        let desiredHeight: CGFloat = expanded ? 720 : 46
+        let desiredWidth: CGFloat = expanded ? 1180 : 260
+        let desiredHeight: CGFloat = expanded ? 800 : 46
         let width = min(desiredWidth, max(236, screenFrame.width - 24))
         let height = min(desiredHeight, max(38, screenFrame.height - 18))
         return NSRect(

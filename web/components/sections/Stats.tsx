@@ -8,8 +8,8 @@ const stats = [
 
 export function Stats() {
   return (
-    <section className="stats-section wrap" aria-label="Runtime limits">
-      <Reveal className="stats-heading"><p className="eyebrow">BOUNDS THAT ARE EXPLICIT</p><p className="stats-heading__copy">Resource limits live in the runtime,<br />where they can be enforced.</p></Reveal>
+    <section className="stats-section wrap" aria-label="Runtime limits" data-tone="paper">
+      <Reveal className="stats-heading"><p className="section-label">BOUNDS THAT ARE EXPLICIT</p><p className="stats-heading__copy">Resource limits live in the runtime,<br />where they can be enforced.</p></Reveal>
       <div className="stats-grid">
         {stats.map((stat, index) => (
           <Reveal className="stat-card" key={stat.value} delay={index * 0.08}>

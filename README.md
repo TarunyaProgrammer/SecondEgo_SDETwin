@@ -102,8 +102,10 @@ export SECONDEGO_PROVIDER=deepseek
 export SECONDEGO_MODEL="<PRESCRIBED_MODEL>"
 ```
 
-The harness reads the API key only from `AI_API_KEY`. Credentials must not be
-committed, included in prompts, or written to run evidence.
+The evaluator path reads its credential from `AI_API_KEY`. When using the local
+Groq alternative, set `SECONDEGO_PROVIDER=groq` and provide `GROQ_API_KEY`
+instead. Credentials must not be committed, included in prompts, or written to
+run evidence.
 
 For local Gemini development, an ignored `.env` may contain a Gemini key and
 matching selection. It is used only when the same variables are not already
@@ -114,6 +116,43 @@ AI_API_KEY="<LOCAL_GEMINI_KEY>"
 SECONDEGO_PROVIDER=gemini
 SECONDEGO_MODEL=gemini-3.8-flash
 ```
+
+For local Groq development, use a Groq-specific key and the production model
+shown in Groq's OpenAI-compatible API documentation:
+
+```bash
+GROQ_API_KEY="<YOUR_GROQ_API_KEY>"
+SECONDEGO_PROVIDER=groq
+SECONDEGO_MODEL=qwen/qwen3.8-27b
+```
+
+Groq uses `https://api.groq.com/openai/v1/chat/completions`; no Groq SDK is
+required. To stay inside Groq's tighter token-per-minute limits, Groq planning
+submits one direct plan from the indexed repository evidence rather than using
+a read-only inspection followed by another full model request. The recommended
+default is `qwen/qwen3.8-27b`. Qwen and GPT-OSS use Groq strict structured
+outputs without provider tools, forcing the direct plan contract during token
+generation; GPT-OSS remains available as an explicit override.
+
+The Groq profile compacts the initial planning packet to a 3,500-token target,
+keeps ranked repository evidence and short source excerpts, and reserves room
+for the structured plan. The mission appears once, in the task slot; planning
+state retains populated facts and constraints without duplicating the mission,
+absolute clone path, or empty bookkeeping. The complete runtime state remains
+in the run report. Context logs report state-slot usage and omitted evidence
+counts, and budget failures include used/allowed token estimates for each
+required slot. The terminal records the conservative input estimate
+before each request. When Groq returns OpenAI-compatible `usage` and
+rate-limit headers, it also records aggregate input/output totals and the safe
+remaining-token/reset values—never prompts, responses, or credentials. On a
+429 response, SecondEgo only retries when Groq supplies `Retry-After` (or a
+token-reset delay), waits for at most 60 seconds with cancellation enabled,
+and makes one retry. It never sends immediate 429 retry bursts; an absent or
+longer delay produces a clear terminal failure instead.
+
+`make config` reports whether the selected provider's key is present without
+printing it. The interactive launcher also prompts for `GROQ_API_KEY` when it
+is missing, but never writes the key to the profile or run state.
 
 Run `make config` to display the resolved provider/model and whether a key is
 present. It never prints the key.
@@ -266,13 +305,44 @@ The desktop UI is an explicit opt-in switch. It is off by default:
 
 ```bash
 make ui                 # build and open the macOS notch companion
-make run UI=on          # same opt-in through the standard launcher
+make run UI=on          # desktop-led run through the standard launcher
 make run UI_MODE=events # headless run with compact terminal events
 ```
 
 `UI=off` is the default and is the mode the evaluator should use. The UI is an
-observer only; turning it on never changes planning, tools, permissions, or
-verification.
+observer/control surface only; turning it on never changes planning, tools,
+permissions, or verification. A desktop-led run accepts its repository and
+mission in the notch UI. It is not a second engine attached to a terminal run.
+
+### Run preflight and profiles
+
+`make setup` now prints a safe capability dashboard after the locked build. It
+shows the selected provider/model, key presence, terminal surface, notch UI,
+voice, and gestures without printing credentials. To open the optional setup
+configuration screen, use:
+
+```bash
+make setup CONFIGURE=1
+```
+
+That screen can save only non-secret defaults under the ignored
+`.secondego/profile.conf`; API keys are never persisted by the launcher.
+
+`make run` opens the same preflight before a terminal run when attached to a
+TTY. The quick profiles are:
+
+```text
+1  Judge-safe       terminal, optional features off
+2  Fast terminal    compact terminal output, optional features off
+3  Desktop demo     notch UI, optional features remain opt-in
+4  Custom           select surface, terminal output, voice, and gestures
+```
+
+Use `PROFILE=judge`, `PROFILE=fast`, or `PROFILE=desktop` to skip the profile
+menu. `NONINTERACTIVE=1` skips all prompts and requires credentials to already
+be present in the environment. Optional voice credentials entered at a
+terminal prompt are kept in memory for that process and are never written to
+`.env`, profiles, reports, or the renderer.
 
 The optional browser observer is started with:
 
@@ -320,8 +390,18 @@ unavailable presentation state; they cannot fail or stop a coding run.
 
 The desktop observer shows `voice disabled`, `voice generating`, `voice
 speaking`, `voice idle`, or `voice unavailable` as provider state. The UI does
-not control agent execution. Disable voice for evaluation environments unless
-the organizers explicitly permit external TTS services.
+not control agent execution. The terminal preflight also reports whether the
+voice key and local audio player are ready. Disable voice for evaluation
+environments unless the organizers explicitly permit external TTS services.
+
+## Gesture confirmation sound
+
+When camera gestures are enabled in the desktop/notch surface, each accepted
+gesture plays a short local confirmation chime after the existing gesture
+cooldown accepts it. The sound is generated in the renderer with Web Audio; it
+does not call a service, transmit camera data, or require another credential.
+Gestures remain opt-in and the camera permission prompt is only triggered when
+the feature is enabled.
 
 ## Architecture
 

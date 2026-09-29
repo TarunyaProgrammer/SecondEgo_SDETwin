@@ -5,6 +5,7 @@ from SecondEgo.core.resources import ResourceBudget, ResourceUsage
 from SecondEgo.config import ProviderKind, configured_provider
 from SecondEgo.model.deepseek import DeepSeekProvider
 from SecondEgo.model.gemini import GeminiProvider
+from SecondEgo.model.groq import GroqProvider
 from SecondEgo.model.planner import ModelPlanner
 from SecondEgo.orchestration.engine import HarnessEngine
 from SecondEgo.repository.scanner import RepositoryScanner
@@ -55,11 +56,12 @@ def build_model_planner(
     model: str,
     provider_kind: ProviderKind | None = None,
 ) -> ModelPlanner:
-    provider = (
-        DeepSeekProvider(model=model)
-        if (provider_kind or configured_provider()) is ProviderKind.DEEPSEEK
-        else GeminiProvider(model=model)
-    )
+    selected_provider = provider_kind or configured_provider()
+    provider = {
+        ProviderKind.DEEPSEEK: DeepSeekProvider,
+        ProviderKind.GEMINI: GeminiProvider,
+        ProviderKind.GROQ: GroqProvider,
+    }[selected_provider](model=model)
     return ModelPlanner(
         provider=provider,
         assembler=ContextAssembler(ContextBudget(24_000, 4_000, 2_000, 12_000, 3_000, 3_000)),

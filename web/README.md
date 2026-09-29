@@ -1,6 +1,6 @@
 # SecondEgo marketing site
 
-Static, dark-theme marketing page built with Next.js App Router, TypeScript, Tailwind CSS, and Framer Motion.
+Static paper-and-ink marketing page built with Vite, React, TypeScript, Tailwind CSS, and Framer Motion. The page uses scroll-driven tone changes, a replayable proof console, interactive lifecycle tabs, and open-source project evidence.
 
 ## Run locally
 
@@ -11,6 +11,6 @@ npm install
 npm run dev
 ```
 
-The static export is written to `out/` by `npm run build`. The page uses locally defined CSS and system font stacks; it does not require image or font downloads.
+The static bundle is written to `dist/` by `npm run build`. The page uses a local-first Avenir Next / DM Sans pairing with system fallbacks, so typography does not depend on a third-party font request.
 
-The architecture copy is based on `CURRENT_TEMP.md` and the project evaluation materials. The recovery panel is an architecture walkthrough, not a customer case study. The footer signup field is a visual placeholder and does not submit email addresses anywhere.
+The architecture copy is based on the current project context and evaluation materials. The recovery panel is an architecture walkthrough, not a customer case study. The footer signup field is intentionally a status message; it does not submit email addresses anywhere.

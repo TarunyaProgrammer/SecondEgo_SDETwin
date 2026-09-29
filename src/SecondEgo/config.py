@@ -7,12 +7,14 @@ class ProviderKind(StrEnum):
 
     DEEPSEEK = "deepseek"
     GEMINI = "gemini"
+    GROQ = "groq"
 
 
 DEFAULT_PROVIDER = ProviderKind.DEEPSEEK
 DEFAULT_MODELS = {
     ProviderKind.DEEPSEEK: "deepseek-flash",
     ProviderKind.GEMINI: "gemini-3.8-flash",
+    ProviderKind.GROQ: "qwen/qwen3.8-27b",
 }
 # Compatibility for callers that read the default without selecting a provider.
 DEFAULT_MODEL = DEFAULT_MODELS[DEFAULT_PROVIDER]

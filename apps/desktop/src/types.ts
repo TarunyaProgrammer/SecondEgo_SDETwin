@@ -37,6 +37,13 @@ export type RunResult = {
   target_mutated?: boolean;
   lenses?: string[];
   findings?: DiscoveryFinding[];
+  repository?: {
+    files: number;
+    symbols: number;
+    tests: number;
+    parser_failures: number;
+  };
+  rejected_signals?: number;
 };
 
 export type DiscoveryFinding = {
@@ -67,12 +74,7 @@ export type RunView = {
 
 export type GestureActionType =
   | "expand_notch"
-  | "collapse_notch"
-  | "start_run"
-  | "cancel_run"
-  | "focus_input"
-  | "scroll_up"
-  | "scroll_down";
+  | "collapse_notch";
 
 export type GestureEvent = {
   gesture: string;
@@ -89,13 +91,35 @@ export type GestureState = {
   lastGesture: GestureEvent | null;
   cameraActive: boolean;
   error: string | null;
+  serviceState: GestureServiceState;
+  serviceMessage: string | null;
+};
+
+export type GestureServiceState = "disabled" | "starting" | "active" | "unavailable" | "error";
+
+export type GestureServiceStatus = {
+  schema_version: 1;
+  state: GestureServiceState;
+  message: string | null;
+  timestamp: string;
+};
+
+export type LandmarkGestureSignal = {
+  schema_version: 1;
+  gesture: "thumbs_up" | "thumbs_down" | "open_palm";
+  hand: "Left" | "Right";
+  confidence: number;
+  timestamp: string;
 };
 
 declare global {
   interface Window {
     secondEgoWindow?: {
       setExpanded: (expanded: boolean) => Promise<void>;
-      onGesture?: (callback: (event: GestureEvent) => void) => () => void;
+      onNotchCollapse?: (callback: () => void) => () => void;
+      setGestureEnabled?: (enabled: boolean) => Promise<GestureServiceStatus>;
+      onGesture?: (callback: (event: LandmarkGestureSignal) => void) => () => void;
+      onGestureStatus?: (callback: (status: GestureServiceStatus) => void) => () => void;
     };
   }
 }

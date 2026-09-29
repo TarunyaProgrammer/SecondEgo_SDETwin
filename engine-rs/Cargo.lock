@@ -973,6 +973,7 @@ dependencies = [
  "secondego-runtime",
  "secondego-storage",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]

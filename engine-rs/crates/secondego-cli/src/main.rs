@@ -2,6 +2,7 @@ use std::env;
 use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::thread;
 use std::time::Duration;
@@ -46,6 +47,26 @@ fn main() {
         if let Err(error) = run_discovery(&arguments[1..]) {
             eprintln!("SecondEgo discovery failed: {error}");
             std::process::exit(1);
+        }
+        return;
+    }
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == "preflight")
+    {
+        if let Err(error) = run_preflight(&arguments[1..]) {
+            eprintln!("SecondEgo preflight failed: {error}");
+            std::process::exit(2);
+        }
+        return;
+    }
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == "launch")
+    {
+        if let Err(error) = run_launcher(&arguments[1..]) {
+            eprintln!("SecondEgo launcher failed: {error}");
+            std::process::exit(2);
         }
         return;
     }
@@ -195,6 +216,8 @@ fn print_help() {
     println!("SecondEgo — bounded local coding harness");
     println!();
     println!("COMMANDS");
+    println!("  secondego launch                       Resolve features, then start a run");
+    println!("  secondego preflight                    Show safe capability status");
     println!("  secondego --interactive                 Run the verified task-fixing harness");
     println!("  secondego --workspace PATH --task TEXT   Run a non-interactive task");
     println!("  secondego discover --repo PATH           Scan a repository without modifying it");
@@ -227,6 +250,607 @@ fn print_help() {
     println!("  5. Re-run and show the target Git diff is unchanged.");
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Surface {
+    Terminal,
+    Desktop,
+}
+
+#[derive(Clone, Debug)]
+struct LaunchConfig {
+    profile: String,
+    surface: Surface,
+    terminal_mode: String,
+    voice_enabled: bool,
+    gestures_enabled: bool,
+}
+
+#[derive(Default)]
+struct RuntimeCredentials {
+    ai_api_key: Option<String>,
+    groq_api_key: Option<String>,
+    gemini_api_key: Option<String>,
+}
+
+fn run_preflight(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let configure = arguments.iter().any(|argument| argument == "--configure");
+    let noninteractive = arguments
+        .iter()
+        .any(|argument| argument == "--noninteractive")
+        || env_flag("SECONDEGO_NONINTERACTIVE")
+        || !io::stdin().is_terminal()
+        || !io::stdout().is_terminal();
+    let mut config = launch_config_from_environment();
+    if configure && !noninteractive {
+        configure_launch(&mut config)?;
+        save_local_profile(&config)?;
+        println!(
+            "  {} saved non-secret defaults to .secondego/profile.conf",
+            paint(MUTED, "·")
+        );
+    }
+    print_preflight(&config, true);
+    Ok(())
+}
+
+fn run_launcher(_arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let interactive = !env_flag("SECONDEGO_NONINTERACTIVE")
+        && io::stdin().is_terminal()
+        && io::stdout().is_terminal();
+    let mut config = launch_config_from_environment();
+    if interactive && env::var("SECONDEGO_PROFILE").is_err() {
+        select_profile(&mut config)?;
+    } else {
+        apply_profile_defaults(&mut config);
+    }
+
+    let mut credentials = RuntimeCredentials {
+        ai_api_key: non_empty_env("AI_API_KEY"),
+        groq_api_key: non_empty_env("GROQ_API_KEY"),
+        gemini_api_key: non_empty_env("GEMINI_API_KEY"),
+    };
+    let credentials_missing = !model_api_key_present(&credentials)
+        || (config.voice_enabled && credentials.gemini_api_key.is_none());
+    print_preflight_with_credentials(&config, &credentials);
+    if interactive {
+        collect_missing_credentials(&config, &mut credentials)?;
+    }
+    validate_launch(&config, &credentials, interactive)?;
+    if credentials_missing {
+        print_preflight_with_credentials(&config, &credentials);
+    }
+
+    match config.surface {
+        Surface::Terminal => launch_terminal(&config, &credentials),
+        Surface::Desktop => launch_desktop(&config, &credentials),
+    }
+}
+
+fn launch_config_from_environment() -> LaunchConfig {
+    let mut config = read_local_profile().unwrap_or_else(|| LaunchConfig {
+        profile: "judge".into(),
+        surface: Surface::Terminal,
+        terminal_mode: "headless".into(),
+        voice_enabled: false,
+        gestures_enabled: false,
+    });
+    if let Ok(value) = env::var("SECONDEGO_PROFILE") {
+        config.profile = value;
+    }
+    if let Ok(value) = env::var("SECONDEGO_SURFACE") {
+        config.surface = match value.to_ascii_lowercase().as_str() {
+            "desktop" | "ui" | "notch" => Surface::Desktop,
+            _ => Surface::Terminal,
+        };
+    }
+    if let Ok(value) = env::var("SECONDEGO_TERMINAL_MODE").or_else(|_| env::var("UI_MODE")) {
+        config.terminal_mode = value;
+    }
+    if env::var("VOICE_ENABLED").is_ok() {
+        config.voice_enabled = env_flag("VOICE_ENABLED");
+    }
+    if env::var("SECONDEGO_GESTURES_ENABLED").is_ok() {
+        config.gestures_enabled = env_flag("SECONDEGO_GESTURES_ENABLED");
+    }
+    config
+}
+
+fn read_local_profile() -> Option<LaunchConfig> {
+    let text = fs::read_to_string(".secondego/profile.conf").ok()?;
+    let mut config = LaunchConfig {
+        profile: "judge".into(),
+        surface: Surface::Terminal,
+        terminal_mode: "headless".into(),
+        voice_enabled: false,
+        gestures_enabled: false,
+    };
+    for line in text.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        match key.trim() {
+            "profile" => config.profile = value.trim().to_owned(),
+            "surface" => {
+                config.surface = if value.trim() == "desktop" {
+                    Surface::Desktop
+                } else {
+                    Surface::Terminal
+                }
+            }
+            "terminal_mode" => config.terminal_mode = value.trim().to_owned(),
+            "voice_enabled" => config.voice_enabled = parse_bool(value),
+            "gestures_enabled" => config.gestures_enabled = parse_bool(value),
+            _ => {}
+        }
+    }
+    Some(config)
+}
+
+fn save_local_profile(config: &LaunchConfig) -> io::Result<()> {
+    fs::create_dir_all(".secondego")?;
+    let surface = match config.surface {
+        Surface::Terminal => "terminal",
+        Surface::Desktop => "desktop",
+    };
+    let contents = format!(
+        "profile={}\nsurface={}\nterminal_mode={}\nvoice_enabled={}\ngestures_enabled={}\n",
+        config.profile,
+        surface,
+        config.terminal_mode,
+        config.voice_enabled,
+        config.gestures_enabled,
+    );
+    fs::write(".secondego/profile.conf", contents)
+}
+
+fn select_profile(config: &mut LaunchConfig) -> Result<(), Box<dyn std::error::Error>> {
+    println!();
+    println!(
+        "{}",
+        paint(
+            CORAL,
+            "╭─ PREFLIGHT PROFILE ─────────────────────────────────────╮"
+        )
+    );
+    println!(
+        "{}",
+        paint(
+            PEACH,
+            "│  1  Judge-safe       terminal · voice off · gestures off │"
+        )
+    );
+    println!(
+        "{}",
+        paint(
+            PEACH,
+            "│  2  Fast terminal    compact output · no optional work  │"
+        )
+    );
+    println!(
+        "{}",
+        paint(
+            PEACH,
+            "│  3  Desktop demo     notch UI · optional capabilities   │"
+        )
+    );
+    println!(
+        "{}",
+        paint(
+            PEACH,
+            "│  4  Custom           choose each capability             │"
+        )
+    );
+    println!(
+        "{}",
+        paint(
+            CORAL,
+            "╰────────────────────────────────────────────────────────╯"
+        )
+    );
+    let choice = prompt("Profile [1]");
+    match choice.trim() {
+        "2" => config.profile = "fast".into(),
+        "3" => config.profile = "desktop".into(),
+        "4" => {
+            config.profile = "custom".into();
+            configure_launch(config)?;
+            return Ok(());
+        }
+        _ => config.profile = "judge".into(),
+    }
+    apply_profile_defaults(config);
+    Ok(())
+}
+
+fn apply_profile_defaults(config: &mut LaunchConfig) {
+    let surface_overridden = env::var("SECONDEGO_SURFACE").is_ok();
+    match config.profile.as_str() {
+        "fast" => {
+            if !surface_overridden {
+                config.surface = Surface::Terminal;
+            }
+            config.terminal_mode = "headless".into();
+            config.voice_enabled = false;
+            config.gestures_enabled = false;
+        }
+        "desktop" => {
+            if !surface_overridden {
+                config.surface = Surface::Desktop;
+            }
+            if env::var("VOICE_ENABLED").is_err() {
+                config.voice_enabled = false;
+            }
+            if env::var("SECONDEGO_GESTURES_ENABLED").is_err() {
+                config.gestures_enabled = false;
+            }
+        }
+        "custom" => {}
+        _ => {
+            if !surface_overridden {
+                config.surface = Surface::Terminal;
+            }
+            if env::var("SECONDEGO_TERMINAL_MODE").is_err() && env::var("UI_MODE").is_err() {
+                config.terminal_mode = "headless".into();
+            }
+            if env::var("VOICE_ENABLED").is_err() {
+                config.voice_enabled = false;
+            }
+            if env::var("SECONDEGO_GESTURES_ENABLED").is_err() {
+                config.gestures_enabled = false;
+            }
+        }
+    }
+}
+
+fn configure_launch(config: &mut LaunchConfig) -> Result<(), Box<dyn std::error::Error>> {
+    config.surface = if prompt("Surface [1=terminal, 2=desktop]").trim() == "2" {
+        Surface::Desktop
+    } else {
+        Surface::Terminal
+    };
+    config.terminal_mode = if prompt("Terminal output [1=compact, 2=events]").trim() == "2" {
+        "events".into()
+    } else {
+        "headless".into()
+    };
+    config.voice_enabled = prompt("Enable Gemini voice? [y/N]")
+        .trim()
+        .eq_ignore_ascii_case("y");
+    config.gestures_enabled = config.surface == Surface::Desktop
+        && prompt("Enable camera gestures? [y/N]")
+            .trim()
+            .eq_ignore_ascii_case("y");
+    Ok(())
+}
+
+fn collect_missing_credentials(
+    config: &LaunchConfig,
+    credentials: &mut RuntimeCredentials,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match ProviderKind::from_environment() {
+        Ok(ProviderKind::Groq) if credentials.groq_api_key.is_none() => {
+            credentials.groq_api_key = Some(prompt_secret(
+                "GROQ_API_KEY is missing. Enter your Groq API key",
+            )?);
+        }
+        Ok(ProviderKind::DeepSeek | ProviderKind::Gemini) | Err(_)
+            if credentials.ai_api_key.is_none() =>
+        {
+            credentials.ai_api_key =
+                Some(prompt_secret("AI_API_KEY is missing. Enter model API key")?);
+        }
+        _ => {}
+    }
+    if config.voice_enabled && credentials.gemini_api_key.is_none() {
+        credentials.gemini_api_key = Some(prompt_secret(
+            "Voice is enabled and GEMINI_API_KEY is missing. Enter Google AI Studio key",
+        )?);
+    }
+    Ok(())
+}
+
+fn validate_launch(
+    config: &LaunchConfig,
+    credentials: &RuntimeCredentials,
+    interactive: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if !model_api_key_present(credentials) {
+        return Err(format!(
+            "{} is required for the selected model provider",
+            model_api_key_name()
+        )
+        .into());
+    }
+    if config.voice_enabled
+        && credentials
+            .gemini_api_key
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .is_empty()
+    {
+        return Err(
+            "voice is enabled but GEMINI_API_KEY is missing; disable voice or provide the key"
+                .into(),
+        );
+    }
+    if config.gestures_enabled && config.surface != Surface::Desktop {
+        return Err("camera gestures require the desktop/notch surface".into());
+    }
+    if config.surface == Surface::Desktop && !command_available("node") {
+        return Err("desktop surface requires Node.js/npm; run make setup-desktop first".into());
+    }
+    if !interactive
+        && config.surface == Surface::Desktop
+        && !PathBuf::from("apps/desktop/node_modules").is_dir()
+    {
+        return Err("desktop dependencies are not installed; run make setup-desktop first".into());
+    }
+    Ok(())
+}
+
+fn launch_terminal(
+    config: &LaunchConfig,
+    credentials: &RuntimeCredentials,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let executable = env::current_exe()?;
+    let mut command = Command::new(executable);
+    command.arg("--interactive");
+    if config.terminal_mode == "events" {
+        command.args(["--ui", "events"]);
+    }
+    apply_child_environment(&mut command, config, credentials);
+    let status = command.status()?;
+    if status.success() || status.code() == Some(130) {
+        Ok(())
+    } else {
+        Err(format!("terminal run exited with {status}").into())
+    }
+}
+
+fn launch_desktop(
+    config: &LaunchConfig,
+    credentials: &RuntimeCredentials,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let desktop_dir = PathBuf::from("apps/desktop");
+    if !desktop_dir.join("node_modules").is_dir() {
+        println!(
+            "  {} installing optional desktop dependencies...",
+            paint(MUTED, "→")
+        );
+        let status = Command::new("npm")
+            .args(["--prefix", "apps/desktop", "ci"])
+            .status()?;
+        if !status.success() {
+            return Err("npm dependency installation failed".into());
+        }
+    }
+    let mut command = Command::new("npm");
+    command.args(["--prefix", "apps/desktop", "run", "desktop"]);
+    apply_child_environment(&mut command, config, credentials);
+    let status = command.status()?;
+    if status.success() || status.code() == Some(130) {
+        Ok(())
+    } else {
+        Err(format!("desktop run exited with {status}").into())
+    }
+}
+
+fn apply_child_environment(
+    command: &mut Command,
+    config: &LaunchConfig,
+    credentials: &RuntimeCredentials,
+) {
+    if let Some(value) = &credentials.ai_api_key {
+        command.env("AI_API_KEY", value);
+    }
+    if let Some(value) = &credentials.groq_api_key {
+        command.env("GROQ_API_KEY", value);
+    }
+    if let Some(value) = &credentials.gemini_api_key {
+        command.env("GEMINI_API_KEY", value);
+    }
+    command
+        .env(
+            "VOICE_ENABLED",
+            if config.voice_enabled {
+                "true"
+            } else {
+                "false"
+            },
+        )
+        .env(
+            "SECONDEGO_GESTURES_ENABLED",
+            if config.gestures_enabled {
+                "true"
+            } else {
+                "false"
+            },
+        );
+}
+
+fn print_preflight(config: &LaunchConfig, setup_only: bool) {
+    let credentials = RuntimeCredentials {
+        ai_api_key: non_empty_env("AI_API_KEY"),
+        groq_api_key: non_empty_env("GROQ_API_KEY"),
+        gemini_api_key: non_empty_env("GEMINI_API_KEY"),
+    };
+    print_preflight_with_credentials(config, &credentials);
+    if setup_only {
+        println!(
+            "  {} setup is complete; no coding run was started.",
+            paint(MUTED, "·")
+        );
+    }
+}
+
+fn print_preflight_with_credentials(config: &LaunchConfig, credentials: &RuntimeCredentials) {
+    let provider = ProviderKind::from_environment()
+        .map(|value| value.name().to_owned())
+        .unwrap_or_else(|_| "invalid".into());
+    let model = configured_model().unwrap_or_else(|_| "invalid model".into());
+    let surface = match config.surface {
+        Surface::Terminal => "terminal",
+        Surface::Desktop => "desktop/notch",
+    };
+    let ui_status = if config.surface == Surface::Desktop {
+        if command_available("node") {
+            "READY"
+        } else {
+            "MISSING NODE"
+        }
+    } else {
+        "OFF"
+    };
+    let voice_status = if !config.voice_enabled {
+        "OFF".to_owned()
+    } else if credentials.gemini_api_key.is_none() {
+        "MISSING KEY".to_owned()
+    } else if cfg!(target_os = "macos") && !command_available("afplay") {
+        "MISSING PLAYER".to_owned()
+    } else {
+        "READY".to_owned()
+    };
+    let gesture_status = if !config.gestures_enabled {
+        "OFF".to_owned()
+    } else if config.surface != Surface::Desktop {
+        "REQUIRES UI".to_owned()
+    } else {
+        "READY / CAMERA PROMPT".to_owned()
+    };
+    println!();
+    println!(
+        "{}",
+        paint(
+            CORAL,
+            "╭─ SECONDEGO PREFLIGHT ────────────────────────────────────╮"
+        )
+    );
+    println!(
+        "{}",
+        paint(PEACH, &format!("│  PROFILE    {:<40}│", config.profile))
+    );
+    println!(
+        "{}",
+        paint(PEACH, &format!("│  PROVIDER   {provider:<40}│"))
+    );
+    println!(
+        "{}",
+        paint(
+            PEACH,
+            &format!("│  MODEL      {:<40}│", panel_value(&model, 40))
+        )
+    );
+    println!(
+        "{}",
+        paint(
+            PEACH,
+            &format!(
+                "│  MODEL KEY  {:<40}│",
+                secret_status(model_api_key_present(credentials))
+            )
+        )
+    );
+    println!("{}", paint(PEACH, &format!("│  SURFACE    {surface:<40}│")));
+    println!(
+        "{}",
+        paint(
+            PEACH,
+            &format!("│  TERMINAL   {:<40}│", config.terminal_mode)
+        )
+    );
+    println!(
+        "{}",
+        paint(PEACH, &format!("│  NOTCH UI   {ui_status:<40}│"))
+    );
+    println!(
+        "{}",
+        paint(PEACH, &format!("│  VOICE      {:<40}│", voice_status))
+    );
+    println!(
+        "{}",
+        paint(PEACH, &format!("│  GESTURES   {:<40}│", gesture_status))
+    );
+    println!(
+        "{}",
+        paint(
+            CORAL,
+            "╰────────────────────────────────────────────────────────╯"
+        )
+    );
+}
+
+fn secret_status(present: bool) -> &'static str {
+    if present { "PRESENT" } else { "MISSING" }
+}
+
+fn model_api_key_name() -> &'static str {
+    match ProviderKind::from_environment() {
+        Ok(ProviderKind::Groq) => "GROQ_API_KEY",
+        _ => "AI_API_KEY",
+    }
+}
+
+fn model_api_key_present(credentials: &RuntimeCredentials) -> bool {
+    match ProviderKind::from_environment() {
+        Ok(ProviderKind::Groq) => credentials
+            .groq_api_key
+            .as_deref()
+            .is_some_and(|key| !key.trim().is_empty()),
+        _ => credentials
+            .ai_api_key
+            .as_deref()
+            .is_some_and(|key| !key.trim().is_empty()),
+    }
+}
+
+fn non_empty_env(name: &str) -> Option<String> {
+    env::var(name).ok().filter(|value| !value.trim().is_empty())
+}
+
+fn env_flag(name: &str) -> bool {
+    env::var(name).ok().is_some_and(|value| parse_bool(&value))
+}
+
+fn parse_bool(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn command_available(name: &str) -> bool {
+    Command::new(name)
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+fn prompt_secret(label: &str) -> io::Result<String> {
+    print!("{}: ", paint(PEACH, label));
+    io::stdout().flush()?;
+    #[cfg(unix)]
+    {
+        let fd = libc::STDIN_FILENO;
+        let mut original = unsafe { std::mem::zeroed::<libc::termios>() };
+        if unsafe { libc::tcgetattr(fd, &mut original) } == 0 {
+            let mut hidden = original;
+            hidden.c_lflag &= !libc::ECHO;
+            unsafe { libc::tcsetattr(fd, libc::TCSANOW, &hidden) };
+            let mut value = String::new();
+            let result = io::stdin().read_line(&mut value);
+            unsafe { libc::tcsetattr(fd, libc::TCSANOW, &original) };
+            println!();
+            return result.map(|_| value.trim().to_owned());
+        }
+    }
+    let mut value = String::new();
+    io::stdin().read_line(&mut value)?;
+    Ok(value.trim().to_owned())
+}
+
 fn run_scripted(
     workspace: PathBuf,
     task: String,
@@ -246,13 +870,15 @@ fn run_scripted(
             rationale: "replayable fixture plan".into(),
         }
     };
+    let voice = VoiceService::from_env();
     let mut engine = RustEngine::new(ScriptedProvider::new(vec![proposal]))
         .with_cancellation(cancellation)
-        .with_voice(VoiceService::from_env());
+        .with_voice(voice.clone());
     if interactive && !events {
         engine = engine.with_event_sink(print_live_event);
     }
-    emit_report(engine.run(task, workspace)?, events, state_db, interactive)
+    let report = engine.run(task, workspace)?;
+    emit_report(report, events, state_db, interactive, Some(&voice))
 }
 
 fn run_configured(
@@ -263,13 +889,15 @@ fn run_configured(
     interactive: bool,
     cancellation: CancellationToken,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let voice = VoiceService::from_env();
     let mut engine = RustEngine::new(ConfiguredProvider::from_environment()?)
         .with_cancellation(cancellation)
-        .with_voice(VoiceService::from_env());
+        .with_voice(voice.clone());
     if interactive && !events {
         engine = engine.with_event_sink(print_live_event);
     }
-    emit_report(engine.run(task, workspace)?, events, state_db, interactive)
+    let report = engine.run(task, workspace)?;
+    emit_report(report, events, state_db, interactive, Some(&voice))
 }
 
 fn emit_report(
@@ -277,6 +905,7 @@ fn emit_report(
     events: bool,
     state_db: Option<String>,
     interactive: bool,
+    voice: Option<&VoiceService>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if events {
         for event in &report.events {
@@ -288,6 +917,9 @@ fn emit_report(
     }
     if interactive {
         print_result_card(&report);
+        if let Some(voice) = voice {
+            print_voice_summary(voice, report.state.run_id);
+        }
     }
     println!("{}", serde_json::to_string_pretty(&report)?);
     if report.verification_passed {
@@ -295,6 +927,24 @@ fn emit_report(
     } else {
         Err("verification failed".into())
     }
+}
+
+fn print_voice_summary(voice: &VoiceService, run_id: uuid::Uuid) {
+    let snapshot = voice.snapshot(run_id);
+    let state = format!("{:?}", snapshot.state).to_ascii_lowercase();
+    let detail = snapshot
+        .last_error
+        .as_deref()
+        .map(|error| format!(" · {error}"))
+        .unwrap_or_default();
+    println!(
+        "  {} voice {} · provider={} · queue={}{}",
+        paint(MUTED, "♪"),
+        state,
+        snapshot.provider,
+        snapshot.queue_length,
+        detail
+    );
 }
 
 fn value(arguments: &[String], name: &str) -> Option<String> {
@@ -668,5 +1318,34 @@ fn paint(code: &str, value: &str) -> String {
         format!("\x1b[{code}m{value}\x1b[0m")
     } else {
         value.to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LaunchConfig, Surface, parse_bool, secret_status};
+
+    #[test]
+    fn boolean_configuration_accepts_safe_user_forms() {
+        assert!(parse_bool("true"));
+        assert!(parse_bool("YES"));
+        assert!(parse_bool("1"));
+        assert!(!parse_bool("false"));
+        assert!(!parse_bool("off"));
+    }
+
+    #[test]
+    fn safe_defaults_disable_optional_surfaces() {
+        let config = LaunchConfig {
+            profile: "judge".into(),
+            surface: Surface::Terminal,
+            terminal_mode: "headless".into(),
+            voice_enabled: false,
+            gestures_enabled: false,
+        };
+        assert_eq!(config.surface, Surface::Terminal);
+        assert!(!config.voice_enabled);
+        assert!(!config.gestures_enabled);
+        assert_eq!(secret_status(false), "MISSING");
     }
 }

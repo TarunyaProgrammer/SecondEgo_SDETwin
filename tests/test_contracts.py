@@ -1,5 +1,6 @@
 import pytest
 import asyncio
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -20,6 +21,12 @@ from SecondEgo.tools.transaction import GitAttemptTransaction
 from SecondEgo.model.base import ActionProposal
 from SecondEgo.model.gemini import GeminiProvider, ProviderConfigurationError
 from SecondEgo.model.deepseek import DeepSeekProvider
+from SecondEgo.model.groq import (
+    GroqProvider,
+    _safe_error_code_from_payload,
+    groq_request_payload,
+    parse_groq_tool_call,
+)
 from SecondEgo.model.planner import ModelPlanner, PlanValidationError
 from SecondEgo.model.scripted import ScriptedProvider
 from SecondEgo.config import DEFAULT_MODEL, ProviderKind, configured_model, configured_provider
@@ -959,6 +966,106 @@ def test_gemini_remains_an_explicit_opt_in(monkeypatch) -> None:
 
     assert configured_provider() is ProviderKind.GEMINI
     assert configured_model() == "gemini-3.8-flash"
+
+
+def test_groq_uses_a_provider_specific_key(monkeypatch) -> None:
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.setenv("AI_API_KEY", "unrelated-evaluator-key")
+    assert GroqProvider()._resolve_api_key() is None
+
+    monkeypatch.setenv("GROQ_API_KEY", "groq-key")
+    assert GroqProvider()._resolve_api_key() == "groq-key"
+
+
+def test_groq_is_an_explicit_provider_with_a_safe_default_model(monkeypatch) -> None:
+    monkeypatch.delenv("SECONDEGO_MODEL", raising=False)
+    monkeypatch.setenv("SECONDEGO_PROVIDER", "groq")
+
+    assert configured_provider() is ProviderKind.GROQ
+    assert configured_model() == "qwen/qwen3.8-27b"
+
+
+def test_groq_gpt_oss_payload_uses_one_allowlisted_native_function_call() -> None:
+    payload = groq_request_payload("openai/gpt-oss-20b", "make a plan")
+
+    assert "response_format" not in payload
+    assert payload["tool_choice"] == "required"
+    assert payload["parallel_tool_calls"] is False
+    assert payload["temperature"] == 0.0
+    assert payload["include_reasoning"] is False
+    assert payload["reasoning_effort"] == "low"
+    assert payload["max_completion_tokens"] == 4_096
+    assert "reasoning_format" not in payload
+    assert len(payload["messages"]) == 2
+    assert payload["messages"][0]["role"] == "system"
+    assert payload["messages"][1]["role"] == "user"
+    assert "make a plan" in payload["messages"][1]["content"]
+    assert [tool["function"]["name"] for tool in payload["tools"]] == ["submit_plan"]
+
+
+def test_groq_gpt_oss_payload_uses_the_python_recovery_function_during_diagnosis() -> None:
+    payload = groq_request_payload("openai/gpt-oss-20b", "recover", phase="DIAGNOSE")
+
+    assert [tool["function"]["name"] for tool in payload["tools"]] == ["submit_repair_plan"]
+
+
+def test_groq_non_gpt_oss_payload_uses_portable_json_without_gpt_oss_controls() -> None:
+    payload = groq_request_payload("llama-3.3-70b-versatile", "make a plan")
+
+    assert payload["response_format"] == {"type": "json_object"}
+    assert "tools" not in payload
+    assert "tool_choice" not in payload
+    assert "reasoning_effort" not in payload
+    assert "include_reasoning" not in payload
+
+
+def test_groq_native_tool_response_is_parsed_without_executing_it() -> None:
+    proposal = parse_groq_tool_call(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "function": {
+                                    "name": "submit_plan",
+                                    "arguments": json.dumps(
+                                        {
+                                            "actions": [],
+                                            "verification_commands": [["pytest", "-q"]],
+                                            "rationale": "bounded plan",
+                                        }
+                                    ),
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        phase="PLAN",
+    )
+
+    assert proposal.action == "submit_plan"
+    assert proposal.arguments["actions"] == []
+    assert proposal.rationale == "bounded plan"
+    assert "rationale" not in proposal.arguments
+
+
+def test_groq_error_classification_does_not_retain_attempted_arguments() -> None:
+    code = _safe_error_code_from_payload(
+        {
+            "error": {
+                "failed_generation": {
+                    "reason": "Tool call arguments are not valid JSON",
+                    "attempted_arguments": "super-secret prompt content",
+                },
+                "type": "invalid_request_error",
+            }
+        }
+    )
+
+    assert code == "tool_arguments_invalid_json"
 
 
 def test_presentation_mode_defaults_to_headless(monkeypatch) -> None:

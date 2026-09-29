@@ -123,6 +123,7 @@ class GestureWatcher:
             return
         self._broker.start()
         self._running = True
+        self._broker.publish_status("starting")
         self._thread = threading.Thread(
             target=self._camera_loop, daemon=True, name="gesture-watcher"
         )
@@ -143,7 +144,41 @@ class GestureWatcher:
 
     # ── Main loop ─────────────────────────────────────────────────────────────
 
+    # ── MediaPipe model management ─────────────────────────────────────────────
+
+    @staticmethod
+    def _ensure_hand_model() -> str:
+        """Download the MediaPipe hand-landmarker .task file on first use.
+
+        Returns the local filesystem path to the model.
+        Raises RuntimeError if the download fails.
+        """
+        import os
+        import urllib.request
+
+        cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "secondego")
+        model_path = os.path.join(cache_dir, "hand_landmarker.task")
+        if not os.path.exists(model_path):
+            os.makedirs(cache_dir, exist_ok=True)
+            url = (
+                "https://storage.googleapis.com/mediapipe-models/"
+                "hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+            )
+            logger.info("Downloading MediaPipe hand-landmarker model …")
+            try:
+                urllib.request.urlretrieve(url, model_path)
+                logger.info("Model saved to %s", model_path)
+            except Exception as exc:  # noqa: BLE001
+                # Clean up partial file so next run re-tries
+                if os.path.exists(model_path):
+                    os.remove(model_path)
+                raise RuntimeError(
+                    f"Could not download hand_landmarker.task: {exc}"
+                ) from exc
+        return model_path
+
     def _camera_loop(self) -> None:
+        cap = None
         try:
             import cv2  # type: ignore[import-not-found]
             import mediapipe as mp  # type: ignore[import-not-found]
@@ -151,85 +186,230 @@ class GestureWatcher:
             logger.error(
                 "Gesture detection requires 'opencv-python' and 'mediapipe': %s", exc
             )
+            self._broker.publish_status(
+                "unavailable",
+                "Install the optional landmark-tracking dependencies.",
+            )
             self._running = False
             return
 
-        mp_hands = mp.solutions.hands
-        mp_draw = mp.solutions.drawing_utils
+        # ── Select implementation path ────────────────────────────────────────
+        # MediaPipe ≥0.10 removed mp.solutions.hands; use the Tasks API instead.
+        # Fall back to the legacy solutions API if still available (0.9.x).
+        use_tasks_api = not hasattr(mp, "solutions") or not hasattr(
+            getattr(mp, "solutions", None), "hands"
+        )
+
+        try:
+            if use_tasks_api:
+                self._run_tasks_api(cv2, mp)
+            else:
+                self._run_solutions_api(cv2, mp)
+        except Exception:  # noqa: BLE001
+            logger.exception("Landmark gesture tracking stopped unexpectedly")
+            self._broker.publish_status(
+                "error",
+                "Landmark gesture tracking stopped unexpectedly.",
+            )
+        finally:
+            self._running = False
+
+    # ── Tasks API (MediaPipe ≥0.10) ───────────────────────────────────────────
+
+    def _run_tasks_api(self, cv2, mp) -> None:  # type: ignore[type-arg]
+        """Camera loop using mp.tasks.vision.HandLandmarker (MediaPipe ≥0.10)."""
+        vision = mp.tasks.vision
+        tasks = mp.tasks
+
+        try:
+            model_path = self._ensure_hand_model()
+        except RuntimeError as exc:
+            logger.error("Cannot start gesture detection: %s", exc)
+            self._broker.publish_status("unavailable", str(exc))
+            self._running = False
+            return
+
+        options = vision.HandLandmarkerOptions(
+            base_options=tasks.BaseOptions(model_asset_path=model_path),
+            running_mode=vision.RunningMode.IMAGE,
+            num_hands=2,
+            min_hand_detection_confidence=0.7,
+            min_hand_presence_confidence=0.5,
+            min_tracking_confidence=0.5,
+        )
 
         cap = cv2.VideoCapture(self._camera_index)
         if not cap.isOpened():
             logger.error("Cannot open camera index %d", self._camera_index)
+            self._broker.publish_status(
+                "unavailable",
+                "The selected camera could not be opened.",
+            )
             self._running = False
             return
 
-        with mp_hands.Hands(
-            static_image_mode=False,
-            max_num_hands=2,
-            min_detection_confidence=0.7,
-            min_tracking_confidence=0.5,
-        ) as hands:
-            while self._running:
-                ok, frame = cap.read()
-                if not ok:
-                    logger.warning("Camera read failed — retrying")
-                    time.sleep(0.05)
-                    continue
+        try:
+            with vision.HandLandmarker.create_from_options(options) as landmarker:
+                self._broker.publish_status("active")
+                while self._running:
+                    ok, frame = cap.read()
+                    if not ok:
+                        logger.warning("Camera read failed — retrying")
+                        time.sleep(0.05)
+                        continue
 
-                frame = cv2.flip(frame, 1)  # mirror so left/right feel natural
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                result = hands.process(rgb)
+                    frame = cv2.flip(frame, 1)
+                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    mp_image = mp.Image(
+                        image_format=mp.ImageFormat.SRGB, data=rgb
+                    )
+                    result = landmarker.detect(mp_image)
 
-                detected_gesture: str | None = None
+                    detected_gesture: str | None = None
 
-                if result.multi_hand_landmarks:
-                    for hand_landmarks, handedness in zip(
-                        result.multi_hand_landmarks,
-                        result.multi_handedness,
-                    ):
-                        label = handedness.classification[0].label  # "Left"/"Right"
-                        self._last_hand = label
+                    if result.hand_landmarks:
+                        for idx, hand_lm_list in enumerate(result.hand_landmarks):
+                            # Handedness: "Left"/"Right" from result.handedness
+                            if result.handedness and idx < len(result.handedness):
+                                label = result.handedness[idx][0].display_name
+                                self._last_hand = label
 
-                        lm = [
-                            Landmark(pt.x, pt.y, pt.z)
-                            for pt in hand_landmarks.landmark
-                        ]
-                        gesture = classify(lm)
-                        if gesture:
-                            detected_gesture = gesture
+                            lm = [
+                                Landmark(lm.x, lm.y, lm.z)
+                                for lm in hand_lm_list
+                            ]
+                            gesture = classify(lm)
+                            if gesture:
+                                detected_gesture = gesture
 
-                        if not self._headless:
-                            mp_draw.draw_landmarks(
-                                frame,
-                                hand_landmarks,
-                                mp_hands.HAND_CONNECTIONS,
+                            if not self._headless:
+                                # Draw landmarks manually using new utils
+                                self._draw_hand_landmarks_tasks(
+                                    cv2, frame, hand_lm_list
+                                )
+
+                    confirmed = self._debouncer.feed(detected_gesture)
+                    if confirmed and self._cooldown.allow(confirmed):
+                        action = self._dispatcher.dispatch(confirmed)
+                        if action:
+                            self._last_action_label = (
+                                GESTURE_EMOJI.get(confirmed, confirmed.upper())
+                            )
+                            self._last_action_time = time.monotonic()
+                            logger.info(
+                                "Gesture fired: %s → %s", confirmed, action.name
                             )
 
-                confirmed = self._debouncer.feed(detected_gesture)
-                if confirmed and self._cooldown.allow(confirmed):
-                    action = self._dispatcher.dispatch(confirmed)
-                    if action:
-                        self._last_action_label = (
-                            GESTURE_EMOJI.get(confirmed, confirmed.upper())
-                        )
-                        self._last_action_time = time.monotonic()
-                        logger.info(
-                            "Gesture fired: %s → %s", confirmed, action.name
-                        )
+                    if not self._headless:
+                        self._draw_hud(frame, detected_gesture)
+                        cv2.imshow("SecondEgo Gesture Control", frame)
+                        if cv2.waitKey(1) & 0xFF == ord("q"):
+                            self._running = False
+        finally:
+            self._running = False
+            cap.release()
+            if not self._headless:
+                try:
+                    import cv2 as _cv2  # type: ignore[import-not-found]
+                    _cv2.destroyAllWindows()
+                except Exception:  # noqa: BLE001
+                    pass
 
-                if not self._headless:
-                    self._draw_hud(frame, detected_gesture)
-                    cv2.imshow("SecondEgo Gesture Control", frame)
-                    if cv2.waitKey(1) & 0xFF == ord("q"):
-                        self._running = False
+    def _draw_hand_landmarks_tasks(self, cv2, frame, hand_lm_list) -> None:  # type: ignore[type-arg]
+        """Draw landmarks from the Tasks API result onto the frame."""
+        h, w = frame.shape[:2]
+        # Draw dots at each landmark
+        for lm in hand_lm_list:
+            cx, cy = int(lm.x * w), int(lm.y * h)
+            cv2.circle(frame, (cx, cy), 4, (0, 220, 100), -1)
 
-        cap.release()
-        if not self._headless:
-            try:
-                import cv2  # noqa: F401
-                cv2.destroyAllWindows()
-            except Exception:  # noqa: BLE001
-                pass
+    # ── Solutions API (MediaPipe 0.9.x legacy) ────────────────────────────────
+
+    def _run_solutions_api(self, cv2, mp) -> None:  # type: ignore[type-arg]
+        """Camera loop using the legacy mp.solutions.hands (MediaPipe <0.10)."""
+        cap = None
+        try:
+            mp_hands = mp.solutions.hands
+            mp_draw = mp.solutions.drawing_utils
+
+            cap = cv2.VideoCapture(self._camera_index)
+            if not cap.isOpened():
+                logger.error("Cannot open camera index %d", self._camera_index)
+                self._broker.publish_status(
+                    "unavailable",
+                    "The selected camera could not be opened.",
+                )
+                return
+
+            with mp_hands.Hands(
+                static_image_mode=False,
+                max_num_hands=2,
+                min_detection_confidence=0.7,
+                min_tracking_confidence=0.5,
+            ) as hands:
+                self._broker.publish_status("active")
+                while self._running:
+                    ok, frame = cap.read()
+                    if not ok:
+                        logger.warning("Camera read failed — retrying")
+                        time.sleep(0.05)
+                        continue
+
+                    frame = cv2.flip(frame, 1)
+                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    result = hands.process(rgb)
+
+                    detected_gesture: str | None = None
+
+                    if result.multi_hand_landmarks:
+                        for hand_landmarks, handedness in zip(
+                            result.multi_hand_landmarks,
+                            result.multi_handedness,
+                        ):
+                            label = handedness.classification[0].label
+                            self._last_hand = label
+
+                            lm = [
+                                Landmark(pt.x, pt.y, pt.z)
+                                for pt in hand_landmarks.landmark
+                            ]
+                            gesture = classify(lm)
+                            if gesture:
+                                detected_gesture = gesture
+
+                            if not self._headless:
+                                mp_draw.draw_landmarks(
+                                    frame,
+                                    hand_landmarks,
+                                    mp_hands.HAND_CONNECTIONS,
+                                )
+
+                    confirmed = self._debouncer.feed(detected_gesture)
+                    if confirmed and self._cooldown.allow(confirmed):
+                        action = self._dispatcher.dispatch(confirmed)
+                        if action:
+                            self._last_action_label = (
+                                GESTURE_EMOJI.get(confirmed, confirmed.upper())
+                            )
+                            self._last_action_time = time.monotonic()
+                            logger.info(
+                                "Gesture fired: %s → %s", confirmed, action.name
+                            )
+
+                    if not self._headless:
+                        self._draw_hud(frame, detected_gesture)
+                        cv2.imshow("SecondEgo Gesture Control", frame)
+                        if cv2.waitKey(1) & 0xFF == ord("q"):
+                            self._running = False
+        finally:
+            self._running = False
+            if cap is not None:
+                cap.release()
+            if not self._headless:
+                try:
+                    cv2.destroyAllWindows()
+                except Exception:  # noqa: BLE001
+                    pass
 
     def _draw_hud(self, frame, detected: str | None) -> None:  # type: ignore[type-arg]
         """Draw semi-transparent HUD overlay on the camera frame."""
@@ -322,7 +502,7 @@ def main() -> None:
     if args.headless:
         watcher.start()
         try:
-            while True:
+            while watcher._running:  # noqa: SLF001 - CLI owns this watcher
                 time.sleep(1)
         except KeyboardInterrupt:
             pass
@@ -332,6 +512,7 @@ def main() -> None:
         # Run camera loop in main thread (required by OpenCV on macOS)
         watcher._broker.start()  # noqa: SLF001
         watcher._running = True  # noqa: SLF001
+        watcher._broker.publish_status("starting")  # noqa: SLF001
         try:
             watcher._camera_loop()  # noqa: SLF001
         except KeyboardInterrupt:

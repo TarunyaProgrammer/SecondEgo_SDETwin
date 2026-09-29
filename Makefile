@@ -3,6 +3,9 @@ VENV ?= .venv
 UI_MODE ?= headless
 UI ?= off
 ENGINE ?= rust
+PROFILE ?=
+NONINTERACTIVE ?= 0
+CONFIGURE ?= 0
 RUST_BIN ?= $(CURDIR)/engine-rs/target/release/secondego-cli
 RUST_MANIFEST ?= engine-rs/Cargo.toml
 DESKTOP_DIR ?= apps/desktop
@@ -16,6 +19,8 @@ if [ -f ".env" ]; then \
 		case "$$dotenv_line" in \
 			AI_API_KEY=*) \
 				if [ -z "$${AI_API_KEY:-}" ]; then AI_API_KEY=$${dotenv_line#AI_API_KEY=}; export AI_API_KEY; fi ;; \
+			GROQ_API_KEY=*) \
+				if [ -z "$${GROQ_API_KEY:-}" ]; then GROQ_API_KEY=$${dotenv_line#GROQ_API_KEY=}; export GROQ_API_KEY; fi ;; \
 			SECONDEGO_PROVIDER=*) \
 				if [ -z "$${SECONDEGO_PROVIDER:-}" ]; then SECONDEGO_PROVIDER=$${dotenv_line#SECONDEGO_PROVIDER=}; export SECONDEGO_PROVIDER; fi ;; \
 			SECONDEGO_MODEL=*) \
@@ -30,6 +35,14 @@ if [ -f ".env" ]; then \
 				if [ -z "$${VOICE_TIMEOUT:-}" ]; then VOICE_TIMEOUT=$${dotenv_line#VOICE_TIMEOUT=}; export VOICE_TIMEOUT; fi ;; \
 			VOICE_MAX_QUEUE_SIZE=*) \
 				if [ -z "$${VOICE_MAX_QUEUE_SIZE:-}" ]; then VOICE_MAX_QUEUE_SIZE=$${dotenv_line#VOICE_MAX_QUEUE_SIZE=}; export VOICE_MAX_QUEUE_SIZE; fi ;; \
+			SECONDEGO_PROFILE=*) \
+				if [ -z "$${SECONDEGO_PROFILE:-}" ]; then SECONDEGO_PROFILE=$${dotenv_line#SECONDEGO_PROFILE=}; export SECONDEGO_PROFILE; fi ;; \
+			SECONDEGO_SURFACE=*) \
+				if [ -z "$${SECONDEGO_SURFACE:-}" ]; then SECONDEGO_SURFACE=$${dotenv_line#SECONDEGO_SURFACE=}; export SECONDEGO_SURFACE; fi ;; \
+			SECONDEGO_TERMINAL_MODE=*) \
+				if [ -z "$${SECONDEGO_TERMINAL_MODE:-}" ]; then SECONDEGO_TERMINAL_MODE=$${dotenv_line#SECONDEGO_TERMINAL_MODE=}; export SECONDEGO_TERMINAL_MODE; fi ;; \
+			SECONDEGO_GESTURES_ENABLED=*) \
+				if [ -z "$${SECONDEGO_GESTURES_ENABLED:-}" ]; then SECONDEGO_GESTURES_ENABLED=$${dotenv_line#SECONDEGO_GESTURES_ENABLED=}; export SECONDEGO_GESTURES_ENABLED; fi ;; \
 		esac; \
 	done < ".env"; \
 fi;
@@ -54,7 +67,13 @@ check-node:
 # Evaluation-critical bootstrap: Cargo resolves every Rust dependency through
 # the committed lockfile. It deliberately does not require Python or Node.
 setup: check-git check-rust rust-build-release
-	@echo "==> Setup complete. Export AI_API_KEY and run 'make run'."
+	@$(LOAD_LOCAL_ENV) \
+	if [ "$(CONFIGURE)" = "1" ]; then \
+		"$(RUST_BIN)" preflight --configure; \
+	else \
+		"$(RUST_BIN)" preflight --noninteractive; \
+	fi
+	@echo "==> Setup complete. Run 'make run' to start a mission."
 
 setup-python: check-python
 	@echo "==> Setting up Python test/compatibility environment..."
@@ -71,20 +90,25 @@ config:
 	@$(LOAD_LOCAL_ENV) \
 	provider="$${SECONDEGO_PROVIDER:-}"; \
 	model="$${SECONDEGO_MODEL:-}"; \
-	if [ -z "$$provider" ]; then case "$$model" in gemini-*) provider=gemini ;; *) provider=deepseek ;; esac; fi; \
-	if [ -z "$$model" ]; then case "$$provider" in gemini) model=gemini-3.8-flash ;; *) model=deepseek-flash ;; esac; fi; \
-	if [ -n "$${AI_API_KEY:-}" ]; then key_status=present; else key_status=missing; fi; \
+	if [ -z "$$provider" ]; then case "$$model" in gemini-*) provider=gemini ;; llama-*|mixtral-*) provider=groq ;; *) provider=deepseek ;; esac; fi; \
+	if [ -z "$$model" ]; then case "$$provider" in gemini) model=gemini-3.8-flash ;; groq) model=qwen/qwen3.8-27b ;; *) model=deepseek-flash ;; esac; fi; \
+	case "$$provider" in groq) key_name=GROQ_API_KEY; key_value="$${GROQ_API_KEY:-}" ;; *) key_name=AI_API_KEY; key_value="$${AI_API_KEY:-}" ;; esac; \
+	if [ -n "$$key_value" ]; then key_status=present; else key_status=missing; fi; \
 	if [ "$${VOICE_ENABLED:-false}" = "true" ] || [ "$${VOICE_ENABLED:-false}" = "1" ]; then voice_status=enabled; else voice_status=disabled; fi; \
 	if [ -n "$${GEMINI_API_KEY:-}" ]; then voice_key_status=present; else voice_key_status=missing; fi; \
 	voice_model="$${GEMINI_TTS_MODEL:-gemini-3.8-flash-lite-tts}"; \
-	printf 'SecondEgo configuration: provider=%s model=%s AI_API_KEY=%s voice=%s voice_model=%s GEMINI_API_KEY=%s\n' "$$provider" "$$model" "$$key_status" "$$voice_status" "$$voice_model" "$$voice_key_status"
+	ui_status="$${SECONDEGO_SURFACE:-terminal}"; \
+	if [ "$$ui_status" = "desktop" ] || [ "$(UI)" = "on" ]; then ui_status=desktop; else ui_status=terminal; fi; \
+	if [ "$${SECONDEGO_GESTURES_ENABLED:-false}" = "true" ] || [ "$${SECONDEGO_GESTURES_ENABLED:-false}" = "1" ]; then gesture_status=enabled; else gesture_status=disabled; fi; \
+	printf 'SecondEgo configuration: provider=%s model=%s %s=%s surface=%s terminal=%s voice=%s voice_model=%s GEMINI_API_KEY=%s gestures=%s\n' "$$provider" "$$model" "$$key_name" "$$key_status" "$$ui_status" "$(UI_MODE)" "$$voice_status" "$$voice_model" "$$voice_key_status" "$$gesture_status"
 
 run:
 	@$(LOAD_LOCAL_ENV) \
-	test -n "$$AI_API_KEY" || { echo "Error: AI_API_KEY must be exported or placed in the ignored local .env file before make run."; exit 2; }; \
-	if [ "$(UI)" = "on" ]; then \
-		$(MAKE) desktop-electron; \
-	elif [ "$(ENGINE)" = "python" ]; then \
+	if [ "$(UI)" = "on" ]; then export SECONDEGO_SURFACE=desktop; fi; \
+	if [ -n "$(PROFILE)" ]; then export SECONDEGO_PROFILE="$(PROFILE)"; fi; \
+	if [ "$(NONINTERACTIVE)" = "1" ]; then export SECONDEGO_NONINTERACTIVE=true; fi; \
+	export SECONDEGO_TERMINAL_MODE="$${SECONDEGO_TERMINAL_MODE:-$(UI_MODE)}"; \
+	if [ "$(ENGINE)" = "python" ]; then \
 		$(MAKE) run-python UI_MODE="$(UI_MODE)"; \
 	else \
 		$(MAKE) run-rust UI_MODE="$(UI_MODE)"; \
@@ -92,7 +116,7 @@ run:
 
 run-rust: check-git check-rust
 	@$(MAKE) rust-build-release
-	@"$(RUST_BIN)" --interactive $(if $(filter events,$(UI_MODE)),--ui events,); \
+	@SECONDEGO_TERMINAL_MODE="$${SECONDEGO_TERMINAL_MODE:-$(UI_MODE)}" "$(RUST_BIN)" launch; \
 	code=$$?; \
 	if [ "$$code" -eq 130 ]; then exit 0; fi; \
 	exit "$$code"
@@ -104,13 +128,16 @@ ui:
 # Single-command local judge entry point. The official evaluator may still run
 # `make setup` and `make run` separately, exactly as specified by the rubric.
 judge:
-	$(MAKE) setup
-	$(MAKE) run
+	$(MAKE) setup NONINTERACTIVE=1
+	$(MAKE) run PROFILE=judge NONINTERACTIVE=1
 
 run-python:
 	@$(LOAD_LOCAL_ENV) \
 	$(MAKE) setup-python && \
-	test -n "$$AI_API_KEY" || { echo "Error: AI_API_KEY must be exported or placed in the ignored local .env file before make run-python."; exit 2; }; \
+	case "$${SECONDEGO_PROVIDER:-deepseek}" in \
+		groq) test -n "$${GROQ_API_KEY:-}" || { echo "Error: GROQ_API_KEY must be exported or placed in the ignored local .env file before make run-python."; exit 2; } ;; \
+		*) test -n "$${AI_API_KEY:-}" || { echo "Error: AI_API_KEY must be exported or placed in the ignored local .env file before make run-python."; exit 2; } ;; \
+	esac; \
 	SECONDEGO_UI_MODE="$(UI_MODE)" PATH="$(CURDIR)/$(VENV)/bin:$$PATH" $(VENV)/bin/secondego-tui
 
 help: rust-build

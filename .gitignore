@@ -3,6 +3,7 @@ __pycache__/
 .pytest_cache/
 .venv/
 .env
+.secondego/
 dist/
 build/
 *.db
@@ -15,3 +16,4 @@ apps/desktop/native/.build/
 apps/desktop/vite.config.js
 apps/desktop/vite.config.d.ts
 engine-rs/target/
+.playwright-cli/

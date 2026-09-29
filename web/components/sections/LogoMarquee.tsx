@@ -12,9 +12,9 @@ const technologies = [
 
 export function LogoMarqueeSection() {
   return (
-    <section className="tech-section" aria-label="Technology foundations">
+    <section className="tech-section" aria-label="Technology foundations" data-tone="paper">
       <div className="wrap">
-        <Reveal className="tech-section__label"><span>BUILT AROUND</span><i /><span>LOCAL ENGINEERING</span></Reveal>
+        <Reveal className="tech-section__label"><span>BUILT AROUND</span><i /><span>PRIMITIVES YOU CAN INSPECT</span></Reveal>
       </div>
       <LogoMarquee items={technologies} label="Technology foundations: Rust, Python, Gemini, Tree-sitter, Git, and SQLite" />
     </section>

@@ -1,12 +1,12 @@
 import { useState } from "react";
-import type { GestureEvent } from "../types";
+import type { GestureEvent, GestureServiceState } from "../types";
 
 interface GestureIndicatorProps {
   enabled: boolean;
-  active: boolean;
   lastGesture: GestureEvent | null;
   cameraActive: boolean;
   error: string | null;
+  serviceState: GestureServiceState;
   onToggle: () => void;
   onTriggerManual?: (gesture: string) => void;
   onOpenNotch?: () => void;
@@ -14,22 +14,35 @@ interface GestureIndicatorProps {
 
 export function GestureIndicator({
   enabled,
-  active,
   lastGesture,
   cameraActive,
   error,
+  serviceState,
   onToggle,
   onTriggerManual,
   onOpenNotch,
 }: GestureIndicatorProps) {
   const [showHelp, setShowHelp] = useState(false);
+  const needsRetry = enabled && (serviceState === "unavailable" || serviceState === "error");
+  const trackerLabel = cameraActive
+    ? "Landmarks Live"
+    : serviceState === "starting"
+      ? "Starting tracker"
+      : needsRetry
+        ? "Retry tracker"
+        : "Gestures Off";
+  const toggleTitle = needsRetry
+    ? `${error || "Landmark tracking is unavailable."} Click to retry.`
+    : enabled
+      ? "Landmark tracking is on. Click to turn it off."
+      : "Turn on local landmark tracking.";
 
   return (
     <div className="gesture-indicator-wrapper" role="region" aria-label="Notch hand gesture control">
       {/* Toast banner when a gesture is recognized */}
       {lastGesture && (
         <div className="gesture-toast animate-toast" role="status" aria-live="polite">
-          <span className="gesture-toast-icon">✨</span>
+          <span className="gesture-toast-icon" aria-hidden="true" />
           <span className="gesture-toast-label">{lastGesture.label}</span>
           <span className="gesture-toast-badge">{lastGesture.hand || "Camera"}</span>
         </div>
@@ -41,12 +54,8 @@ export function GestureIndicator({
           type="button"
           className="gesture-toggle-btn"
           onClick={onToggle}
-          title={
-            enabled
-              ? "Gesture control is ON (Click to disable camera gestures)"
-              : "Gesture control is OFF (Click to enable camera gestures)"
-          }
-          aria-label={enabled ? "Disable hand gesture controls" : "Enable hand gesture controls"}
+          title={toggleTitle}
+          aria-label={needsRetry ? "Retry local landmark tracking" : enabled ? "Disable hand gesture controls" : "Enable hand gesture controls"}
         >
           <span className={`gesture-status-dot ${cameraActive ? "is-live" : enabled ? "is-standby" : "is-off"}`} />
           <svg className="gesture-cam-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -54,7 +63,7 @@ export function GestureIndicator({
             <circle cx="12" cy="13" r="4" />
           </svg>
           <span className="gesture-text">
-            {cameraActive ? "Gestures Live" : enabled ? "Gestures Ready" : "Gestures Off"}
+            {trackerLabel}
           </span>
         </button>
 
@@ -80,13 +89,11 @@ export function GestureIndicator({
             <h4>Hand Gesture Controls</h4>
             <button type="button" className="gesture-close-btn" onClick={() => setShowHelp(false)}>×</button>
           </header>
-          <p className="gesture-help-desc">Hold hand clearly in camera view to trigger commands:</p>
+          <p className="gesture-help-desc">Hold one gesture steady for about a second. Local hand landmarks only change the companion window; run controls stay explicit.</p>
           <ul className="gesture-list">
-            <li><button type="button" onClick={() => onTriggerManual?.("thumbs_up")}><span className="g-icon">👍</span><span><b>Thumbs Up</b><small>Expand mission control</small></span></button></li>
-            <li><button type="button" onClick={() => onTriggerManual?.("thumbs_down")}><span className="g-icon">👎</span><span><b>Thumbs Down</b><small>Collapse the companion</small></span></button></li>
-            <li><button type="button" onClick={() => onTriggerManual?.("fist")}><span className="g-icon">✊</span><span><b>Fist</b><small>Start the prepared run</small></span></button></li>
-            <li><button type="button" onClick={() => onTriggerManual?.("open_palm")}><span className="g-icon">✋</span><span><b>Open Palm</b><small>Stop or cancel the run</small></span></button></li>
-            <li><button type="button" onClick={() => onTriggerManual?.("point")}><span className="g-icon">☝</span><span><b>Point</b><small>Focus the next input</small></span></button></li>
+            <li><button type="button" onClick={() => onTriggerManual?.("thumbs_up")}><span className="g-icon">UP</span><span><b>Thumbs up</b><small>Expand mission control</small></span></button></li>
+            <li><button type="button" onClick={() => onTriggerManual?.("thumbs_down")}><span className="g-icon">DN</span><span><b>Thumbs down</b><small>Collapse the companion</small></span></button></li>
+            <li><button type="button" onClick={() => onTriggerManual?.("open_palm")}><span className="g-icon">PALM</span><span><b>Open palm</b><small>Fallback to expand mission control</small></span></button></li>
           </ul>
           {error && <p className="gesture-error-note">{error}</p>}
         </div>

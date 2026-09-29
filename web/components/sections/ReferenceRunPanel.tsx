@@ -12,15 +12,15 @@ const recoveryNodes: PipelineNode[] = [
 
 export function ReferenceRunPanel() {
   return (
-    <section className="reference-section wrap" id="reference-run">
+    <section className="reference-section wrap" id="reference-run" data-tone="ink">
       <Reveal className="reference-panel">
         <div className="reference-panel__glow" aria-hidden="true" />
         <div className="reference-panel__content">
           <div className="reference-panel__text">
-            <p className="eyebrow"><span className="eyebrow__pulse" /> REFERENCE RUN / RECOVERY PATH</p>
+            <p className="section-label"><span className="eyebrow__pulse" /> REFERENCE RUN / RECOVERY PATH</p>
             <h2>Failure is a<br />state, not a story.</h2>
             <p className="reference-panel__intro">The pagination fixture is a separate target repository with a deliberate off-by-one bug. This walkthrough maps the engine's documented recovery path: observe a failed check, discard the attempt, repair from a clean baseline, then transfer only after a passing verification.</p>
-            <a className="button button--outline" href="https://github.com/riyaagarwal5040/SecondEgo_SDETwin/blob/main/evaluation/README.md" target="_blank" rel="noreferrer">Open the evaluation walkthrough <span aria-hidden="true">↗</span></a>
+            <a className="button button--outline" href="https://github.com/TarunyaProgrammer/SecondEgo_SDETwin/blob/main/evaluation/README.md" target="_blank" rel="noreferrer">Open the evaluation walkthrough <span aria-hidden="true">↗</span></a>
             <p className="reference-panel__disclosure">Architecture walkthrough · not a published customer result</p>
           </div>
           <div className="reference-panel__visual">

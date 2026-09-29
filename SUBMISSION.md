@@ -13,6 +13,11 @@ make run
 repository path or public GitHub URL, then for the complete text issue. Finish
 the multi-line issue editor with a line containing `.done` (or Ctrl-D).
 
+The launcher may show a read-only preflight dashboard first. The default
+judge-safe profile keeps the desktop UI, voice narration, camera, and gestures
+off. It never prints credentials. `NONINTERACTIVE=1 PROFILE=judge` skips the
+profile prompt for scripted local rehearsals.
+
 Do not create or edit `.env`; the evaluator credential is read directly from
 `AI_API_KEY`. The default path does not launch Electron, a browser, a camera,
 or any multimodal model.

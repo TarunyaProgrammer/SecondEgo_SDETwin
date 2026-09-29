@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::Duration;
 
 use regex::Regex;
@@ -71,13 +72,14 @@ impl<'a> VerificationEngine<'a> {
         }
         let mut evidence = Vec::new();
         for command in commands {
-            let result = self.runner.run(command, ".", Duration::from_secs(30));
+            let command = normalize_command(&self.runner.workspace.root, command);
+            let result = self.runner.run(&command, ".", Duration::from_secs(30));
             let output = [result.stdout.as_str(), result.stderr.as_str()]
                 .join("\n")
                 .trim()
                 .to_owned();
             evidence.push(VerificationEvidence {
-                command: command.clone(),
+                command,
                 success: result.success,
                 exit_code: result.exit_code,
                 duration_ms: result.duration_ms,
@@ -109,6 +111,30 @@ impl<'a> VerificationEngine<'a> {
             evidence,
         }
     }
+}
+
+fn normalize_command(root: &Path, command: &[String]) -> Vec<String> {
+    let mut command = command.to_vec();
+    let is_bare_cargo = command.first().is_some_and(|item| item == "cargo")
+        && !command.iter().any(|item| item == "--manifest-path")
+        && !root.join("Cargo.toml").is_file();
+    if !is_bare_cargo {
+        return command;
+    }
+    let manifests = std::fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path().join("Cargo.toml"))
+        .filter(|path| path.is_file())
+        .collect::<Vec<_>>();
+    if let [manifest] = manifests.as_slice() {
+        if let Ok(relative) = manifest.strip_prefix(root) {
+            command.push("--manifest-path".into());
+            command.push(relative.to_string_lossy().into_owned());
+        }
+    }
+    command
 }
 
 fn classify_failure(output: &str, result: &ToolResult) -> FailureClass {
@@ -185,6 +211,17 @@ mod tests {
         };
         let result = VerificationEngine { runner: &runner }.run(&[]);
         assert_eq!(result.failure_class, FailureClass::EnvironmentFailure);
+    }
+
+    #[test]
+    fn bare_cargo_command_discovers_a_unique_nested_manifest() {
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::create_dir(workspace.path().join("target-app")).unwrap();
+        std::fs::write(workspace.path().join("target-app/Cargo.toml"), "").unwrap();
+        assert_eq!(
+            normalize_command(workspace.path(), &["cargo".into(), "test".into()]),
+            vec!["cargo", "test", "--manifest-path", "target-app/Cargo.toml"]
+        );
     }
 
     #[test]

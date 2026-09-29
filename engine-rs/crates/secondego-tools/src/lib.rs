@@ -25,6 +25,7 @@ pub enum PolicyError {
     ArgumentContainsNul,
     FileTooLarge,
     InvalidPatch,
+    ToolExecutionFailed(String),
     UnsupportedAction(String),
 }
 
@@ -351,7 +352,7 @@ impl FileTool {
                 started.elapsed().as_millis(),
             );
         }
-        let requested = path.as_ref();
+        let requested = model_repository_path(path.as_ref());
         let path = match self.workspace.resolve(requested) {
             Ok(path) => path,
             Err(error) => {
@@ -391,6 +392,184 @@ impl FileTool {
             },
             Err(error) => ToolResult::failure(
                 "edit_file",
+                error.to_string(),
+                started.elapsed().as_millis(),
+            ),
+        }
+    }
+
+    /// Replace one exact, previously observed fragment. Requiring exactly one
+    /// match provides stale-context protection without trusting model-written
+    /// unified-diff line numbers.
+    pub fn replace_text(
+        &self,
+        path: impl AsRef<Path>,
+        old_text: &str,
+        new_text: &str,
+    ) -> ToolResult {
+        let started = Instant::now();
+        let requested = model_repository_path(path.as_ref());
+        if old_text.is_empty() {
+            return ToolResult::failure(
+                "replace_text",
+                "old_text must not be empty",
+                started.elapsed().as_millis(),
+            );
+        }
+        if old_text == new_text {
+            return ToolResult::failure(
+                "replace_text",
+                "old_text and new_text must differ",
+                started.elapsed().as_millis(),
+            );
+        }
+        let path = match self.workspace.resolve(requested) {
+            Ok(path) => path,
+            Err(error) => {
+                return ToolResult::failure(
+                    "replace_text",
+                    error.to_string(),
+                    started.elapsed().as_millis(),
+                );
+            }
+        };
+        if is_sensitive_path(&path, &self.workspace.root) {
+            return ToolResult::failure(
+                "replace_text",
+                PolicyError::SensitivePath.to_string(),
+                started.elapsed().as_millis(),
+            );
+        }
+        let content = match fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(error) => {
+                return ToolResult::failure(
+                    "replace_text",
+                    error.to_string(),
+                    started.elapsed().as_millis(),
+                );
+            }
+        };
+        let matches = content.match_indices(old_text).count();
+        let updated = if matches == 1 {
+            content.replacen(old_text, new_text, 1)
+        } else if matches > 1 && new_text.starts_with(old_text) {
+            let (index, _) = content
+                .match_indices(old_text)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .last()
+                .expect("matches exist");
+            let end = index + old_text.len();
+            if !content[end..].trim().is_empty() {
+                let observed: String = old_text.chars().take(240).collect();
+                return ToolResult::failure(
+                    "replace_text",
+                    format!(
+                        "{}: ambiguous old_text is not the final non-whitespace fragment; requested={}",
+                        requested.display(),
+                        serde_json::to_string(&observed).unwrap_or_else(|_| "<unavailable>".into())
+                    ),
+                    started.elapsed().as_millis(),
+                );
+            }
+            format!("{}{}{}", &content[..index], new_text, &content[end..])
+        } else {
+            let observed: String = old_text.chars().take(240).collect();
+            return ToolResult::failure(
+                "replace_text",
+                format!(
+                    "{}: old_text must match exactly once; found {matches} matches; requested={}",
+                    requested.display(),
+                    serde_json::to_string(&observed).unwrap_or_else(|_| "<unavailable>".into())
+                ),
+                started.elapsed().as_millis(),
+            );
+        };
+        if updated.len() as u64 > self.max_file_bytes {
+            return ToolResult::failure(
+                "replace_text",
+                "result exceeds file limit",
+                started.elapsed().as_millis(),
+            );
+        }
+        match fs::write(&path, updated) {
+            Ok(()) => ToolResult {
+                tool: "replace_text".into(),
+                success: true,
+                exit_code: Some(0),
+                stdout: String::new(),
+                stderr: String::new(),
+                changed_paths: vec![requested.to_string_lossy().replace('\\', "/")],
+                duration_ms: started.elapsed().as_millis(),
+                truncated: false,
+            },
+            Err(error) => ToolResult::failure(
+                "replace_text",
+                error.to_string(),
+                started.elapsed().as_millis(),
+            ),
+        }
+    }
+
+    pub fn append_text(&self, path: impl AsRef<Path>, content: &str) -> ToolResult {
+        let started = Instant::now();
+        let requested = model_repository_path(path.as_ref());
+        let path = match self.workspace.resolve(requested) {
+            Ok(path) => path,
+            Err(error) => {
+                return ToolResult::failure(
+                    "append_text",
+                    error.to_string(),
+                    started.elapsed().as_millis(),
+                );
+            }
+        };
+        if is_sensitive_path(&path, &self.workspace.root) {
+            return ToolResult::failure(
+                "append_text",
+                PolicyError::SensitivePath.to_string(),
+                started.elapsed().as_millis(),
+            );
+        }
+        let mut existing = match fs::read_to_string(&path) {
+            Ok(existing) => existing,
+            Err(error) => {
+                return ToolResult::failure(
+                    "append_text",
+                    error.to_string(),
+                    started.elapsed().as_millis(),
+                );
+            }
+        };
+        if content.is_empty() || existing.ends_with(content) {
+            return ToolResult::failure(
+                "append_text",
+                "content must be non-empty and not already present",
+                started.elapsed().as_millis(),
+            );
+        }
+        existing.push_str(content);
+        if existing.len() as u64 > self.max_file_bytes {
+            return ToolResult::failure(
+                "append_text",
+                "result exceeds file limit",
+                started.elapsed().as_millis(),
+            );
+        }
+        match fs::write(&path, existing) {
+            Ok(()) => ToolResult {
+                tool: "append_text".into(),
+                success: true,
+                exit_code: Some(0),
+                stdout: String::new(),
+                stderr: String::new(),
+                changed_paths: vec![requested.to_string_lossy().replace('\\', "/")],
+                duration_ms: started.elapsed().as_millis(),
+                truncated: false,
+            },
+            Err(error) => ToolResult::failure(
+                "append_text",
                 error.to_string(),
                 started.elapsed().as_millis(),
             ),
@@ -574,6 +753,34 @@ impl ToolRouter {
                         PolicyError::UnsupportedAction("file content required".into())
                     })?,
             )),
+            "replace_text" => Ok(self.files.replace_text(
+                arguments
+                    .get("path")
+                    .and_then(|value| value.as_str())
+                    .ok_or_else(|| PolicyError::UnsupportedAction("replace_text path".into()))?,
+                arguments
+                    .get("old_text")
+                    .and_then(|value| value.as_str())
+                    .ok_or_else(|| {
+                        PolicyError::UnsupportedAction("replace_text old_text".into())
+                    })?,
+                arguments
+                    .get("new_text")
+                    .and_then(|value| value.as_str())
+                    .ok_or_else(|| {
+                        PolicyError::UnsupportedAction("replace_text new_text".into())
+                    })?,
+            )),
+            "append_text" => Ok(self.files.append_text(
+                arguments
+                    .get("path")
+                    .and_then(|value| value.as_str())
+                    .ok_or_else(|| PolicyError::UnsupportedAction("append_text path".into()))?,
+                arguments
+                    .get("content")
+                    .and_then(|value| value.as_str())
+                    .ok_or_else(|| PolicyError::UnsupportedAction("append_text content".into()))?,
+            )),
             "apply_patch" => Ok(self.files.apply_patch(
                 arguments
                     .get("patch")
@@ -651,6 +858,10 @@ fn is_sensitive_path(path: &Path, root: &Path) -> bool {
     })
 }
 
+fn model_repository_path(path: &Path) -> &Path {
+    path.strip_prefix(Path::new("/")).unwrap_or(path)
+}
+
 fn patch_paths(patch: &str) -> Result<Vec<String>, PolicyError> {
     let mut paths = Vec::new();
     for line in patch.lines() {
@@ -680,10 +891,20 @@ fn patch_paths(patch: &str) -> Result<Vec<String>, PolicyError> {
     Ok(paths)
 }
 
+/// Validate the structural contract of a model-produced patch before an
+/// execution attempt exists. Workspace and context validation still happens
+/// immediately before `git apply` in `FileTool::apply_patch`.
+pub fn validate_unified_patch(patch: &str) -> Result<(), PolicyError> {
+    patch_paths(patch).map(|_| ())
+}
+
 fn apply_git_patch(root: &Path, patch: &str, check_only: bool) -> Result<(), String> {
     let mut command = Command::new("git");
     command
-        .args(["apply", "--whitespace=nowarn"])
+        // Model-generated unified diffs often contain correct context with
+        // stale hunk counts. `--recount` recomputes only those counts; Git
+        // still rejects mismatched context and unsafe paths.
+        .args(["apply", "--whitespace=nowarn", "--recount"])
         .current_dir(root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1128,6 +1349,63 @@ mod tests {
     }
 
     #[test]
+    fn replace_text_requires_one_exact_current_fragment() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("source.rs"), "before\nunique\nafter\n").unwrap();
+        let files = FileTool {
+            workspace: WorkspacePolicy::new(root.path()).unwrap(),
+            max_file_bytes: 1024,
+        };
+
+        let result = files.replace_text("source.rs", "unique\n", "updated\n");
+        assert!(result.success, "{}", result.stderr);
+        assert_eq!(
+            fs::read_to_string(root.path().join("source.rs")).unwrap(),
+            "before\nupdated\nafter\n"
+        );
+        assert!(
+            !files
+                .replace_text("source.rs", "unique\n", "stale\n")
+                .success
+        );
+
+        fs::write(root.path().join("source.rs"), "same\nsame\n").unwrap();
+        assert!(!files.replace_text("source.rs", "same\n", "once\n").success);
+
+        fs::write(root.path().join("source.rs"), "fn a() {}\nfn b() {}\n").unwrap();
+        let result = files.replace_text(
+            "source.rs",
+            "}",
+            "}\n\n#[test]\nfn appended_regression() {}",
+        );
+        assert!(result.success, "{}", result.stderr);
+        assert!(
+            fs::read_to_string(root.path().join("source.rs"))
+                .unwrap()
+                .ends_with("#[test]\nfn appended_regression() {}\n")
+        );
+    }
+
+    #[test]
+    fn append_text_adds_bounded_content_once() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("tests.rs"), "fn existing() {}\n").unwrap();
+        let files = FileTool {
+            workspace: WorkspacePolicy::new(root.path()).unwrap(),
+            max_file_bytes: 1024,
+        };
+
+        let addition = "\n#[test]\nfn regression() {}\n";
+        let result = files.append_text("/tests.rs", addition);
+        assert!(result.success, "{}", result.stderr);
+        assert_eq!(
+            fs::read_to_string(root.path().join("tests.rs")).unwrap(),
+            format!("fn existing() {{}}\n{addition}")
+        );
+        assert!(!files.append_text("tests.rs", addition).success);
+    }
+
+    #[test]
     fn unified_patch_edits_only_validated_workspace_paths() {
         let root = tempfile::tempdir().unwrap();
         run_git(root.path(), &["init", "-q"]);
@@ -1144,6 +1422,35 @@ mod tests {
         assert_eq!(
             fs::read_to_string(root.path().join("value.py")).unwrap(),
             "VALUE = 2\n"
+        );
+    }
+
+    #[test]
+    fn unified_patch_recounts_model_hunks_without_weakening_context_checks() {
+        let root = tempfile::tempdir().unwrap();
+        run_git(root.path(), &["init", "-q"]);
+        fs::write(root.path().join("value.py"), "FIRST = 1\nSECOND = 2\n").unwrap();
+        let files = FileTool {
+            workspace: WorkspacePolicy::new(root.path()).unwrap(),
+            max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+        };
+        let stale_counts = "diff --git a/value.py b/value.py\n--- a/value.py\n+++ b/value.py\n@@ -1,99 +1,99 @@\n FIRST = 1\n-SECOND = 2\n+SECOND = 3\n";
+        let result = files.apply_patch(stale_counts);
+        assert!(result.success, "{}", result.stderr);
+        assert_eq!(
+            fs::read_to_string(root.path().join("value.py")).unwrap(),
+            "FIRST = 1\nSECOND = 3\n"
+        );
+
+        let wrong_context = "diff --git a/value.py b/value.py\n--- a/value.py\n+++ b/value.py\n@@ -1 +1 @@\n-NOT_PRESENT = 1\n+NOT_PRESENT = 2\n";
+        assert!(!files.apply_patch(wrong_context).success);
+    }
+
+    #[test]
+    fn model_patch_must_use_raw_git_diff_syntax() {
+        assert_eq!(
+            validate_unified_patch("*** Begin Patch\n*** Update File: value.py\n"),
+            Err(PolicyError::InvalidPatch)
         );
     }
 

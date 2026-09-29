@@ -20,7 +20,7 @@ export function NewsletterSignup() {
       <p>Product updates are shared through the repository for now.</p>
       <form onSubmit={handleSubmit} className="newsletter-form">
         <label className="sr-only" htmlFor="newsletter-email">Email address</label>
-        <input id="newsletter-email" type="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@company.com" autoComplete="email" />
+        <input id="newsletter-email" name="email" type="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@company.com…" autoComplete="email" spellCheck={false} />
         <button type="submit" aria-label="Check update signup status">↗</button>
       </form>
       <p className="newsletter-box__message" aria-live="polite">{message || "Email signup is not connected."}</p>

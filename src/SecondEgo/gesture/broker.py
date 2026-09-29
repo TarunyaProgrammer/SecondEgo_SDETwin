@@ -4,8 +4,8 @@ The watcher runs in a background thread. Any SecondEgo component (desktop
 gateway, TUI, CLI) can subscribe by connecting to localhost:GESTURE_PORT and
 reading newline-delimited JSON frames.
 
-Frame schema
-------------
+Frame schemas
+-------------
 {
   "schema_version": 1,
   "event_type": "gesture.action",
@@ -13,6 +13,17 @@ Frame schema
   "action": "<action_name>",
   "description": "<human description>",
   "hand": "Left" | "Right",
+  "timestamp": "<ISO-8601>"
+}
+
+The broker also retains its most recent lifecycle frame so a newly connected
+local UI can distinguish startup from a tracker that is actually ready.
+
+{
+  "schema_version": 1,
+  "event_type": "gesture.status",
+  "status": "starting" | "active" | "unavailable" | "error",
+  "message": "<optional human-readable detail>",
   "timestamp": "<ISO-8601>"
 }
 """
@@ -50,6 +61,7 @@ class GestureBroker:
         self._clients: list[socket.socket] = []
         self._lock = threading.Lock()
         self._server: socket.socket | None = None
+        self._status_frame: dict[str, Any] | None = None
         self._running = False
         self._accept_thread: threading.Thread | None = None
 
@@ -95,6 +107,15 @@ class GestureBroker:
                 logger.debug("Gesture subscriber connected from %s", addr)
                 with self._lock:
                     self._clients.append(conn)
+                    if self._status_frame is not None:
+                        try:
+                            conn.sendall((json.dumps(self._status_frame) + "\n").encode())
+                        except OSError:
+                            self._clients = [client for client in self._clients if client is not conn]
+                            try:
+                                conn.close()
+                            except OSError:
+                                pass
             except TimeoutError:
                 continue
             except OSError:
@@ -113,6 +134,22 @@ class GestureBroker:
     def publish(self, action: GestureAction, hand: str = "Right") -> None:
         """Broadcast a gesture action event to all connected subscribers."""
         frame = self._build_frame(action, hand)
+        self._broadcast(frame)
+
+    def publish_status(self, status: str, message: str | None = None) -> None:
+        """Broadcast and retain the current watcher lifecycle status."""
+        frame: dict[str, Any] = {
+            "schema_version": GESTURE_SCHEMA_VERSION,
+            "event_type": "gesture.status",
+            "status": status,
+            "message": message,
+            "timestamp": _now_iso(),
+        }
+        with self._lock:
+            self._status_frame = frame
+        self._broadcast(frame)
+
+    def _broadcast(self, frame: dict[str, Any]) -> None:
         payload = (json.dumps(frame) + "\n").encode()
         with self._lock:
             dead: list[socket.socket] = []

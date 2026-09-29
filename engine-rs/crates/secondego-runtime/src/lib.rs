@@ -4,11 +4,13 @@ use secondego_context::{
 use secondego_core::{
     EngineEvent, ExecutionState, Phase, ResourceBudget, ResourceUsage, StateMachine, TerminalStatus,
 };
-use secondego_model::{ModelProvider, ProviderContext, ProviderError};
+use secondego_model::{
+    ModelProvider, ModelUsage, ProviderContext, ProviderError, RateLimitSnapshot,
+};
 use secondego_repository::RepositoryIndexer;
 use secondego_tools::{
     CommandPolicy, CommandRunner, FileTool, GitAttemptTransaction, PolicyError, SearchTool,
-    ToolResult, ToolRouter, WorkspacePolicy, gc::OwnedTempLease,
+    ToolResult, ToolRouter, WorkspacePolicy, gc::OwnedTempLease, validate_unified_patch,
 };
 use secondego_verification::{VerificationEngine, VerificationResult};
 use std::path::Path;
@@ -345,26 +347,72 @@ pub struct RustEngine<P: ModelProvider> {
     pub event_sink: Option<Arc<dyn Fn(&EngineEvent) + Send + Sync>>,
     pub voice: Option<voice::VoiceService>,
     pub cancellation: Option<CancellationToken>,
+    planning_evidence_files: usize,
+    planning_source_excerpt_chars: usize,
+}
+
+#[derive(Clone, Copy)]
+struct PlanningContextProfile {
+    budget: ContextBudget,
+    initial_evidence_files: usize,
+    source_excerpt_chars: usize,
+}
+
+fn planning_context_profile(prompt_token_limit: Option<u32>) -> PlanningContextProfile {
+    let default_budget = ContextBudget {
+        total_tokens: 24_000,
+        task_tokens: 2_000,
+        action_tokens: 2_000,
+        evidence_tokens: 16_000,
+        state_tokens: 2_000,
+        response_tokens: 2_000,
+    };
+    let Some(prompt_token_limit) = prompt_token_limit else {
+        return PlanningContextProfile {
+            budget: default_budget,
+            initial_evidence_files: INITIAL_EVIDENCE_FILES,
+            source_excerpt_chars: DEFAULT_INITIAL_EVIDENCE_EXCERPT_CHARS,
+        };
+    };
+
+    // Reserve room for provider instructions/tool schema and a 2K structured
+    // plan. The packet itself stays inside the provider's compact input
+    // budget; rank metadata and several short source excerpts remain intact.
+    let prompt_token_limit = prompt_token_limit as usize;
+    let task_tokens = prompt_token_limit.min(1_000);
+    let remaining = prompt_token_limit.saturating_sub(task_tokens);
+    let action_tokens = remaining.min(800);
+    let remaining = remaining.saturating_sub(action_tokens);
+    let state_tokens = remaining.min(300);
+    let evidence_tokens = remaining.saturating_sub(state_tokens);
+    PlanningContextProfile {
+        budget: ContextBudget {
+            total_tokens: prompt_token_limit + 2_000,
+            task_tokens,
+            action_tokens,
+            evidence_tokens,
+            state_tokens,
+            response_tokens: 2_000,
+        },
+        initial_evidence_files: 4,
+        source_excerpt_chars: 1_200,
+    }
 }
 
 impl<P: ModelProvider> RustEngine<P> {
     pub fn new(provider: P) -> Self {
+        let planning_profile = planning_context_profile(provider.planning_prompt_token_limit());
         Self {
             provider,
-            context: ContextAssembler::new(ContextBudget {
-                total_tokens: 24_000,
-                task_tokens: 2_000,
-                action_tokens: 2_000,
-                evidence_tokens: 16_000,
-                state_tokens: 2_000,
-                response_tokens: 2_000,
-            })
-            .expect("static context budget is valid"),
+            context: ContextAssembler::new(planning_profile.budget)
+                .expect("static context budget is valid"),
             resources: ResourceUsage::new(ResourceBudget::default()),
             max_actions: 32,
             event_sink: None,
             voice: None,
             cancellation: None,
+            planning_evidence_files: planning_profile.initial_evidence_files,
+            planning_source_excerpt_chars: planning_profile.source_excerpt_chars,
         }
     }
 
@@ -473,24 +521,39 @@ impl<P: ModelProvider> RustEngine<P> {
         );
         let ranked = index.rank(&machine.state.task, 12, false);
         if !ranked.is_empty() {
+            let retrieval_summary = ranked
+                .iter()
+                .take(self.planning_evidence_files)
+                .map(|item| {
+                    serde_json::json!({
+                        "path": item.path,
+                        "score": item.score,
+                        "reasons": item.reasons,
+                    })
+                })
+                .collect::<Vec<_>>();
             ledger.record(EvidenceRecord::new(
                 "repository:retrieval",
-                serde_json::to_string(&ranked).unwrap_or_default(),
+                serde_json::to_string(&retrieval_summary).unwrap_or_default(),
                 "explainable repository retrieval",
-                4,
+                2,
             ));
-            for item in ranked.iter().take(INITIAL_EVIDENCE_FILES) {
+            for item in ranked.iter().take(self.planning_evidence_files) {
                 if !safe_initial_evidence_path(&item.path) {
                     continue;
                 }
                 let file_path = workspace.join(&item.path);
                 if let Ok(content) = std::fs::read_to_string(&file_path) {
-                    let excerpt: String = content.chars().take(2_500).collect();
+                    let excerpt = task_focused_excerpt(
+                        &content,
+                        &machine.state.task,
+                        self.planning_source_excerpt_chars,
+                    );
                     ledger.record(EvidenceRecord::new(
                         format!("source:{}", item.path),
                         format!("path: {}\n```\n{}\n```", item.path, excerpt),
                         item.path.clone(),
-                        3,
+                        4,
                     ));
                 }
             }
@@ -838,6 +901,16 @@ impl<P: ModelProvider> RustEngine<P> {
                 index_parser_failures: index.parser_failures.len(),
             });
         }
+        if transfer.changed_paths.is_empty() || !transfer.transferred {
+            return self.terminate_error(
+                &mut machine,
+                &mut events,
+                RuntimeError::Plan(
+                    "verification passed, but the plan produced no transferable repository changes"
+                        .into(),
+                ),
+            );
+        }
         self.append_event(
             &mut events,
             machine
@@ -948,7 +1021,25 @@ impl<P: ModelProvider> RustEngine<P> {
         inspections: usize,
         force_submission: bool,
     ) -> Result<ContextPacket, RuntimeError> {
-        let state = serde_json::to_string(&machine.state)
+        // The mission already has its own TASK slot. Run identity and the
+        // absolute clone path belong to local telemetry, not model context.
+        // Keep populated planning facts/constraints without copying the task
+        // (or empty runtime bookkeeping) into the small STATE reservation.
+        let mut state = serde_json::to_value(&machine.state)
+            .map_err(|error| RuntimeError::Context(error.to_string()))?;
+        if let Some(fields) = state.as_object_mut() {
+            fields.retain(|name, value| {
+                !matches!(name.as_str(), "task" | "workspace" | "run_id")
+                    && match value {
+                        serde_json::Value::Null => false,
+                        serde_json::Value::String(value) => !value.is_empty(),
+                        serde_json::Value::Array(value) => !value.is_empty(),
+                        serde_json::Value::Object(value) => !value.is_empty(),
+                        _ => true,
+                    }
+            });
+        }
+        let state = serde_json::to_string(&state)
             .map_err(|error| RuntimeError::Context(error.to_string()))?;
         let state = format!(
             "{state}\nPLANNING_INSPECTIONS={inspections}\nPLANNING_SUBMISSION_REQUIRED={force_submission}"
@@ -957,10 +1048,20 @@ impl<P: ModelProvider> RustEngine<P> {
             .assemble(
                 &machine.state.task,
                 PLAN_INSTRUCTION,
-                state,
+                &state,
                 &ledger.active(),
             )
-            .map_err(|error| RuntimeError::Context(format!("{error:?}")))
+            .map_err(|error| {
+                RuntimeError::Context(format!(
+                    "Planning context failed ({error:?}): estimated tokens task={}/{}, action={}/{}, state={}/{} (used/budget)",
+                    ContextAssembler::estimate_tokens(&machine.state.task),
+                    self.context.budget.task_tokens,
+                    ContextAssembler::estimate_tokens(PLAN_INSTRUCTION),
+                    self.context.budget.action_tokens,
+                    ContextAssembler::estimate_tokens(&state),
+                    self.context.budget.state_tokens,
+                ))
+            })
     }
 
     fn collect_plan(
@@ -1000,9 +1101,12 @@ impl<P: ModelProvider> RustEngine<P> {
             "activity.completed",
             "context.assemble",
             &format!(
-                "Prepared {} evidence records ({} estimated tokens)",
+                "Prepared {} evidence records ({} estimated tokens; state={}/{}; omitted={})",
                 packet.evidence.len(),
-                packet.estimated_tokens
+                packet.estimated_tokens,
+                packet.slot_usage["state"],
+                self.context.budget.state_tokens,
+                packet.dropped_evidence.len(),
             ),
         );
         let planning_policy = match WorkspacePolicy::new(workspace) {
@@ -1059,6 +1163,7 @@ impl<P: ModelProvider> RustEngine<P> {
                             &error,
                             &mut format_attempt,
                             "model.plan.repair",
+                            true,
                         ) {
                             Ok(retry) => retry,
                             Err(error) => return self.terminate_error(machine, events, error),
@@ -1070,17 +1175,8 @@ impl<P: ModelProvider> RustEngine<P> {
                     }
                 };
             if proposal.action == "submit_plan" {
-                match parse_plan(proposal) {
-                    Ok(plan) => {
-                        self.activity(
-                            events,
-                            &machine.state,
-                            "activity.completed",
-                            operation,
-                            "Structured plan received and validated",
-                        );
-                        return Ok(plan);
-                    }
+                let plan = match parse_plan(proposal) {
+                    Ok(plan) => plan,
                     Err(error) => {
                         let retry = match self.schedule_protocol_repair(
                             machine,
@@ -1088,6 +1184,7 @@ impl<P: ModelProvider> RustEngine<P> {
                             &error,
                             &mut format_attempt,
                             "model.plan.repair",
+                            false,
                         ) {
                             Ok(retry) => retry,
                             Err(error) => return self.terminate_error(machine, events, error),
@@ -1097,7 +1194,32 @@ impl<P: ModelProvider> RustEngine<P> {
                         }
                         return self.terminate_error(machine, events, error);
                     }
+                };
+                if let Err(error) = validate_plan_actions(&plan, &planning_router) {
+                    let retry = match self.schedule_protocol_repair(
+                        machine,
+                        events,
+                        &error,
+                        &mut format_attempt,
+                        "model.plan.repair",
+                        false,
+                    ) {
+                        Ok(retry) => retry,
+                        Err(error) => return self.terminate_error(machine, events, error),
+                    };
+                    if retry {
+                        continue;
+                    }
+                    return self.terminate_error(machine, events, error);
                 }
+                self.activity(
+                    events,
+                    &machine.state,
+                    "activity.completed",
+                    operation,
+                    "Structured plan received and validated",
+                );
+                return Ok(plan);
             }
             let proposal_error = validate_planning_proposal(&proposal, force_submission);
             if let Err(error) = proposal_error {
@@ -1107,6 +1229,7 @@ impl<P: ModelProvider> RustEngine<P> {
                     &error,
                     &mut format_attempt,
                     "model.plan.repair",
+                    false,
                 ) {
                     Ok(retry) => retry,
                     Err(error) => return self.terminate_error(machine, events, error),
@@ -1144,6 +1267,7 @@ impl<P: ModelProvider> RustEngine<P> {
                         &error,
                         &mut format_attempt,
                         "model.plan.repair",
+                        false,
                     ) {
                         Ok(retry) => retry,
                         Err(error) => return self.terminate_error(machine, events, error),
@@ -1206,7 +1330,9 @@ impl<P: ModelProvider> RustEngine<P> {
         operation: &str,
         message: &str,
     ) -> Result<secondego_core::ActionProposal, RuntimeError> {
-        for attempt in 0..MAX_TRANSIENT_PROVIDER_ATTEMPTS {
+        let mut transient_attempt = 0;
+        let mut rate_limit_attempt = 0;
+        loop {
             self.check_cancel(machine, events)?;
             let estimated_tokens = self.provider.estimate_tokens(prompt) as u64;
             if let Err(resource_error) = self.resources.record_model_call(estimated_tokens) {
@@ -1225,7 +1351,7 @@ impl<P: ModelProvider> RustEngine<P> {
                 &machine.state,
                 "activity.started",
                 operation,
-                message,
+                &format!("{message} (~{estimated_tokens} estimated input tokens)"),
             );
             match self.provider.generate(
                 prompt,
@@ -1234,8 +1360,22 @@ impl<P: ModelProvider> RustEngine<P> {
                     phase: phase.into(),
                 },
             ) {
-                Ok(proposal) => return Ok(proposal),
+                Ok(response) => {
+                    self.resources.record_provider_usage(
+                        response.usage.input_tokens,
+                        response.usage.output_tokens,
+                    );
+                    self.activity(
+                        events,
+                        &machine.state,
+                        "activity.completed",
+                        "model.usage",
+                        &format_model_usage(estimated_tokens, response.usage, response.rate_limit),
+                    );
+                    return Ok(response.proposal);
+                }
                 Err(provider_error) => {
+                    let rate_limit_delay = provider_error.rate_limit_delay();
                     let error = RuntimeError::Provider(provider_error);
                     self.activity(
                         events,
@@ -1244,9 +1384,44 @@ impl<P: ModelProvider> RustEngine<P> {
                         operation,
                         &error.to_string(),
                     );
+                    if let Some(delay) = rate_limit_delay {
+                        let retry_delay = delay
+                            .saturating_add(RATE_LIMIT_RESET_GRACE)
+                            .max(MIN_RATE_LIMIT_WAIT);
+                        if rate_limit_attempt < MAX_RATE_LIMIT_RETRIES
+                            && retry_delay <= MAX_RATE_LIMIT_WAIT
+                        {
+                            if let Err(resource_error) = self.resources.record_retry() {
+                                let error = RuntimeError::Resource(resource_error.to_string());
+                                self.activity(
+                                    events,
+                                    &machine.state,
+                                    "activity.failed",
+                                    "resource.retry",
+                                    &error.to_string(),
+                                );
+                                return Err(error);
+                            }
+                            rate_limit_attempt += 1;
+                            self.activity(
+                                events,
+                                &machine.state,
+                                "activity.retrying",
+                                "model.rate_limit_wait",
+                                &format!(
+                                    "Provider rate limit reached; waiting {} before one retry ({}/{})",
+                                    format_wait_duration(retry_delay),
+                                    rate_limit_attempt,
+                                    MAX_RATE_LIMIT_RETRIES
+                                ),
+                            );
+                            self.wait_for_provider_retry(machine, events, retry_delay)?;
+                            continue;
+                        }
+                    }
                     let transient =
                         matches!(&error, RuntimeError::Provider(error) if error.is_transient());
-                    if transient && attempt + 1 < MAX_TRANSIENT_PROVIDER_ATTEMPTS {
+                    if transient && transient_attempt + 1 < MAX_TRANSIENT_PROVIDER_ATTEMPTS {
                         if let Err(resource_error) = self.resources.record_retry() {
                             let error = RuntimeError::Resource(resource_error.to_string());
                             self.activity(
@@ -1258,7 +1433,8 @@ impl<P: ModelProvider> RustEngine<P> {
                             );
                             return Err(error);
                         }
-                        let delay = provider_retry_delay(attempt);
+                        let delay = provider_retry_delay(transient_attempt);
+                        transient_attempt += 1;
                         self.activity(
                             events,
                             &machine.state,
@@ -1267,7 +1443,7 @@ impl<P: ModelProvider> RustEngine<P> {
                             &format!(
                                 "Transient provider failure; retrying in {}ms ({}/{})",
                                 delay.as_millis(),
-                                attempt + 2,
+                                transient_attempt + 1,
                                 MAX_TRANSIENT_PROVIDER_ATTEMPTS
                             ),
                         );
@@ -1278,7 +1454,6 @@ impl<P: ModelProvider> RustEngine<P> {
                 }
             }
         }
-        Err(RuntimeError::Provider(ProviderError::ScriptExhausted))
     }
 
     fn wait_for_provider_retry(
@@ -1366,6 +1541,7 @@ impl<P: ModelProvider> RustEngine<P> {
                         &error,
                         &mut format_attempt,
                         "model.recovery.repair",
+                        true,
                     )? {
                         continue;
                     }
@@ -1390,6 +1566,7 @@ impl<P: ModelProvider> RustEngine<P> {
                         &error,
                         &mut format_attempt,
                         "model.recovery.repair",
+                        false,
                     )? {
                         continue;
                     }
@@ -1406,19 +1583,22 @@ impl<P: ModelProvider> RustEngine<P> {
         error: &RuntimeError,
         format_attempt: &mut usize,
         operation: &str,
+        already_reported: bool,
     ) -> Result<bool, RuntimeError> {
         let failure_operation = if matches!(error, RuntimeError::Plan(_)) {
             "plan.validate"
         } else {
             operation
         };
-        self.activity(
-            events,
-            &machine.state,
-            "activity.failed",
-            failure_operation,
-            &error.to_string(),
-        );
+        if !already_reported {
+            self.activity(
+                events,
+                &machine.state,
+                "activity.failed",
+                failure_operation,
+                &error.to_string(),
+            );
+        }
         if *format_attempt + 1 >= MAX_PLAN_FORMAT_ATTEMPTS
             || !is_recoverable_model_protocol_error(error)
         {
@@ -1463,11 +1643,66 @@ fn execute_actions(
             .map_err(|error| RuntimeError::Resource(error.to_string()))?;
         let result = router.dispatch(action).map_err(RuntimeError::Tool)?;
         if !result.success {
-            return Err(RuntimeError::Tool(PolicyError::UnsupportedAction(
-                result.stderr,
-            )));
+            let error = if action.action == "apply_patch"
+                && result.stderr == PolicyError::InvalidPatch.to_string()
+            {
+                PolicyError::InvalidPatch
+            } else {
+                let detail = compact_for_prompt(&result.stderr, 600);
+                PolicyError::ToolExecutionFailed(if detail.trim().is_empty() {
+                    action.action.clone()
+                } else {
+                    format!("{}: {detail}", action.action)
+                })
+            };
+            tool_results.push(result);
+            return Err(RuntimeError::Tool(error));
         }
         tool_results.push(result);
+    }
+    Ok(())
+}
+
+fn validate_plan_actions(plan: &ActionPlan, router: &ToolRouter) -> Result<(), RuntimeError> {
+    for action in &plan.actions {
+        if action.action == "replace_text" {
+            let path_str = action
+                .arguments
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let old_text = action
+                .arguments
+                .get("old_text")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            if path_str.is_empty() || old_text.is_empty() {
+                continue;
+            }
+            if let Ok(resolved) = router.files.workspace.resolve(path_str) {
+                if resolved.is_file() {
+                    if let Ok(content) = std::fs::read_to_string(&resolved) {
+                        let count = content.match_indices(old_text).count();
+                        if count == 0 {
+                            return Err(RuntimeError::Plan(format!(
+                                "replace_text: {path_str}: old_text must match exactly once in the file; found 0 matches; requested={old_text:?}. Copy the exact lines verbatim from the source file."
+                            )));
+                        } else if count > 1 {
+                            let new_text = action
+                                .arguments
+                                .get("new_text")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or_default();
+                            if !new_text.starts_with(old_text) {
+                                return Err(RuntimeError::Plan(format!(
+                                    "replace_text: {path_str}: old_text is ambiguous; found {count} matches. Include more surrounding lines to match uniquely once."
+                                )));
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -1567,6 +1802,45 @@ fn provider_retry_delay(attempt: usize) -> Duration {
     Duration::from_millis(400_u64.saturating_mul(multiplier))
 }
 
+fn format_model_usage(
+    estimated_input_tokens: u64,
+    usage: ModelUsage,
+    rate_limit: RateLimitSnapshot,
+) -> String {
+    let input = usage
+        .input_tokens
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| format!("estimated:{estimated_input_tokens}"));
+    let output = usage
+        .output_tokens
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unavailable".into());
+    let total = usage
+        .total_tokens
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unavailable".into());
+    let remaining = rate_limit
+        .remaining_tokens
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unavailable".into());
+    let reset = rate_limit
+        .reset_after
+        .map(format_wait_duration)
+        .unwrap_or_else(|| "unavailable".into());
+    format!(
+        "Provider usage: input={input}, output={output}, total={total}; rate-limit tokens remaining={remaining}, reset={reset}"
+    )
+}
+
+fn format_wait_duration(duration: Duration) -> String {
+    let seconds = duration.as_secs_f64();
+    if seconds.fract() == 0.0 {
+        format!("{seconds:.0}s")
+    } else {
+        format!("{seconds:.1}s")
+    }
+}
+
 fn merge_verification_commands(
     original: &[Vec<String>],
     additional: &[Vec<String>],
@@ -1599,6 +1873,11 @@ pub fn parse_plan(proposal: secondego_core::ActionProposal) -> Result<ActionPlan
         .as_object()
         .ok_or_else(|| RuntimeError::Plan("plan arguments must be an object".into()))?;
     let actions = parse_actions(arguments.get("actions"), "actions")?;
+    if actions.is_empty() {
+        return Err(RuntimeError::Plan(
+            "actions must contain at least one effective repository change".into(),
+        ));
+    }
     let verification_commands = arguments
         .get("verification_commands")
         .and_then(|value| value.as_array())
@@ -1696,13 +1975,111 @@ fn parse_actions(
                 .get("rationale")
                 .and_then(|value| value.as_str())
                 .unwrap_or_default();
-            Ok(secondego_core::ActionProposal {
+            let proposal = secondego_core::ActionProposal {
                 action: action.into(),
                 arguments: serde_json::Value::Object(arguments.clone()),
                 rationale: rationale.into(),
-            })
+            };
+            if proposal.action == "replace_text"
+                && arguments.get("old_text").and_then(|value| value.as_str())
+                    == arguments.get("new_text").and_then(|value| value.as_str())
+            {
+                return Ok(None);
+            }
+            validate_executable_action(&proposal, field)?;
+            Ok(Some(proposal))
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()
+        .map(|actions| actions.into_iter().flatten().collect())
+}
+
+fn validate_executable_action(
+    proposal: &secondego_core::ActionProposal,
+    field: &str,
+) -> Result<(), RuntimeError> {
+    let arguments = proposal
+        .arguments
+        .as_object()
+        .ok_or_else(|| RuntimeError::Plan(format!("{field} arguments must be an object")))?;
+    match proposal.action.as_str() {
+        "read_file" => validate_action_string(arguments, field, "read_file", "path", false),
+        "search_code" => validate_action_string(arguments, field, "search_code", "query", false),
+        "edit_file" | "write_file" => {
+            validate_action_string(arguments, field, &proposal.action, "path", false)?;
+            validate_action_string(arguments, field, &proposal.action, "content", true)
+        }
+        "append_text" => {
+            validate_action_string(arguments, field, "append_text", "path", false)?;
+            validate_action_string(arguments, field, "append_text", "content", false)
+        }
+        "replace_text" => {
+            validate_action_string(arguments, field, "replace_text", "path", false)?;
+            let old_text =
+                required_action_string(arguments, field, "replace_text", "old_text", false)?;
+            let new_text =
+                required_action_string(arguments, field, "replace_text", "new_text", true)?;
+            if old_text == new_text {
+                return Err(RuntimeError::Plan(format!(
+                    "{field} replace_text must change the file"
+                )));
+            }
+            Ok(())
+        }
+        "apply_patch" => {
+            let patch = required_action_string(arguments, field, "apply_patch", "patch", false)?;
+            if patch.len() > MAX_MODEL_PATCH_BYTES {
+                return Err(RuntimeError::Plan(format!(
+                    "{field} apply_patch exceeds the patch size limit"
+                )));
+            }
+            validate_unified_patch(patch).map_err(|_| {
+                RuntimeError::Plan(format!(
+                    "{field} apply_patch must be a raw Git unified diff beginning with 'diff --git a/<path> b/<path>'; do not use *** Begin Patch or Markdown fences"
+                ))
+            })
+        }
+        "run_command" => {
+            let argv = arguments
+                .get("argv")
+                .ok_or_else(|| RuntimeError::Plan(format!("{field} run_command requires argv")))?;
+            parse_command(argv).map(|_| ())
+        }
+        "git_diff" | "git_status" => Ok(()),
+        unsupported => Err(RuntimeError::Plan(format!(
+            "{field} action '{unsupported}' is not allowlisted"
+        ))),
+    }
+}
+
+fn validate_action_string(
+    arguments: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+    action: &str,
+    argument: &str,
+    allow_empty: bool,
+) -> Result<(), RuntimeError> {
+    required_action_string(arguments, field, action, argument, allow_empty).map(|_| ())
+}
+
+fn required_action_string<'a>(
+    arguments: &'a serde_json::Map<String, serde_json::Value>,
+    field: &str,
+    action: &str,
+    argument: &str,
+    allow_empty: bool,
+) -> Result<&'a str, RuntimeError> {
+    let value = arguments
+        .get(argument)
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| {
+            RuntimeError::Plan(format!("{field} {action} requires string {argument}"))
+        })?;
+    if !allow_empty && value.trim().is_empty() {
+        return Err(RuntimeError::Plan(format!(
+            "{field} {action} requires non-empty {argument}"
+        )));
+    }
+    Ok(value)
 }
 
 fn parse_command(value: &serde_json::Value) -> Result<Vec<String>, RuntimeError> {
@@ -1728,40 +2105,140 @@ fn parse_command(value: &serde_json::Value) -> Result<Vec<String>, RuntimeError>
     Ok(command)
 }
 
+fn task_focused_excerpt(content: &str, task: &str, max_chars: usize) -> String {
+    if content.chars().count() <= max_chars {
+        return content.to_owned();
+    }
+    let terms = task
+        .split(|character: char| !character.is_alphanumeric())
+        .map(str::to_ascii_lowercase)
+        .filter(|term| term.len() >= 4)
+        .collect::<std::collections::HashSet<_>>();
+    let normalized_content = content.to_ascii_lowercase();
+    let lines = content.lines().collect::<Vec<_>>();
+    let focus = lines
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, line)| {
+            let line = line.to_ascii_lowercase();
+            terms
+                .iter()
+                .map(|term| {
+                    let occurrences = normalized_content.matches(term).count().max(1);
+                    line.matches(term).count() * 1_000 / occurrences
+                })
+                .sum::<usize>()
+        })
+        .map(|(index, _)| index)
+        .unwrap_or_default();
+    let mut start = focus.saturating_sub(12);
+    for offset in 0..=25 {
+        if focus >= offset {
+            let candidate_idx = focus - offset;
+            let trimmed = lines[candidate_idx].trim_start();
+            if trimmed.starts_with("fn ")
+                || trimmed.starts_with("pub fn ")
+                || trimmed.starts_with("pub(crate) fn ")
+                || trimmed.starts_with("def ")
+                || trimmed.starts_with("function ")
+                || trimmed.starts_with("async fn ")
+                || trimmed.starts_with("pub async fn ")
+            {
+                let chars_to_focus: usize = lines[candidate_idx..=focus]
+                    .iter()
+                    .map(|line| line.chars().count() + 1)
+                    .sum();
+                if chars_to_focus <= max_chars {
+                    start = candidate_idx;
+                    break;
+                }
+            }
+        }
+    }
+    let mut excerpt = String::new();
+    while start < lines.len() {
+        let line = lines[start];
+        let additional = line.chars().count() + usize::from(!excerpt.is_empty());
+        if !excerpt.is_empty() && excerpt.chars().count() + additional > max_chars {
+            break;
+        }
+        if !excerpt.is_empty() {
+            excerpt.push('\n');
+        }
+        excerpt.push_str(line);
+        start += 1;
+    }
+    excerpt
+}
+
 const INITIAL_EVIDENCE_FILES: usize = 6;
+const DEFAULT_INITIAL_EVIDENCE_EXCERPT_CHARS: usize = 2_500;
 const MAX_PLANNING_INSPECTIONS: usize = 3;
 const MAX_PLAN_FORMAT_ATTEMPTS: usize = 2;
 const MAX_TRANSIENT_PROVIDER_ATTEMPTS: usize = 3;
+const MAX_RATE_LIMIT_RETRIES: usize = 2;
+const MAX_RATE_LIMIT_WAIT: Duration = Duration::from_secs(60);
+const RATE_LIMIT_RESET_GRACE: Duration = Duration::from_millis(750);
+const MIN_RATE_LIMIT_WAIT: Duration = Duration::from_secs(2);
 const MAX_PLANNING_OBSERVATION_CHARS: usize = 6_000;
 const MAX_RECOVERY_FAILURE_CHARS: usize = 8_000;
 const MAX_RECOVERY_DIFF_CHARS: usize = 8_000;
-const PLAN_INSTRUCTION: &str = "Return only one JSON object and no Markdown. During bounded planning, choose exactly one top-level action:\n1. read_file with arguments {path:string} to inspect one safe repository file;\n2. search_code with arguments {query:string} to inspect bounded repository matches;\n3. submit_plan with arguments {actions:[{action,arguments,rationale}], verification_commands:[[argv...]], optional recovery_actions:[...]}.\nPlanning read_file/search_code actions are read-only. After the inspection limit, you must use submit_plan. For submit_plan, use apply_patch for existing-file changes; use write_file only for genuinely new files. Allowed executable actions are read_file, search_code, apply_patch, edit_file, write_file, run_command, git_diff, git_status. Never return shell strings or Markdown.\nSDETwin Directives:\n1. Multi-File: When an issue spans multiple files or requires updating dependencies/callers, include actions for all necessary files.\n2. Autonomous Test Verification: Include a focused regression test where appropriate.";
-const PLAN_FORMAT_REPAIR_INSTRUCTION: &str = "FORMAT REPAIR: Return only one JSON object, with no Markdown or prose. It must be either a read-only planning request {\"action\":\"read_file\",\"arguments\":{\"path\":\"...\"},\"rationale\":\"...\"}, a read-only search request {\"action\":\"search_code\",\"arguments\":{\"query\":\"...\"},\"rationale\":\"...\"}, or a final plan {\"action\":\"submit_plan\",\"arguments\":{\"actions\":[{\"action\":\"...\",\"arguments\":{},\"rationale\":\"...\"}],\"verification_commands\":[[\"command\",\"arg\"]],\"recovery_actions\":[]},\"rationale\":\"plain string\"}.";
-const RECOVERY_INSTRUCTION: &str = "You are in the DIAGNOSE phase of a bounded coding run. Inspect the failed verification evidence and current isolated-worktree diff. Return only one JSON object with top-level action submit_recovery and arguments {actions:[{action,arguments,rationale}], optional verification_commands:[[argv...]]}. Actions must be evidence-based, minimal, and safe. Use apply_patch for existing files. Do not repeat unchanged actions, do not narrate, and do not return Markdown.";
-const RECOVERY_FORMAT_REPAIR_INSTRUCTION: &str = "FORMAT REPAIR: Return only {\"action\":\"submit_recovery\",\"arguments\":{\"actions\":[{\"action\":\"apply_patch\",\"arguments\":{\"patch\":\"...\"},\"rationale\":\"...\"}],\"verification_commands\":[[\"command\",\"arg\"]]},\"rationale\":\"plain string\"}.";
+const MAX_MODEL_PATCH_BYTES: usize = 512 * 1024;
+const PLAN_INSTRUCTION: &str = "Return only one JSON object and no Markdown. During bounded planning, choose exactly one top-level action:\n1. read_file with arguments {path:string} to inspect one safe repository file;\n2. search_code with arguments {query:string} to inspect bounded repository matches;\n3. submit_plan with arguments {actions:[{action,arguments,rationale}], verification_commands:[[\"cmd\",\"arg1\",...]], optional recovery_actions:[...]}.\nPlanning read_file/search_code actions are read-only. After the inspection limit, you must use submit_plan. For existing-file changes use replace_text with {path,old_text,new_text}; old_text must be an exact source fragment copied verbatim from retrieved repository evidence, and new_text must be the full replacement including the intended change. Use write_file only for genuinely new files. Each action arguments object must contain exactly the fields: path, content, old_text, new_text (use empty string for unused fields). Put test commands only in verification_commands, never in actions. Allowed executable actions are replace_text, write_file, git_diff, git_status. Never return shell strings, apply_patch, or Markdown.\nSDETwin Directives:\n1. Multi-File: When an issue spans multiple files or requires updating dependencies/callers, include actions for all necessary files.\n2. Autonomous Test Verification: Include a focused regression test where appropriate.";
+const PLAN_FORMAT_REPAIR_INSTRUCTION: &str = "FORMAT REPAIR: Return only one JSON object with top-level action submit_plan and no Markdown or prose. arguments.actions must contain at least one effective repository change. Each action must use exactly these argument fields: path, content, old_text, new_text (empty string for unused fields). Use replace_text with exact unique old_text and different new_text. Use write_file only for a new file. Put commands in verification_commands, not actions. Never use apply_patch or any other action type.";
+const RECOVERY_INSTRUCTION: &str = "You are in the DIAGNOSE phase of a bounded coding run. Inspect the failed verification evidence and current isolated-worktree diff. Return only one JSON object with top-level action submit_recovery and arguments {actions:[{action,arguments,rationale}], verification_commands:[[\"cmd\",\"arg1\",...]], recovery_actions:[]}. Actions must be evidence-based, minimal, and safe. Each action arguments object must contain exactly: path, content, old_text, new_text (empty string for unused fields). For existing-file changes use replace_text with an exact unique old_text fragment and a different new_text. Use write_file only for new files. Do not repeat unchanged actions, do not narrate, and do not return Markdown.";
+const RECOVERY_FORMAT_REPAIR_INSTRUCTION: &str = "FORMAT REPAIR: Return only one submit_recovery JSON object. actions must be non-empty and effective. Use replace_text with exact unique old_text and different new_text, append_text to add content at the end of an existing file, or write_file for a new file. Include non-empty verification_commands. Do not return Markdown or prose.";
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use secondego_core::ActionProposal;
-    use secondego_model::ScriptedProvider;
+    use secondego_model::{ModelResponse, ScriptedProvider};
+
+    #[test]
+    fn source_excerpt_is_centered_on_task_relevant_code() {
+        let content = (0..80)
+            .map(|index| {
+                if index == 60 {
+                    "fn change_status() { cache.invalidate(); }".to_owned()
+                } else {
+                    format!("fn unrelated_{index}() {{}}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let excerpt = task_focused_excerpt(
+            &content,
+            "status change must invalidate the cached project list",
+            500,
+        );
+        assert!(excerpt.contains("change_status"));
+        assert!(!excerpt.contains("unrelated_0"));
+    }
     use std::collections::VecDeque;
     use std::process::Command;
     use std::sync::{Arc, Mutex, atomic::AtomicUsize};
 
     #[derive(Clone)]
     struct SequenceProvider {
-        responses: Arc<Mutex<VecDeque<Result<ActionProposal, ProviderError>>>>,
+        responses: Arc<Mutex<VecDeque<Result<ModelResponse, ProviderError>>>>,
         calls: Arc<AtomicUsize>,
         prompts: Arc<Mutex<Vec<String>>>,
+        planning_prompt_token_limit: Option<u32>,
     }
 
     impl SequenceProvider {
         fn new(responses: Vec<Result<ActionProposal, ProviderError>>) -> Self {
             Self {
-                responses: Arc::new(Mutex::new(responses.into())),
+                responses: Arc::new(Mutex::new(
+                    responses
+                        .into_iter()
+                        .map(|response| response.map(ModelResponse::from))
+                        .collect(),
+                )),
                 calls: Arc::new(AtomicUsize::new(0)),
                 prompts: Arc::new(Mutex::new(Vec::new())),
+                planning_prompt_token_limit: None,
             }
         }
 
@@ -1779,7 +2256,7 @@ mod tests {
             &self,
             prompt: &str,
             _context: &ProviderContext,
-        ) -> Result<ActionProposal, ProviderError> {
+        ) -> Result<ModelResponse, ProviderError> {
             self.calls.fetch_add(1, Ordering::AcqRel);
             self.prompts.lock().unwrap().push(prompt.into());
             self.responses
@@ -1787,6 +2264,10 @@ mod tests {
                 .map_err(|_| ProviderError::ScriptExhausted)?
                 .pop_front()
                 .unwrap_or(Err(ProviderError::ScriptExhausted))
+        }
+
+        fn planning_prompt_token_limit(&self) -> Option<u32> {
+            self.planning_prompt_token_limit
         }
     }
 
@@ -1830,6 +2311,25 @@ mod tests {
                     .and_then(|value| value.as_str())
                     == Some("model.plan")
         }));
+    }
+
+    #[test]
+    fn direct_plan_completes_without_a_follow_up_model_request() {
+        let root = initialized_repository("VALUE = 1\n");
+        let provider =
+            SequenceProvider::new(vec![Ok(plan_with_edit("VALUE = 2\n", "VALUE = 2\\n"))]);
+        let mut engine = RustEngine::new(provider.clone());
+
+        let report = engine.run("update value", root.path()).unwrap();
+
+        assert!(report.verification_passed);
+        assert_eq!(provider.call_count(), 1);
+        assert!(
+            !report
+                .tool_results
+                .iter()
+                .any(|result| matches!(result.tool.as_str(), "read_file" | "search_code"))
+        );
     }
 
     #[test]
@@ -1944,6 +2444,7 @@ mod tests {
             Err(ProviderError::HttpStatus {
                 provider: "Gemini".into(),
                 status: 503,
+                code: None,
             }),
             Ok(plan),
         ]);
@@ -1961,6 +2462,211 @@ mod tests {
                     .and_then(|value| value.as_str())
                     == Some("model.provider_retry")
         }));
+    }
+
+    #[test]
+    fn permanent_provider_failure_is_requested_once_and_logged_once() {
+        let root = initialized_repository("VALUE = 1\n");
+        let provider = SequenceProvider::new(vec![Err(ProviderError::HttpStatus {
+            provider: "Groq".into(),
+            status: 400,
+            code: Some("tool_use_failed".into()),
+        })]);
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured_events = events.clone();
+        let mut engine = RustEngine::new(provider.clone()).with_event_sink(move |event| {
+            captured_events.lock().unwrap().push(event.clone());
+        });
+
+        let error = engine.run("update value", root.path()).unwrap_err();
+
+        assert!(matches!(
+            error,
+            RuntimeError::Provider(ProviderError::HttpStatus {
+                status: 400,
+                code: Some(ref code),
+                ..
+            }) if code == "tool_use_failed"
+        ));
+        assert_eq!(provider.call_count(), 1);
+        let events = events.lock().unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| {
+                    event.event_type == "activity.failed"
+                        && event
+                            .payload
+                            .get("operation")
+                            .and_then(|value| value.as_str())
+                            == Some("model.plan")
+                })
+                .count(),
+            1
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| event.event_type == "activity.retrying")
+        );
+    }
+
+    #[test]
+    fn rate_limited_provider_without_server_delay_is_not_retried() {
+        let root = initialized_repository("VALUE = 1\n");
+        let provider = SequenceProvider::new(vec![Err(ProviderError::RateLimited {
+            provider: "Groq".into(),
+            retry_after: None,
+        })]);
+        let mut engine = RustEngine::new(provider.clone());
+
+        let error = engine.run("update value", root.path()).unwrap_err();
+
+        assert!(matches!(
+            error,
+            RuntimeError::Provider(ProviderError::RateLimited {
+                retry_after: None,
+                ..
+            })
+        ));
+        assert_eq!(provider.call_count(), 1);
+    }
+
+    #[test]
+    fn server_directed_rate_limit_waits_once_before_retrying() {
+        let root = initialized_repository("VALUE = 1\n");
+        let provider = SequenceProvider::new(vec![
+            Err(ProviderError::RateLimited {
+                provider: "Groq".into(),
+                retry_after: Some(Duration::ZERO),
+            }),
+            Ok(plan_with_edit("VALUE = 2\n", "VALUE = 2\\n")),
+        ]);
+        let mut engine = RustEngine::new(provider.clone());
+
+        let report = engine.run("update value", root.path()).unwrap();
+
+        assert!(report.verification_passed);
+        assert_eq!(provider.call_count(), 2);
+        assert_eq!(report.resource_usage.get("retries"), Some(&1));
+        assert!(report.events.iter().any(|event| {
+            event.event_type == "activity.retrying"
+                && event
+                    .payload
+                    .get("operation")
+                    .and_then(|value| value.as_str())
+                    == Some("model.rate_limit_wait")
+        }));
+    }
+
+    #[test]
+    fn compact_provider_profile_bounds_planning_context_before_request() {
+        let profile = planning_context_profile(Some(3_500));
+        assert_eq!(profile.budget.total_tokens, 5_500);
+        assert_eq!(
+            profile.budget.total_tokens - profile.budget.response_tokens,
+            3_500
+        );
+        assert_eq!(profile.initial_evidence_files, 4);
+        assert_eq!(profile.source_excerpt_chars, 1_200);
+    }
+
+    const TASKFLOW_STATUS_TASK: &str = "In TaskFlow, project task lists can return stale data after a task's status is successfully changed.
+Reproduction:
+1. Create a task in a project.
+2. Load the project task list once.
+3. Change the task status successfully.
+4. Load the project task list again.
+The task list still shows the previous status because the cached project list is not refreshed after the mutation.
+Fix the behavior so that:
+- A successful status change is visible on the next project-list request.
+- Failed, unauthorized, or stale-version updates do not produce misleading state.
+- Existing authorization, optimistic concurrency, event publishing, and deterministic task ordering remain unchanged.
+- Add or update regression tests for the behavior.
+- Do not modify existing tests or benchmark configuration to bypass the issue.
+Run the existing Rust test suite before and after the change.";
+
+    #[test]
+    fn groq_planning_packet_preserves_full_mission_without_duplicating_runtime_metadata() {
+        let engine = RustEngine::new(secondego_model::GroqProvider::default());
+        // Also cover a mission near the task limit and a long temporary clone path.
+        for task in [TASKFLOW_STATUS_TASK.to_string(), "x".repeat(3_900)] {
+            let mut machine = StateMachine::new(ExecutionState::new(
+                &task,
+                format!(
+                    "/private/var/folders/{}/SecondEgo_Testing",
+                    "clone/".repeat(200)
+                ),
+            ));
+            machine.move_to(Phase::Understand, "index").unwrap();
+            machine
+                .move_to(Phase::Plan, "assemble indexed context")
+                .unwrap();
+            machine.state.facts.insert("language".into(), "Rust".into());
+            machine
+                .state
+                .acceptance_criteria
+                .push("run existing tests".into());
+            let packet = engine
+                .assemble_planning_packet(&machine, &EvidenceLedger::default(), 0, false)
+                .unwrap();
+
+            assert_eq!(packet.task, task);
+            assert_eq!(packet.as_text().matches(&task).count(), 1);
+            assert!(packet.slot_usage["state"] <= engine.context.budget.state_tokens);
+            assert!(packet.state.contains("Rust"));
+            assert!(packet.state.contains("run existing tests"));
+            assert!(packet.state.contains("PLANNING_INSPECTIONS=0"));
+            assert!(!packet.state.contains(&machine.state.workspace));
+            assert!(packet.estimated_tokens <= 3_500);
+            // Projection must not change the durable state used in the report.
+            assert_eq!(machine.state.task, task);
+            assert!(!machine.state.workspace.is_empty());
+        }
+    }
+
+    #[test]
+    fn groq_budget_with_reported_mission_reaches_verified_diff_without_live_calls() {
+        let root = initialized_repository("VALUE = 1\n");
+        let mut provider =
+            SequenceProvider::new(vec![Ok(plan_with_edit("VALUE = 2\n", "VALUE = 2\\n"))]);
+        provider.planning_prompt_token_limit =
+            secondego_model::GroqProvider::default().planning_prompt_token_limit();
+        let mut engine = RustEngine::new(provider.clone());
+
+        let report = engine.run(TASKFLOW_STATUS_TASK, root.path()).unwrap();
+
+        assert_eq!(report.state.status, TerminalStatus::Complete);
+        assert!(report.verification_passed);
+        assert!(report.diff_transferred);
+        assert_eq!(report.changed_paths, vec!["value.py"]);
+        assert_eq!(provider.call_count(), 1);
+        assert_eq!(
+            provider.prompts()[0].matches(TASKFLOW_STATUS_TASK).count(),
+            1
+        );
+        assert_eq!(report.state.task, TASKFLOW_STATUS_TASK);
+    }
+
+    #[test]
+    fn groq_rejects_oversized_task_with_budget_diagnostics_before_provider_call() {
+        let root = initialized_repository("VALUE = 1\n");
+        let mut provider = SequenceProvider::new(vec![]);
+        provider.planning_prompt_token_limit =
+            secondego_model::GroqProvider::default().planning_prompt_token_limit();
+        let mut engine = RustEngine::new(provider.clone());
+
+        let error = engine.run("x".repeat(4_001), root.path()).unwrap_err();
+
+        assert!(matches!(&error, RuntimeError::Context(_)));
+        assert!(error.to_string().contains("TaskExceedsBudget"));
+        assert!(error.to_string().contains("task=1001/1000"));
+        assert!(error.to_string().contains("state="));
+        assert_eq!(provider.call_count(), 0);
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("value.py")).unwrap(),
+            "VALUE = 1\n"
+        );
     }
 
     #[test]
@@ -2052,6 +2758,77 @@ mod tests {
     }
 
     #[test]
+    fn malformed_openai_style_patch_is_repaired_before_execution() {
+        let root = initialized_repository("VALUE = 1\n");
+        let malformed = ActionProposal {
+            action: "submit_plan".into(),
+            arguments: serde_json::json!({
+                "actions": [{
+                    "action": "apply_patch",
+                    "arguments": {
+                        "patch": "*** Begin Patch\n*** Update File: value.py\n@@\n-VALUE = 1\n+VALUE = 2\n*** End Patch\n"
+                    },
+                    "rationale": "update the value"
+                }],
+                "verification_commands": [["python3", "-c", "from pathlib import Path; assert Path('value.py').read_text() == 'VALUE = 2\\n'"]]
+            }),
+            rationale: "plan using an incompatible patch dialect".into(),
+        };
+        let repaired = ActionProposal {
+            action: "submit_plan".into(),
+            arguments: serde_json::json!({
+                "actions": [{
+                    "action": "apply_patch",
+                    "arguments": {
+                        "patch": "diff --git a/value.py b/value.py\n--- a/value.py\n+++ b/value.py\n@@ -1 +1 @@\n-VALUE = 1\n+VALUE = 2\n"
+                    },
+                    "rationale": "update the value with a Git patch"
+                }],
+                "verification_commands": [["python3", "-c", "from pathlib import Path; assert Path('value.py').read_text() == 'VALUE = 2\\n'"]]
+            }),
+            rationale: "corrected plan".into(),
+        };
+        let provider = SequenceProvider::new(vec![Ok(malformed), Ok(repaired)]);
+        let mut engine = RustEngine::new(provider.clone());
+
+        let report = engine.run("update value", root.path()).unwrap();
+
+        assert!(report.verification_passed);
+        assert_eq!(provider.call_count(), 2);
+        assert_eq!(report.resource_usage.get("retries"), Some(&1));
+        assert!(provider.prompts()[1].contains("Never use apply_patch"));
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("value.py")).unwrap(),
+            "VALUE = 2\n"
+        );
+        let repair_event = report
+            .events
+            .iter()
+            .position(|event| {
+                event.event_type == "activity.retrying"
+                    && event
+                        .payload
+                        .get("operation")
+                        .and_then(|value| value.as_str())
+                        == Some("model.plan.repair")
+            })
+            .unwrap();
+        let execution_event = report
+            .events
+            .iter()
+            .position(|event| {
+                event.event_type == "activity.started"
+                    && event
+                        .payload
+                        .get("operation")
+                        .and_then(|value| value.as_str())
+                        == Some("execute.actions")
+            })
+            .unwrap();
+        assert!(repair_event < execution_event);
+    }
+
+    #[test]
     fn plan_format_repair_is_bounded_and_never_starts_execution_when_it_fails() {
         let root = tempfile::tempdir().unwrap();
         git(root.path(), &["init", "-q"]);
@@ -2097,7 +2874,7 @@ mod tests {
         let proposal = ActionProposal {
             action: "submit_plan".into(),
             arguments: serde_json::json!({
-                "actions": [],
+                "actions": [{"action":"git_status","arguments":{},"rationale":"consume the bounded tool slot"}],
                 "verification_commands": [["python3", "-c", "assert True"]]
             }),
             rationale: "plan".into(),

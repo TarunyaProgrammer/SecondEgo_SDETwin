@@ -18,9 +18,9 @@ const cards = [
 
 export function FrameworkCards() {
   return (
-    <section className="capabilities-section wrap" id="capabilities">
+    <section className="capabilities-section wrap" id="capabilities" data-tone="paper">
       <Reveal className="section-heading section-heading--center">
-        <p className="eyebrow">THREE ENGINEERING BOUNDARIES</p>
+        <p className="section-label">THREE ENGINEERING BOUNDARIES</p>
         <h2>Small surface area.<br /><span className="text-accent">Clear ownership.</span></h2>
         <p className="section-heading__center-copy">Each layer has a job. The model supplies proposals; the local engine owns policy, state, and proof.</p>
       </Reveal>

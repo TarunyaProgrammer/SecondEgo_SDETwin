@@ -1,27 +1,63 @@
-import { useEffect, useRef, useState, useCallback } from "react";
-import type { GestureActionType, GestureEvent, GestureState } from "../types";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type {
+  GestureActionType,
+  GestureEvent,
+  GestureServiceState,
+  GestureServiceStatus,
+  GestureState,
+  LandmarkGestureSignal,
+} from "../types";
 
 const GESTURE_ACTION_MAP: Record<string, { action: GestureActionType; label: string }> = {
-  thumbs_up: { action: "expand_notch", label: "👍 Expand Notch" },
-  thumbs_down: { action: "collapse_notch", label: "👎 Collapse Notch" },
-  fist: { action: "start_run", label: "✊ Start Run" },
-  open_palm: { action: "cancel_run", label: "✋ Cancel / Pause" },
-  point: { action: "focus_input", label: "☝ Focus Input" },
-  two_fingers: { action: "scroll_up", label: "✌ Scroll Up" },
-  three_fingers: { action: "scroll_down", label: "🤟 Scroll Down" },
+  thumbs_up: { action: "expand_notch", label: "Thumbs up · Expand notch" },
+  thumbs_down: { action: "collapse_notch", label: "Thumbs down · Collapse notch" },
+  open_palm: { action: "expand_notch", label: "Open palm · Expand notch" },
 };
+
+const gestureServiceStates = new Set<GestureServiceState>([
+  "disabled",
+  "starting",
+  "active",
+  "unavailable",
+  "error",
+]);
 
 interface UseGestureControlOptions {
   notchMode: boolean;
-  gatewayUrl?: string;
-  token?: string;
   onAction: (action: GestureActionType, event: GestureEvent) => void;
+}
+
+function serviceStatus(state: GestureServiceState, message: string | null = null): GestureServiceStatus {
+  return {
+    schema_version: 1,
+    state,
+    message,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+function isGestureStatus(value: unknown): value is GestureServiceStatus {
+  if (!value || typeof value !== "object") return false;
+  const status = value as Partial<GestureServiceStatus>;
+  return status.schema_version === 1
+    && typeof status.state === "string"
+    && gestureServiceStates.has(status.state as GestureServiceState)
+    && (status.message === null || typeof status.message === "string")
+    && typeof status.timestamp === "string";
+}
+
+function isLandmarkSignal(value: unknown): value is LandmarkGestureSignal {
+  if (!value || typeof value !== "object") return false;
+  const signal = value as Partial<LandmarkGestureSignal>;
+  return signal.schema_version === 1
+    && (signal.gesture === "thumbs_up" || signal.gesture === "thumbs_down" || signal.gesture === "open_palm")
+    && (signal.hand === "Left" || signal.hand === "Right")
+    && typeof signal.confidence === "number"
+    && typeof signal.timestamp === "string";
 }
 
 export function useGestureControl({
   notchMode,
-  gatewayUrl,
-  token,
   onAction,
 }: UseGestureControlOptions): GestureState & {
   toggleEnabled: () => void;
@@ -31,360 +67,178 @@ export function useGestureControl({
   const [enabled, setEnabledState] = useState<boolean>(() => {
     if (!notchMode) return false;
     try {
+      const requested = new URLSearchParams(window.location.search).get("gestures");
+      if (requested === "1") return true;
+      if (requested === "0") return false;
       const stored = localStorage.getItem("secondego_notch_gestures");
-      // Camera access is an optional shortcut, never a prerequisite for using
-      // the companion. New installations start click-first and opt in here.
       return stored !== null ? stored === "1" : false;
     } catch {
       return false;
     }
   });
-
   const [lastGesture, setLastGesture] = useState<GestureEvent | null>(null);
-  const [cameraActive, setCameraActive] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [trackerStatus, setTrackerStatus] = useState<GestureServiceStatus>(() => serviceStatus("disabled"));
 
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const animFrameRef = useRef<number | null>(null);
-  const cooldownRef = useRef<{ [gesture: string]: number }>({});
-  const debounceHistoryRef = useRef<string[]>([]);
-  const lastFiredTimeRef = useRef<number>(0);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const cooldownRef = useRef<Record<string, number>>({});
+  const lastFiredTimeRef = useRef(0);
   const onActionRef = useRef(onAction);
+
+  const ensureAudioContext = useCallback(() => {
+    const AudioContextConstructor = window.AudioContext
+      || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextConstructor) return null;
+    if (!audioContextRef.current) audioContextRef.current = new AudioContextConstructor();
+    return audioContextRef.current;
+  }, []);
+
+  const primeGestureAudio = useCallback(async () => {
+    const context = ensureAudioContext();
+    if (context?.state === "suspended") await context.resume().catch(() => {});
+  }, [ensureAudioContext]);
+
+  const playGestureChime = useCallback(() => {
+    const context = ensureAudioContext();
+    if (!context) return;
+    const play = () => {
+      const now = context.currentTime;
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(880, now);
+      oscillator.frequency.exponentialRampToValueAtTime(1320, now + 0.09);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.setValueAtTime(0.08, now + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start(now);
+      oscillator.stop(now + 0.17);
+    };
+    if (context.state === "suspended") {
+      void context.resume().then(play).catch(() => {});
+    } else {
+      play();
+    }
+  }, [ensureAudioContext]);
 
   useEffect(() => {
     onActionRef.current = onAction;
   }, [onAction]);
 
-  const setEnabled = useCallback((val: boolean) => {
-    setEnabledState(val);
+  const setEnabled = useCallback((value: boolean) => {
+    setEnabledState(value);
+    if (value) void primeGestureAudio();
     try {
-      localStorage.setItem("secondego_notch_gestures", val ? "1" : "0");
+      localStorage.setItem("secondego_notch_gestures", value ? "1" : "0");
     } catch {
-      // ignore
+      // Storage is a convenience only; controls remain click-first.
     }
-  }, []);
+  }, [primeGestureAudio]);
 
   const toggleEnabled = useCallback(() => {
-    setEnabled(!enabled);
-  }, [enabled, setEnabled]);
-
-  // Dispatch an action with cooldown
-  const dispatchGesture = useCallback(
-    (gesture: string, confidence: number = 0.9, hand: string = "Right") => {
-      const mapping = GESTURE_ACTION_MAP[gesture];
-      if (!mapping) return;
-
-      const now = Date.now();
-      const lastForGesture = cooldownRef.current[gesture] || 0;
-      // Cooldown of 1.4s between repeated same gestures, 0.6s between any gestures
-      if (now - lastForGesture < 1400 || now - lastFiredTimeRef.current < 600) {
-        return;
-      }
-
-      cooldownRef.current[gesture] = now;
-      lastFiredTimeRef.current = now;
-
-      const event: GestureEvent = {
-        gesture,
-        action: mapping.action,
-        confidence,
-        label: mapping.label,
-        hand,
-        timestamp: new Date().toISOString(),
-      };
-
-      setLastGesture(event);
-      // Keep the camera and native listeners alive while the parent form
-      // changes. Recreating them on every keystroke loses gesture events.
-      onActionRef.current(mapping.action, event);
-
-      // Auto-clear gesture HUD after 2.5 seconds
-      window.setTimeout(() => {
-        setLastGesture((curr) => (curr?.timestamp === event.timestamp ? null : curr));
-      }, 2500);
-    },
-    []
-  );
-
-  const triggerManualGesture = useCallback(
-    (gesture: string) => {
-      dispatchGesture(gesture, 1.0, "Manual");
-    },
-    [dispatchGesture]
-  );
-
-  // ── 1. Gateway SSE Listener (subscribes to Python/Rust GestureBroker) ──────
-  useEffect(() => {
-    if (!notchMode || !enabled || !gatewayUrl) return;
-
-    let eventSource: EventSource | null = null;
-    let cancelled = false;
-
-    try {
-      const url = new URL(`${gatewayUrl.replace(/\/$/, "")}/api/gestures/stream`);
-      if (token) url.searchParams.set("token", token);
-
-      eventSource = new EventSource(url.toString());
-
-      eventSource.onmessage = (e) => {
-        if (cancelled) return;
-        try {
-          const data = JSON.parse(e.data);
-          if (data?.gesture) {
-            dispatchGesture(data.gesture, data.confidence ?? 0.95, data.hand ?? "Right");
-          }
-        } catch {
-          // ignore malformed frame
-        }
-      };
-
-      eventSource.onerror = () => {
-        // SSE endpoint might not be running if backend CV is optional; silent fallback
-        eventSource?.close();
-      };
-    } catch {
-      // ignore
+    if (enabled && (trackerStatus.state === "unavailable" || trackerStatus.state === "error")) {
+      const setHostGestureEnabled = window.secondEgoWindow?.setGestureEnabled;
+      if (!setHostGestureEnabled) return;
+      setTrackerStatus(serviceStatus("starting"));
+      void setHostGestureEnabled(false)
+        .then(() => setHostGestureEnabled(true))
+        .then((status) => {
+          if (isGestureStatus(status)) setTrackerStatus(status);
+        })
+        .catch(() => setTrackerStatus(serviceStatus("error", "Could not restart local landmark tracking.")));
+      return;
     }
+    setEnabled(!enabled);
+  }, [enabled, setEnabled, trackerStatus.state]);
 
-    return () => {
-      cancelled = true;
-      if (eventSource) {
-        eventSource.close();
-      }
+  const dispatchGesture = useCallback((gesture: string, confidence = 1, hand = "Right") => {
+    const mapping = GESTURE_ACTION_MAP[gesture];
+    if (!mapping) return;
+
+    const now = Date.now();
+    const lastForGesture = cooldownRef.current[gesture] || 0;
+    if (now - lastForGesture < 1400 || now - lastFiredTimeRef.current < 600) return;
+
+    cooldownRef.current[gesture] = now;
+    lastFiredTimeRef.current = now;
+    const event: GestureEvent = {
+      gesture,
+      action: mapping.action,
+      confidence,
+      label: mapping.label,
+      hand,
+      timestamp: new Date().toISOString(),
     };
-  }, [notchMode, enabled, gatewayUrl, token, dispatchGesture]);
+    setLastGesture(event);
+    playGestureChime();
+    onActionRef.current(mapping.action, event);
+    window.setTimeout(() => {
+      setLastGesture((current) => current?.timestamp === event.timestamp ? null : current);
+    }, 2500);
+  }, [playGestureChime]);
 
-  // ── 2. Native window.secondEgoWindow.onGesture IPC listener (Electron) ─────
+  const triggerManualGesture = useCallback((gesture: string) => {
+    if (enabled) dispatchGesture(gesture, 1, "Manual");
+  }, [dispatchGesture, enabled]);
+
+  // The host owns camera access and invokes the existing Python MediaPipe
+  // watcher. The renderer deliberately has no getUserMedia fallback: color and
+  // contour guesses caused the broken thumbs-up behavior this replaces.
   useEffect(() => {
-    if (!notchMode || !enabled || typeof window === "undefined") return;
-    if (!window.secondEgoWindow?.onGesture) return;
-
-    const cleanup = window.secondEgoWindow.onGesture((event) => {
-      dispatchGesture(event.gesture, event.confidence, event.hand);
-    });
-
-    return () => {
-      cleanup?.();
-    };
-  }, [notchMode, enabled, dispatchGesture]);
-
-  // ── 3. Client-side Camera Fallback (WebCam Vision when enabled) ────────────
-  useEffect(() => {
-    if (!notchMode || !enabled) {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-        streamRef.current = null;
-      }
-      setCameraActive(false);
+    if (!notchMode) return;
+    const bridge = window.secondEgoWindow;
+    if (!bridge?.setGestureEnabled) {
+      setTrackerStatus(enabled
+        ? serviceStatus("unavailable", "Landmark gestures are available in the Electron companion.")
+        : serviceStatus("disabled"));
       return;
     }
 
-    let isSubscribed = true;
+    let current = true;
+    void bridge.setGestureEnabled(enabled)
+      .then((status) => {
+        if (current && isGestureStatus(status)) setTrackerStatus(status);
+      })
+      .catch(() => {
+        if (current) setTrackerStatus(serviceStatus("error", "Could not configure local landmark tracking."));
+      });
+    return () => { current = false; };
+  }, [enabled, notchMode]);
 
-    async function startCamera() {
-      if (!navigator.mediaDevices?.getUserMedia) {
-        return;
+  useEffect(() => {
+    if (!notchMode) return;
+    const unsubscribe = window.secondEgoWindow?.onGestureStatus?.((status) => {
+      if (isGestureStatus(status)) setTrackerStatus(status);
+    });
+    return () => unsubscribe?.();
+  }, [notchMode]);
+
+  useEffect(() => {
+    if (!notchMode || !enabled) return;
+    const unsubscribe = window.secondEgoWindow?.onGesture?.((signal) => {
+      if (isLandmarkSignal(signal)) {
+        dispatchGesture(signal.gesture, signal.confidence, signal.hand);
       }
+    });
+    return () => unsubscribe?.();
+  }, [dispatchGesture, enabled, notchMode]);
 
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            width: { ideal: 320 },
-            height: { ideal: 240 },
-            frameRate: { ideal: 20 },
-            facingMode: "user",
-          },
-          audio: false,
-        });
-
-        if (!isSubscribed) {
-          stream.getTracks().forEach((track) => track.stop());
-          return;
-        }
-
-        streamRef.current = stream;
-        setCameraActive(true);
-        setError(null);
-
-        if (!videoRef.current) {
-          const video = document.createElement("video");
-          video.autoplay = true;
-          video.playsInline = true;
-          video.muted = true;
-          video.style.display = "none";
-          document.body.appendChild(video);
-          videoRef.current = video;
-        }
-
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play().catch(() => {});
-
-        if (!canvasRef.current) {
-          const canvas = document.createElement("canvas");
-          canvas.width = 160;
-          canvas.height = 120;
-          canvasRef.current = canvas;
-        }
-
-        // Lightweight optical gesture analyzer
-        let frameCount = 0;
-        const ctx = canvasRef.current.getContext("2d", { willReadFrequently: true });
-
-        const processFrame = () => {
-          if (!isSubscribed || !videoRef.current || !canvasRef.current || !ctx) return;
-
-          frameCount++;
-          // Sample every 4th frame (approx 5-6 FPS) to keep CPU near 0%
-          if (frameCount % 4 === 0 && videoRef.current.readyState >= 2) {
-            ctx.drawImage(videoRef.current, 0, 0, 160, 120);
-            const imageData = ctx.getImageData(0, 0, 160, 120);
-            const detected = analyzeOpticalHandGesture(imageData);
-
-            if (detected) {
-              debounceHistoryRef.current.push(detected);
-              if (debounceHistoryRef.current.length > 5) {
-                debounceHistoryRef.current.shift();
-              }
-              // If last 4 frames agree on the same gesture
-              if (
-                debounceHistoryRef.current.length >= 4 &&
-                debounceHistoryRef.current.every((g) => g === detected)
-              ) {
-                dispatchGesture(detected, 0.85, "Camera");
-              }
-            } else {
-              debounceHistoryRef.current = [];
-            }
-          }
-
-          animFrameRef.current = requestAnimationFrame(processFrame);
-        };
-
-        animFrameRef.current = requestAnimationFrame(processFrame);
-      } catch (err: unknown) {
-        if (!isSubscribed) return;
-        setCameraActive(false);
-        const message = err instanceof Error ? err.message : "Camera permission unavailable";
-        setError(message);
-      }
-    }
-
-    void startCamera();
-
-    return () => {
-      isSubscribed = false;
-      if (animFrameRef.current) {
-        cancelAnimationFrame(animFrameRef.current);
-        animFrameRef.current = null;
-      }
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-        streamRef.current = null;
-      }
-      if (videoRef.current) {
-        videoRef.current.pause();
-        videoRef.current.remove();
-        videoRef.current = null;
-      }
-      setCameraActive(false);
-    };
-  }, [notchMode, enabled, dispatchGesture]);
+  const cameraActive = notchMode && enabled && trackerStatus.state === "active";
+  const error = notchMode && (trackerStatus.state === "unavailable" || trackerStatus.state === "error")
+    ? trackerStatus.message || "Landmark tracking is unavailable."
+    : null;
 
   return {
     enabled: notchMode && enabled,
-    active: notchMode && enabled && cameraActive,
+    active: cameraActive,
     lastGesture,
-    cameraActive: notchMode && cameraActive,
-    error: notchMode ? error : null,
+    cameraActive,
+    error,
+    serviceState: notchMode ? trackerStatus.state : "disabled",
+    serviceMessage: notchMode ? trackerStatus.message : null,
     toggleEnabled,
     setEnabled,
     triggerManualGesture,
   };
-}
-
-/**
- * Lightweight, zero-dependency optical skin-color + convex contour analyzer.
- * Runs on 160x120 downsampled buffer with negligible CPU footprint.
- */
-function analyzeOpticalHandGesture(imageData: ImageData): string | null {
-  const { data, width, height } = imageData;
-  let skinPixels = 0;
-  let minX = width;
-  let maxX = 0;
-  let minY = height;
-  let maxY = 0;
-  let sumX = 0;
-  let sumY = 0;
-
-  // YCbCr / normalized RGB skin color filter
-  for (let i = 0; i < data.length; i += 4) {
-    const r = data[i];
-    const g = data[i + 1];
-    const b = data[i + 2];
-
-    // Standard skin chrominance heuristic
-    if (r > 95 && g > 40 && b > 20 && r > g && r > b && r - g > 15 && Math.abs(r - g) > 15) {
-      const pixelIdx = i / 4;
-      const x = pixelIdx % width;
-      const y = Math.floor(pixelIdx / width);
-
-      skinPixels++;
-      sumX += x;
-      sumY += y;
-      if (x < minX) minX = x;
-      if (x > maxX) maxX = x;
-      if (y < minY) minY = y;
-      if (y > maxY) maxY = y;
-    }
-  }
-
-  // Minimum hand size threshold: at least ~4% of image area
-  const totalPixels = width * height;
-  if (skinPixels < totalPixels * 0.04) {
-    return null;
-  }
-
-  const bboxWidth = maxX - minX;
-  const bboxHeight = maxY - minY;
-  if (bboxWidth <= 0 || bboxHeight <= 0) return null;
-
-  const aspectRatio = bboxHeight / bboxWidth;
-  const density = skinPixels / (bboxWidth * bboxHeight);
-  const centerY = sumY / skinPixels;
-  const relativeCenterY = (centerY - minY) / bboxHeight;
-
-  // Heuristic gesture classification based on contour geometry:
-  // 1. Thumbs Up: Tall, top-heavy thumb extension, moderate density
-  if (aspectRatio > 1.4 && relativeCenterY > 0.58 && density < 0.55) {
-    return "thumbs_up";
-  }
-
-  // 2. Thumbs Down: Tall, bottom-heavy thumb extension
-  if (aspectRatio > 1.4 && relativeCenterY < 0.42 && density < 0.55) {
-    return "thumbs_down";
-  }
-
-  // 3. Fist: Compact, high bounding-box fill density, square-ish aspect ratio
-  if (density > 0.65 && aspectRatio >= 0.8 && aspectRatio <= 1.35) {
-    return "fist";
-  }
-
-  // 4. Open Palm: Large skin area, lower density due to finger gaps, tall or wide
-  if (density < 0.45 && skinPixels > totalPixels * 0.08) {
-    return "open_palm";
-  }
-
-  // 5. Point: Vertical slender extension with palm base
-  if (aspectRatio > 1.5 && density < 0.5) {
-    return "point";
-  }
-
-  // 6. Two fingers (Peace / V): Moderate aspect ratio with distinct split
-  if (aspectRatio > 1.2 && density < 0.48) {
-    return "two_fingers";
-  }
-
-  return null;
 }

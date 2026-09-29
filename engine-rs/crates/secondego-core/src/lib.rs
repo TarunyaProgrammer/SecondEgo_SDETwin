@@ -166,6 +166,8 @@ pub struct ResourceUsage {
     pub tool_calls: u32,
     pub retries: u32,
     pub context_tokens: u64,
+    pub provider_input_tokens: u64,
+    pub provider_output_tokens: u64,
     started_at: Instant,
 }
 
@@ -177,6 +179,8 @@ impl ResourceUsage {
             tool_calls: 0,
             retries: 0,
             context_tokens: 0,
+            provider_input_tokens: 0,
+            provider_output_tokens: 0,
             started_at: Instant::now(),
         }
     }
@@ -203,6 +207,14 @@ impl ResourceUsage {
         Ok(())
     }
 
+    /// Store only provider-supplied aggregate usage. This is intentionally
+    /// separate from the local prompt estimate: not every provider returns
+    /// usage metadata, and neither value contains prompt or response text.
+    pub fn record_provider_usage(&mut self, input_tokens: Option<u64>, output_tokens: Option<u64>) {
+        self.provider_input_tokens += input_tokens.unwrap_or_default();
+        self.provider_output_tokens += output_tokens.unwrap_or_default();
+    }
+
     pub fn record_retry(&mut self) -> Result<(), ResourceError> {
         self.ensure_runtime()?;
         if self.retries >= self.budget.max_retries {
@@ -218,6 +230,8 @@ impl ResourceUsage {
             ("tool_calls".into(), self.tool_calls as u64),
             ("retries".into(), self.retries as u64),
             ("context_tokens".into(), self.context_tokens),
+            ("provider_input_tokens".into(), self.provider_input_tokens),
+            ("provider_output_tokens".into(), self.provider_output_tokens),
             (
                 "elapsed_ms".into(),
                 self.started_at.elapsed().as_millis() as u64,

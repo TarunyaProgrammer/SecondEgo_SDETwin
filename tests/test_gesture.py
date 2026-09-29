@@ -248,6 +248,27 @@ class TestGestureBroker:
         assert evt["hand"] == "Right"
         assert "timestamp" in evt
 
+    def test_broker_replays_latest_status_to_new_subscriber(self):
+        port = _free_port()
+        broker = GestureBroker(port=port)
+        broker.start()
+
+        sub = GestureSubscriber(port=port)
+        try:
+            broker.publish_status("active")
+            sub.connect(timeout=3.0)
+            assert sub._sock is not None  # noqa: SLF001 - set a test-only read timeout
+            sub._sock.settimeout(1.0)  # noqa: SLF001
+            event = next(iter(sub))
+
+            assert event["schema_version"] == 1
+            assert event["event_type"] == "gesture.status"
+            assert event["status"] == "active"
+            assert "timestamp" in event
+        finally:
+            sub.close()
+            broker.stop()
+
     def test_broker_handles_subscriber_disconnect_gracefully(self):
         port = _free_port()
         broker = GestureBroker(port=port)

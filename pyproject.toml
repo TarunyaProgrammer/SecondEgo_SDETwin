@@ -13,7 +13,7 @@ secondego-gestures = "SecondEgo.gesture.watcher:main"
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 gemini = ["google-genai>=1.0"]
-gesture = ["opencv-python>=4.9", "mediapipe>=0.10"]
+gesture = ["opencv-python>=4.9", "mediapipe>=0.10,<1.0"]
 
 [build-system]
 requires = ["setuptools>=68"]

@@ -61,10 +61,10 @@ export function LifecycleTabs() {
   const active = phases.find((phase) => phase.id === activeId) ?? phases[0];
 
   return (
-    <section className="lifecycle-section section-grid" id="lifecycle">
+    <section className="lifecycle-section section-grid" id="lifecycle" data-tone="ink">
       <div className="wrap">
         <Reveal className="section-heading section-heading--split">
-          <div><p className="eyebrow">A RUN HAS A SHAPE</p><h2>From issue to<br /><span className="text-accent">verified change.</span></h2></div>
+          <div><p className="section-label">A RUN HAS A SHAPE</p><h2>From issue to<br /><span className="text-accent">verified change.</span></h2></div>
           <p className="section-heading__aside">Six visible phases. One bounded attempt at a time. Follow the evidence from repository scan through verification and recovery.</p>
         </Reveal>
         <div className="pipeline-overview">
