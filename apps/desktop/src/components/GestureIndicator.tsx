@@ -92,8 +92,7 @@ export function GestureIndicator({
           <p className="gesture-help-desc">Hold one gesture steady for about a second. Local hand landmarks only change the companion window; run controls stay explicit.</p>
           <ul className="gesture-list">
             <li><button type="button" onClick={() => onTriggerManual?.("open_palm")}><span className="g-icon">PALM</span><span><b>Open palm</b><small>Expand mission control</small></span></button></li>
-            <li><button type="button" onClick={() => onTriggerManual?.("four_fingers")}><span className="g-icon">FLAT</span><span><b>Fingers together</b><small>Expand mission control</small></span></button></li>
-            <li><button type="button" onClick={() => onTriggerManual?.("fist")}><span className="g-icon">FIST</span><span><b>Closed fist</b><small>Collapse the companion</small></span></button></li>
+            <li><button type="button" onClick={() => onTriggerManual?.("pinch")}><span className="g-icon">PINCH</span><span><b>Pinch</b><small>Collapse the companion</small></span></button></li>
           </ul>
           {error && <p className="gesture-error-note">{error}</p>}
         </div>

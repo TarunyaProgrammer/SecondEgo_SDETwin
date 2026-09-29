@@ -394,14 +394,14 @@ not control agent execution. The terminal preflight also reports whether the
 voice key and local audio player are ready. Disable voice for evaluation
 environments unless the organizers explicitly permit external TTS services.
 
-## Gesture confirmation sound
+## Gesture Controls & Confirmation Sound
 
-When camera gestures are enabled in the desktop/notch surface, each accepted
-gesture plays a short local confirmation chime after the existing gesture
-cooldown accepts it. The sound is generated in the renderer with Web Audio; it
-does not call a service, transmit camera data, or require another credential.
-Gestures remain opt-in and the camera permission prompt is only triggered when
-the feature is enabled.
+When camera gestures are enabled in the desktop/notch surface, you can control the UI using local hand landmarks (via MediaPipe). We have deliberately simplified the controls to two distinct, highly-reliable gestures to avoid false positives:
+
+- **Expand Mission Control**: `Open Palm` (✋)
+- **Collapse Mission Control**: `Pinch` (🤌)
+
+Each accepted gesture plays a short local confirmation chime after the existing gesture cooldown accepts it. The sound is generated in the renderer with Web Audio; it does not call a service, transmit camera data, or require another credential. Gestures remain opt-in and the camera permission prompt is only triggered when the feature is enabled.
 
 ## Architecture
 
