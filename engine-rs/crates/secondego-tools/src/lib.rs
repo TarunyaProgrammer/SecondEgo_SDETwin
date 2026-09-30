@@ -280,6 +280,8 @@ fn spawn_reader(
         }
         (bytes, truncated)
     })
+}
+
 /// Extract unified diff hunk if old_text contains diff markers like '-' and '+'.
 fn extract_diff_hunk(old_text: &str, new_text: &str) -> Option<(String, String)> {
     let lines: Vec<&str> = old_text.lines().collect();
