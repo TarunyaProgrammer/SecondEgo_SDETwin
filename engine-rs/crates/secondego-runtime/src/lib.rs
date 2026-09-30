@@ -1747,7 +1747,6 @@ fn execute_actions(
 }
 
 fn validate_plan_actions(plan: &ActionPlan, router: &ToolRouter) -> Result<(), RuntimeError> {
-    let mut seen_replace_paths = std::collections::HashSet::new();
     for action in &plan.actions {
         let args = match action.arguments.as_object() {
             Some(obj) => obj,
@@ -1772,11 +1771,6 @@ fn validate_plan_actions(plan: &ActionPlan, router: &ToolRouter) -> Result<(), R
                     "replace_text: path and old_text arguments are required and must not be empty."
                         .into(),
                 ));
-            }
-            if !seen_replace_paths.insert(path_str.to_owned()) {
-                return Err(RuntimeError::Plan(format!(
-                    "replace_text: multiple actions modify the same file '{path_str}'. Combine all changes for this file into a single replace_text action."
-                )));
             }
             if let Ok(resolved) = router.files.workspace.resolve(path_str) {
                 if !resolved.exists() {
