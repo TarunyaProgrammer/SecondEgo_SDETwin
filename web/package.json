@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "generate:og": "node scripts/generate-og-image.mjs"
   },
   "dependencies": {
     "framer-motion": "^13.4.3",

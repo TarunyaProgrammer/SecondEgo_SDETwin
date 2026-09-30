@@ -1,0 +1,33 @@
+{
+  "name": "SecondEgo — Verified Code Changes You Can Defend",
+  "short_name": "SecondEgo",
+  "description": "An open-source, local-first AI coding-agent harness that turns software issues into isolated, verified diffs.",
+  "start_url": "/",
+  "display": "minimal-ui",
+  "theme_color": "#f3f2ee",
+  "background_color": "#10100f",
+  "icons": [
+    {
+      "src": "/favicon-32x32.png",
+      "sizes": "32x32",
+      "type": "image/png"
+    },
+    {
+      "src": "/favicon.png",
+      "sizes": "190x190",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/potential-logo.png",
+      "sizes": "190x105",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "64x64",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

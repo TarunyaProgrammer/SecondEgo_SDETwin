@@ -1,5 +1,28 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="14" fill="#10100f"/>
-  <path d="M18 44V26l8-7 7 7v18M39 44V20l7 7v17" fill="none" stroke="#f4f1ea" stroke-width="5" stroke-linecap="square" stroke-linejoin="round"/>
-  <path d="M18 44h28" stroke="#ff6648" stroke-width="5" stroke-linecap="square"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <rect width="64" height="64" rx="14" fill="#ED4520"/>
+  <g transform="translate(8, 22) scale(0.3038)">
+    <path fill="#FDF3E7" fill-rule="evenodd" d="
+      M 16 19
+      h 36
+      v 21
+      a 12.5 12.5 0 0 0 25 0
+      v -21
+      h 36
+      v 21
+      a 12.5 12.5 0 0 0 25 0
+      v -21
+      h 36
+      v 35
+      h -30
+      v 30
+      h -36
+      v -20
+      a 13 13 0 0 0 -26 0
+      v 20
+      h -36
+      v -30
+      h -30
+      z
+    "/>
+  </g>
 </svg>

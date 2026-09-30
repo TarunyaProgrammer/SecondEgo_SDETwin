@@ -58,6 +58,9 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .brand-mark i:nth-child(1) { height: 42%; opacity: .55; }
 .brand-mark i:nth-child(2) { height: 72%; opacity: .8; }
 .brand-mark i:nth-child(3) { height: 100%; }
+.brand-logo { height: 26px; width: auto; border-radius: 6px; display: block; flex-shrink: 0; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); transition: transform 0.2s ease, box-shadow 0.2s ease; }
+.brand:hover .brand-logo { transform: translateY(-1px) scale(1.03); box-shadow: 0 3px 8px rgba(237, 69, 32, 0.28); }
+.brand-logo--large { height: 52px; width: auto; border-radius: 10px; margin-bottom: 24px; box-shadow: 0 6px 20px rgba(237, 69, 32, 0.22); }
 .site-nav__links { display: flex; align-items: center; gap: clamp(22px, 3vw, 42px); margin-left: auto; margin-right: 38px; }
 .site-nav__links a, .site-nav__actions { color: #6e6d66; font-size: 12px; font-weight: 600; transition: color .2s ease; }
 .site-shell--ink .site-nav__links a, .site-shell--ink .site-nav__actions { color: #c9c8bf; }

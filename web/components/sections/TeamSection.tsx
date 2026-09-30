@@ -103,10 +103,13 @@ function MemberAvatar({ member }: { member: TeamMember }) {
       {!hasError ? (
         <img
           src={imgSrc}
-          alt={member.name}
+          alt={`Photo of ${member.name}`}
+          width="48"
+          height="48"
           className="team-card__avatar-img"
           onError={handleError}
           loading="lazy"
+          decoding="async"
         />
       ) : (
         <span className="team-card__avatar-fallback" aria-hidden="true">

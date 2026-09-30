@@ -1,0 +1,8 @@
+# robots.txt for SecondEgo (https://YOUR_PRODUCTION_DOMAIN/)
+# Allow legitimate search-engine crawling of all public marketing pages and assets.
+
+User-agent: *
+Allow: /
+
+# Production sitemap
+Sitemap: https://YOUR_PRODUCTION_DOMAIN/sitemap.xml

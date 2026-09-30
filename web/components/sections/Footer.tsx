@@ -36,7 +36,7 @@ export function Footer() {
       <div className="wrap footer-details">
         <div className="footer-main">
           <div className="footer-brand">
-            <a className="brand" href="#top"><span className="brand-mark" aria-hidden="true"><i /><i /><i /></span><span>second<span className="brand__ego">ego</span></span></a>
+            <a className="brand" href="#top"><img src="/potential-logo.png" alt="SecondEgo Logo" width="47" height="26" loading="lazy" decoding="async" className="brand-logo" /><span>second<span className="brand__ego">ego</span></span></a>
             <p>A local coding-agent harness built around bounded execution and verified change.</p>
             <a className="footer-github" href={repository} target="_blank" rel="noreferrer">Open source on GitHub <span aria-hidden="true">↗</span></a>
           </div>

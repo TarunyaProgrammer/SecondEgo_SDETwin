@@ -18,7 +18,7 @@ export function Nav() {
       <div className="site-nav__inner wrap">
         <a className="skip-link" href="#main-content">Skip to content</a>
         <a className="brand" href="#top" aria-label="SecondEgo home">
-          <span className="brand-mark" aria-hidden="true"><i /><i /><i /></span>
+          <img src="/potential-logo.png" alt="SecondEgo Logo" width="47" height="26" className="brand-logo" />
           <span>second<span className="brand__ego">ego</span></span>
         </a>
         <nav className="site-nav__links" aria-label="Main navigation">

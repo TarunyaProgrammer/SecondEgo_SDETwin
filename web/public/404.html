@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="theme-color" content="#f3f2ee" />
+    <title>Page Not Found — SecondEgo</title>
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="190x190" href="/favicon.png" />
+    <style>
+      :root {
+        --paper: #f3f2ee;
+        --ink: #10100f;
+        --signal: #ed4520;
+        --muted: #6e6d66;
+        --line: rgba(16, 16, 15, 0.12);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --paper: #10100f;
+          --ink: #f3f2ee;
+          --muted: #9c9a92;
+          --line: rgba(243, 242, 238, 0.12);
+        }
+      }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: var(--paper);
+        color: var(--ink);
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        align-items: center;
+        padding: 40px 24px;
+        text-align: center;
+      }
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 12px;
+        text-decoration: none;
+        color: inherit;
+        font-size: 20px;
+        font-weight: 700;
+        letter-spacing: -0.04em;
+      }
+      .brand img {
+        height: 28px;
+        width: auto;
+        border-radius: 6px;
+        display: block;
+      }
+      .content {
+        max-width: 540px;
+        margin: auto;
+        padding: 40px 0;
+      }
+      .code {
+        font-family: "SF Mono", Menlo, Consolas, monospace;
+        font-size: 14px;
+        font-weight: 700;
+        color: var(--signal);
+        letter-spacing: 0.12em;
+        margin-bottom: 16px;
+        display: block;
+      }
+      h1 {
+        font-size: clamp(36px, 6vw, 56px);
+        font-weight: 800;
+        letter-spacing: -0.04em;
+        line-height: 1.1;
+        margin-bottom: 18px;
+      }
+      p {
+        font-size: 16px;
+        line-height: 1.6;
+        color: var(--muted);
+        margin-bottom: 32px;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        justify-content: center;
+      }
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 12px 22px;
+        font-size: 13px;
+        font-weight: 600;
+        border-radius: 8px;
+        text-decoration: none;
+        transition: all 0.2s ease;
+      }
+      .btn-primary {
+        background: var(--signal);
+        color: #ffffff;
+      }
+      .btn-primary:hover {
+        opacity: 0.92;
+        transform: translateY(-1px);
+      }
+      .btn-outline {
+        border: 1px solid var(--line);
+        color: var(--ink);
+      }
+      .btn-outline:hover {
+        background: rgba(0, 0, 0, 0.04);
+        transform: translateY(-1px);
+      }
+      footer {
+        font-size: 12px;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <a class="brand" href="/" aria-label="SecondEgo Home">
+        <img src="/potential-logo.png" alt="SecondEgo" />
+        <span>second<strong>ego</strong></span>
+      </a>
+    </header>
+
+    <main class="content">
+      <span class="code">404 / RUN BOUNDARY NOT FOUND</span>
+      <h1>Page not found.</h1>
+      <p>The path you requested does not exist or has moved. Explore the verified SecondEgo runtime harness or return to the main overview.</p>
+      <div class="actions">
+        <a class="btn btn-primary" href="/">Return home &rarr;</a>
+        <a class="btn btn-outline" href="https://github.com/TarunyaProgrammer/SecondEgo_SDETwin" target="_blank" rel="noreferrer">Open GitHub repo &nearr;</a>
+      </div>
+    </main>
+
+    <footer>
+      <span>&copy; 2026 SecondEgo · MIT Licensed Open Source</span>
+    </footer>
+  </body>
+</html>

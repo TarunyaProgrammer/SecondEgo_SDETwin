@@ -1,13 +1,118 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" prefix="og: https://ogp.me/ns#">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f3f2ee" />
-    <meta name="description" content="SecondEgo is a local coding-agent harness that turns a software issue into an isolated, verified diff with explicit policy and evidence." />
-    <meta name="keywords" content="coding agent, software engineering, Rust, repository intelligence, verification, open source" />
-    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
-    <title>SecondEgo — Verified change, built in the open</title>
+    
+    <!-- Primary Page Metadata -->
+    <title>SecondEgo — Verified Code Changes You Can Defend | Local AI Coding Harness</title>
+    <meta name="description" content="SecondEgo is an open-source, local-first AI coding-agent harness that turns software issues into isolated, verified diffs with bounded model planning, transactional worktree isolation, and deterministic test evidence." />
+    <meta name="keywords" content="coding agent, AI coding harness, local coding agent, repository intelligence, transactional worktree, verified diff, bounded execution, Rust, open source" />
+    <meta name="author" content="SecondEgo Team (Tarunya Kesharwani, Riya Agarwal, Mansha Agarwal, Yashika Gupta)" />
+    
+    <!-- Search Engine Directives -->
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
+    <meta name="googlebot" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
+    <link rel="canonical" href="https://YOUR_PRODUCTION_DOMAIN/" />
+
+    <!-- Color Scheme & Theme -->
+    <meta name="theme-color" content="#f3f2ee" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#10100f" media="(prefers-color-scheme: dark)" />
+    <meta name="color-scheme" content="light dark" />
+
+    <!-- Open Graph (Facebook, LinkedIn, Discord, Slack, WhatsApp) -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="SecondEgo" />
+    <meta property="og:title" content="SecondEgo — Verified Code Changes You Can Defend | Local AI Coding Harness" />
+    <meta property="og:description" content="SecondEgo is an open-source, local-first AI coding-agent harness that turns software issues into isolated, verified diffs with bounded model planning, transactional worktree isolation, and deterministic test evidence." />
+    <meta property="og:url" content="https://YOUR_PRODUCTION_DOMAIN/" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:image" content="https://YOUR_PRODUCTION_DOMAIN/og-image.png" />
+    <meta property="og:image:secure_url" content="https://YOUR_PRODUCTION_DOMAIN/og-image.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="SecondEgo — Verified Code Changes You Can Defend. Local AI coding-agent harness with bounded execution and verified diffs." />
+
+    <!-- X / Twitter Card Metadata -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="SecondEgo — Verified Code Changes You Can Defend" />
+    <meta name="twitter:description" content="SecondEgo is an open-source, local-first AI coding-agent harness that turns software issues into isolated, verified diffs with runtime evidence." />
+    <meta name="twitter:image" content="https://YOUR_PRODUCTION_DOMAIN/twitter-image.png" />
+    <meta name="twitter:image:alt" content="SecondEgo — Verified Code Changes You Can Defend. Local AI coding-agent harness." />
+    <meta name="twitter:url" content="https://YOUR_PRODUCTION_DOMAIN/" />
+
+    <!-- Favicons, Apple Touch Icon & Web App Manifest -->
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="190x190" href="/favicon.png" />
+    <link rel="icon" type="image/png" href="/potential-logo.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+
+    <!-- Structured Data / JSON-LD Graph -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "WebSite",
+          "@id": "https://YOUR_PRODUCTION_DOMAIN/#website",
+          "url": "https://YOUR_PRODUCTION_DOMAIN/",
+          "name": "SecondEgo",
+          "headline": "SecondEgo — Verified Code Changes You Can Defend",
+          "description": "An open-source, local-first AI coding-agent harness that turns software issues into isolated, verified diffs.",
+          "inLanguage": "en-US",
+          "publisher": {
+            "@id": "https://YOUR_PRODUCTION_DOMAIN/#organization"
+          }
+        },
+        {
+          "@type": "Organization",
+          "@id": "https://YOUR_PRODUCTION_DOMAIN/#organization",
+          "name": "SecondEgo",
+          "url": "https://YOUR_PRODUCTION_DOMAIN/",
+          "logo": {
+            "@type": "ImageObject",
+            "url": "https://YOUR_PRODUCTION_DOMAIN/potential-logo.png",
+            "width": 190,
+            "height": 105
+          },
+          "sameAs": [
+            "https://github.com/TarunyaProgrammer/SecondEgo_SDETwin"
+          ]
+        },
+        {
+          "@type": "SoftwareApplication",
+          "@id": "https://YOUR_PRODUCTION_DOMAIN/#software",
+          "name": "SecondEgo",
+          "applicationCategory": "DeveloperApplication",
+          "operatingSystem": "macOS, Linux, Windows",
+          "offers": {
+            "@type": "Offer",
+            "price": "0",
+            "priceCurrency": "USD"
+          },
+          "license": "https://github.com/TarunyaProgrammer/SecondEgo_SDETwin/blob/main/LICENSE",
+          "description": "Local coding-agent harness with bounded model planning, transactional worktree isolation, deterministic test verification, and evidence-backed diff generation.",
+          "softwareRequirements": "Git, Rust 2024 (engine-rs), Python 3.10+ (compatibility runtime)",
+          "author": {
+            "@id": "https://YOUR_PRODUCTION_DOMAIN/#organization"
+          },
+          "url": "https://YOUR_PRODUCTION_DOMAIN/"
+        },
+        {
+          "@type": "SoftwareSourceCode",
+          "@id": "https://YOUR_PRODUCTION_DOMAIN/#code",
+          "name": "SecondEgo",
+          "codeRepository": "https://github.com/TarunyaProgrammer/SecondEgo_SDETwin",
+          "programmingLanguage": ["Rust", "Python", "TypeScript"],
+          "license": "https://github.com/TarunyaProgrammer/SecondEgo_SDETwin/blob/main/LICENSE",
+          "description": "Source code for SecondEgo: a local coding-agent harness with Rust execution engine and Python compatibility runtime."
+        }
+      ]
+    }
+    </script>
   </head>
   <body>
     <div id="root"></div>
