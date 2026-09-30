@@ -628,13 +628,16 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .problem-card__fix-label { display: block; margin-bottom: 7px; color: #7cc191; font-family: var(--font-mono); font-size: 8px; letter-spacing: .12em; }
 .problem-card__fix p { margin: 0; color: rgba(243,242,238,.75); font-size: 12px; line-height: 1.7; }
 .problem-principle { margin-top: 64px; }
-.problem-principle__inner { padding: 40px 44px; border: 1px solid rgba(243,242,238,.1); border-radius: 12px; background: rgba(243,242,238,.03); display: grid; grid-template-columns: auto 1fr; gap: 20px 48px; align-items: start; }
-.problem-principle__inner .mono { color: rgba(243,242,238,.38); font-size: 9px; letter-spacing: .13em; padding-top: 4px; }
-.problem-principle__inner blockquote { margin: 0 0 16px; color: var(--paper); font-family: var(--font-display); font-size: clamp(22px, 3vw, 32px); font-weight: 600; letter-spacing: -.05em; line-height: 1.15; }
+.problem-principle__inner { padding: 40px 44px; border: 1px solid rgba(243,242,238,.1); border-radius: 12px; background: rgba(243,242,238,.03); display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: auto auto; gap: 8px 52px; align-items: start; }
+.problem-principle__inner .mono { grid-column: 1 / -1; color: rgba(243,242,238,.38); font-size: 9px; letter-spacing: .13em; margin-bottom: 4px; }
+.problem-principle__inner blockquote { grid-column: 1; grid-row: 2; margin: 0; color: var(--paper); font-family: var(--font-display); font-size: clamp(22px, 3vw, 32px); font-weight: 600; letter-spacing: -.05em; line-height: 1.15; }
 .problem-principle__inner blockquote strong { color: var(--signal); font-weight: 600; }
-.problem-principle__inner p { margin: 0; color: rgba(243,242,238,.55); font-size: 14px; line-height: 1.75; }
+.problem-principle__inner p { grid-column: 2; grid-row: 2; margin: 0; color: rgba(243,242,238,.55); font-size: 14px; line-height: 1.75; align-self: center; }
+
 @media (max-width: 640px) {
-  .problem-principle__inner { grid-template-columns: 1fr; gap: 12px; padding: 28px 22px; }
+  .problem-principle__inner { grid-template-columns: 1fr; gap: 16px; padding: 28px 22px; }
+  .problem-principle__inner blockquote { grid-column: 1; grid-row: auto; }
+  .problem-principle__inner p { grid-column: 1; grid-row: auto; }
   .problem-grid { grid-template-columns: 1fr; }
 }
 
