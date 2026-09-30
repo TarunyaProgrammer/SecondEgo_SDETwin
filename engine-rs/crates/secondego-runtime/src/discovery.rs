@@ -118,6 +118,17 @@ pub fn discover(
     workspace: impl AsRef<Path>,
     request: DiscoveryRequest,
 ) -> Result<DiscoveryReport, String> {
+    discover_with_observer(workspace, request, |_| {})
+}
+
+pub fn discover_with_observer<F>(
+    workspace: impl AsRef<Path>,
+    request: DiscoveryRequest,
+    mut observer: F,
+) -> Result<DiscoveryReport, String>
+where
+    F: FnMut(&EngineEvent),
+{
     let workspace = workspace
         .as_ref()
         .canonicalize()
@@ -137,15 +148,48 @@ pub fn discover(
         workspace.to_string_lossy(),
     ));
     let mut events = Vec::new();
-    let mut push_event = |event: EngineEvent| events.push(event);
+    let mut push_event = |event: EngineEvent| {
+        observer(&event);
+        events.push(event);
+    };
+
+    let act_event = |state: &ExecutionState, event_type: &str, operation: &str, message: &str| {
+        let mut event = EngineEvent::new(state, event_type);
+        event.payload = serde_json::json!({
+            "operation": operation,
+            "message": message,
+        });
+        event
+    };
+
     push_event(
         machine
             .move_to(Phase::Understand, "initialize read-only discovery")
             .map_err(|error| error.to_string())?,
     );
+    push_event(act_event(
+        &machine.state,
+        "activity.started",
+        "repository.index",
+        "Scanning workspace files and manifest topology",
+    ));
+
     let index = RepositoryIndexer::new(&workspace)
         .build()
         .map_err(|error| format!("repository indexing failed: {error}"))?;
+
+    push_event(act_event(
+        &machine.state,
+        "activity.completed",
+        "repository.index",
+        &format!(
+            "Indexed {} files, {} symbols, {} tests",
+            index.snapshot.files.len(),
+            index.symbols.len(),
+            index.tests.len()
+        ),
+    ));
+
     push_event(
         machine
             .move_to(Phase::Explore, "build repository intelligence")
@@ -153,6 +197,13 @@ pub fn discover(
     );
     let mut candidates = Vec::new();
     for lens in &lenses {
+        push_event(act_event(
+            &machine.state,
+            "activity.started",
+            &format!("lens.{}", lens.name()),
+            &format!("Analyzing repository with lens '{}'", lens.name()),
+        ));
+        let before_count = candidates.len();
         match lens {
             DiscoveryLens::ErrorHandling => {
                 collect_error_handling(&workspace, &index, &mut candidates)
@@ -160,6 +211,13 @@ pub fn discover(
             DiscoveryLens::TestGap => collect_test_gaps(&workspace, &index, &mut candidates),
             DiscoveryLens::Structural => collect_structural(&index, &mut candidates),
         }
+        let found = candidates.len().saturating_sub(before_count);
+        push_event(act_event(
+            &machine.state,
+            "activity.completed",
+            &format!("lens.{}", lens.name()),
+            &format!("Found {} issue signal(s) for lens '{}'", found, lens.name()),
+        ));
     }
     push_event(
         machine
@@ -167,6 +225,12 @@ pub fn discover(
             .map_err(|error| error.to_string())?,
     );
     let before_dedup = candidates.len();
+    push_event(act_event(
+        &machine.state,
+        "activity.started",
+        "signals.rank",
+        &format!("Ranking and deduplicating {} candidate signals", before_dedup),
+    ));
     deduplicate(&mut candidates);
     let after_dedup = candidates.len();
     candidates.sort_by(|left, right| {
@@ -177,6 +241,12 @@ pub fn discover(
     });
     candidates.truncate(max_findings);
     let retained_findings = candidates.len();
+    push_event(act_event(
+        &machine.state,
+        "activity.completed",
+        "signals.rank",
+        &format!("Selected top {} prioritized issue candidates", retained_findings),
+    ));
     push_event(
         machine
             .move_to(
@@ -198,6 +268,12 @@ pub fn discover(
         candidates.len(),
         before_dedup
     );
+    push_event(act_event(
+        &machine.state,
+        "activity.completed",
+        "discovery.complete",
+        &reason,
+    ));
     push_event(
         machine
             .terminate(TerminalStatus::Complete, &reason)
@@ -227,7 +303,9 @@ fn collect_error_handling(
     findings: &mut Vec<IssueCandidate>,
 ) {
     for path in &index.snapshot.files {
-        if !path.ends_with(".py") || index.snapshot.test_files.contains(path) {
+        let is_py = path.ends_with(".py");
+        let is_js = path.ends_with(".js") || path.ends_with(".ts") || path.ends_with(".tsx") || path.ends_with(".jsx");
+        if (!is_py && !is_js) || index.snapshot.test_files.contains(path) {
             continue;
         }
         let absolute = root.join(path);
@@ -237,34 +315,65 @@ fn collect_error_handling(
         let lines: Vec<_> = source.lines().collect();
         for (line_index, line) in lines.iter().enumerate() {
             let trimmed = line.trim();
-            if !trimmed.starts_with("except") || !trimmed.ends_with(':') {
-                continue;
-            }
-            let next = lines
-                .get(line_index + 1)
-                .map(|value| value.trim())
-                .unwrap_or_default();
-            if next == "pass" || next.starts_with("return") {
-                let line_number = line_index + 1;
-                findings.push(candidate(
-                    format!("error-handling:{path}:{line_number}"),
-                    FindingKind::Bug,
-                    "Exception may be silently swallowed".into(),
-                    format!("An exception handler at {path}:{line_number} immediately {next}, so failures may be hidden from callers."),
-                    "medium".into(),
-                    0.72,
-                    path,
-                    line_number,
-                    line_number + 1,
-                    format!("{}\n{}", line, next),
-                    vec!["Trace callers and determine whether the fallback preserves the function contract.".into()],
-                ));
+            if is_py {
+                if !trimmed.starts_with("except") || !trimmed.ends_with(':') {
+                    continue;
+                }
+                let next = lines
+                    .get(line_index + 1)
+                    .map(|value| value.trim())
+                    .unwrap_or_default();
+                if next == "pass" || next.starts_with("return") {
+                    let line_number = line_index + 1;
+                    findings.push(candidate(
+                        format!("error-handling:{path}:{line_number}"),
+                        FindingKind::Bug,
+                        "Exception may be silently swallowed".into(),
+                        format!("An exception handler at {path}:{line_number} immediately {next}, so failures may be hidden from callers."),
+                        "medium".into(),
+                        0.72,
+                        path,
+                        line_number,
+                        line_number + 1,
+                        format!("{}\n{}", line, next),
+                        vec!["Trace callers and determine whether the fallback preserves the function contract.".into()],
+                    ));
+                }
+            } else if is_js && (trimmed.contains("catch (") || trimmed.contains("catch(") || trimmed.starts_with("catch {") || trimmed.starts_with("catch{")) {
+                let next = lines
+                    .get(line_index + 1)
+                    .map(|value| value.trim())
+                    .unwrap_or_default();
+                if trimmed.contains("{}") || next == "{}" || next == "return;" || next == "return" || next == "/* ignore */" || next == "// ignore" {
+                    let line_number = line_index + 1;
+                    findings.push(candidate(
+                        format!("error-handling:{path}:{line_number}"),
+                        FindingKind::Bug,
+                        "Exception may be silently swallowed".into(),
+                        format!("A catch block at {path}:{line_number} appears empty or returns immediately, which may swallow unexpected errors."),
+                        "medium".into(),
+                        0.70,
+                        path,
+                        line_number,
+                        line_number + 1,
+                        format!("{}\n{}", line, next),
+                        vec!["Log or handle the exception appropriately instead of ignoring it.".into()],
+                    ));
+                }
             }
         }
     }
 }
 
 fn collect_test_gaps(root: &Path, index: &RepositoryIndex, findings: &mut Vec<IssueCandidate>) {
+    let mut test_sources: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for link in &index.test_links {
+        if !test_sources.contains_key(&link.test_path) {
+            if let Ok(source) = fs::read_to_string(root.join(&link.test_path)) {
+                test_sources.insert(link.test_path.clone(), source);
+            }
+        }
+    }
     for symbol in &index.symbols {
         if symbol.kind != "function"
             || symbol.path.starts_with("tests/")
@@ -274,7 +383,8 @@ fn collect_test_gaps(root: &Path, index: &RepositoryIndex, findings: &mut Vec<Is
         }
         let tested = index.test_links.iter().any(|link| {
             link.target_path == symbol.path
-                && fs::read_to_string(root.join(&link.test_path))
+                && test_sources
+                    .get(&link.test_path)
                     .map(|source| source.contains(&symbol.name))
                     .unwrap_or(false)
         });

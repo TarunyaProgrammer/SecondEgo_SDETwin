@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use secondego_core::EngineEvent;
 use secondego_model::{ConfiguredProvider, configured_model};
-use secondego_runtime::discovery::{DiscoveryLens, DiscoveryRequest, discover};
+use secondego_runtime::discovery::{DiscoveryLens, DiscoveryRequest, discover_with_observer};
 use secondego_runtime::{
     CancellationToken, RunReport, RuntimeError, RustEngine, collect_garbage,
     resolve_repository_with_cancellation, validate_repository_source,
@@ -210,25 +210,52 @@ fn create_run(
                 }
             };
         if record_mode == "discover" {
+            if let Ok(mut all_runs) = runs_for_thread.lock() {
+                if let Some(record) = all_runs.get_mut(&id) {
+                    record.status = "RUNNING".into();
+                }
+            }
+            let event_sink_runs = runs_for_thread.clone();
+            let event_sink = move |event: &EngineEvent| {
+                if let Ok(mut all_runs) = event_sink_runs.lock() {
+                    if let Some(record) = all_runs.get_mut(&id) {
+                        record.events.push(event.clone());
+                        record.status = match event.status {
+                            secondego_core::TerminalStatus::Complete => "COMPLETE",
+                            secondego_core::TerminalStatus::Failed => "FAILED",
+                            secondego_core::TerminalStatus::Cancelled => "CANCELLED",
+                            secondego_core::TerminalStatus::Blocked => "BLOCKED",
+                            secondego_core::TerminalStatus::Running => "RUNNING",
+                        }
+                        .into();
+                    }
+                }
+            };
             let lenses = discovery_lenses
                 .unwrap_or_default()
                 .into_iter()
                 .filter_map(|value| DiscoveryLens::parse(&value))
                 .collect();
-            let result = discover(
+            let result = discover_with_observer(
                 &resolved.root,
                 DiscoveryRequest {
                     lenses,
                     max_findings: discovery_max_findings,
                 },
+                event_sink,
             );
+            let events = runs_for_thread
+                .lock()
+                .ok()
+                .and_then(|all_runs| all_runs.get(&id).map(|record| record.events.clone()))
+                .unwrap_or_default();
             let record = match result {
                 Ok(report) => RunRecord {
                     repository: resolved.root.to_string_lossy().into_owned(),
                     issue: record_issue,
                     model: record_model,
                     status: "COMPLETE".into(),
-                    events: report.events.clone(),
+                    events: if events.is_empty() { report.events.clone() } else { events },
                     report: serde_json::to_value(report).ok(),
                     error: None,
                     cancellation: run_cancellation.clone(),
@@ -239,7 +266,7 @@ fn create_run(
                     issue: record_issue,
                     model: record_model,
                     status: "FAILED".into(),
-                    events: Vec::new(),
+                    events,
                     report: None,
                     error: Some(error),
                     cancellation: run_cancellation.clone(),

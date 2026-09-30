@@ -44,15 +44,132 @@ function voiceLabel(voice?: VoiceSnapshot): string {
   return "voice idle";
 }
 
-function FindingRow({ finding }: { finding: DiscoveryFinding }) {
+function kindLabel(kind: string): string {
+  switch (kind) {
+    case "bug": return "Error handling";
+    case "test_gap": return "Test gap";
+    case "structural": return "Structure";
+    case "regression_risk": return "Regression risk";
+    case "maintenance_risk": return "Maintenance risk";
+    default: return kind.replace(/_/g, " ");
+  }
+}
+
+function FindingCard({ finding, onFix }: { finding: DiscoveryFinding; onFix: (finding: DiscoveryFinding) => void }) {
   const evidence = finding.evidence[0];
+  const severity = (finding.severity || "medium").toLowerCase();
+  const severityClass = severity === "high" || severity === "critical" ? "is-high" : severity === "low" ? "is-low" : "is-medium";
+
   return (
-    <article className="finding-row">
-      <div className="finding-meta"><span>{finding.kind.replace(/_/g, " ")}</span><b>{Math.round(finding.confidence * 100)}% confidence</b></div>
-      <strong>{finding.title}</strong>
-      <p>{finding.summary}</p>
-      {evidence && <code>{evidence.path}:{evidence.line_start}–{evidence.line_end}</code>}
+    <article className={`finding-card ${severityClass}`}>
+      <div className="finding-card-head">
+        <div className="finding-badges">
+          <span className={`finding-severity-badge ${severityClass}`}>{severity}</span>
+          <span className="finding-kind-badge">{kindLabel(finding.kind)}</span>
+        </div>
+        <span className="finding-confidence-badge">{Math.round(finding.confidence * 100)}% confidence</span>
+      </div>
+
+      <h3 className="finding-card-title">{finding.title}</h3>
+      <p className="finding-card-summary">{finding.summary}</p>
+
+      {evidence && (
+        <div className="finding-code-box">
+          <div className="finding-code-path">
+            <span className="code-icon">▤</span>
+            <code>{evidence.path}:{evidence.line_start}–{evidence.line_end}</code>
+          </div>
+          {evidence.summary && evidence.summary.trim() && (
+            <pre className="finding-code-snippet"><code>{evidence.summary}</code></pre>
+          )}
+        </div>
+      )}
+
+      {finding.verification_plan.length > 0 && (
+        <div className="finding-plan-box">
+          <span className="plan-tag">Remediation:</span>
+          <p>{finding.verification_plan[0]}</p>
+        </div>
+      )}
+
+      <div className="finding-card-actions">
+        <button
+          type="button"
+          className="fix-with-secondego-btn"
+          onClick={() => onFix(finding)}
+        >
+          <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M8 2v12M2 8h12" />
+          </svg>
+          Fix with SecondEgo
+        </button>
+      </div>
     </article>
+  );
+}
+
+function FindingsExplorer({
+  findings,
+  repositorySummary,
+  selectedFilter,
+  onSelectFilter,
+  onFix,
+}: {
+  findings: DiscoveryFinding[];
+  repositorySummary?: { files: number; symbols: number; tests: number; parser_failures: number };
+  selectedFilter: string;
+  onSelectFilter: (filter: string) => void;
+  onFix: (finding: DiscoveryFinding) => void;
+}) {
+  const kinds = Array.from(new Set(findings.map((f) => f.kind)));
+  const filtered = selectedFilter === "all" ? findings : findings.filter((f) => f.kind === selectedFilter);
+
+  return (
+    <div className="findings-explorer">
+      {repositorySummary && (
+        <div className="findings-stats-row">
+          <div className="fstat-card"><b>{repositorySummary.files}</b><span>Files inspected</span></div>
+          <div className="fstat-card"><b>{repositorySummary.symbols}</b><span>Symbols indexed</span></div>
+          <div className="fstat-card"><b>{repositorySummary.tests}</b><span>Tests evaluated</span></div>
+          <div className="fstat-card highlight"><b>{findings.length}</b><span>Issues surfaced</span></div>
+        </div>
+      )}
+
+      <div className="findings-filter-bar">
+        <div className="filter-pill-group" role="tablist" aria-label="Filter findings by category">
+          <button
+            type="button"
+            className={`filter-pill ${selectedFilter === "all" ? "active" : ""}`}
+            onClick={() => onSelectFilter("all")}
+          >
+            All <small>{findings.length}</small>
+          </button>
+          {kinds.map((kind) => {
+            const count = findings.filter((f) => f.kind === kind).length;
+            return (
+              <button
+                key={kind}
+                type="button"
+                className={`filter-pill ${selectedFilter === kind ? "active" : ""}`}
+                onClick={() => onSelectFilter(kind)}
+              >
+                {kindLabel(kind)} <small>{count}</small>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="findings-deck">
+        {filtered.length ? (
+          filtered.map((finding) => (
+            <FindingCard key={finding.id} finding={finding} onFix={onFix} />
+          ))
+        ) : (
+          <p className="empty">No issues matched the selected category filter.</p>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -64,6 +181,8 @@ function App() {
   const [issue, setIssue] = useState("");
   const [mode, setMode] = useState<"task" | "discover">("task");
   const [selectedLenses, setSelectedLenses] = useState<string[]>(discoveryLenses.map((lens) => lens.id));
+  const [villageTab, setVillageTab] = useState<"map" | "findings">("map");
+  const [findingFilter, setFindingFilter] = useState<string>("all");
   const [run, setRun] = useState<RunView | null>(null);
   const [busy, setBusy] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -173,6 +292,9 @@ function App() {
     setError("");
     setRun(null);
     offsetRef.current = 0;
+    if (mode === "discover") {
+      setVillageTab("map");
+    }
     try {
       const response = await fetch(`${api}/api/runs`, {
         method: "POST",
@@ -210,6 +332,29 @@ function App() {
       setStopping(false);
       setError(reason instanceof Error ? reason.message : "Could not stop the run.");
     }
+  }
+
+  useEffect(() => {
+    if (run?.mode === "discover" && (run.result?.findings?.length ?? 0) > 0) {
+      setVillageTab("findings");
+    }
+  }, [run?.mode, run?.result]);
+
+  function handleFixFinding(finding: DiscoveryFinding) {
+    const evidence = finding.evidence[0];
+    const pathRef = evidence ? `${evidence.path}:${evidence.line_start}` : (finding.affected_paths[0] || "");
+    const planAction = finding.verification_plan[0] || "";
+    setMode("task");
+    setIssue(
+      `Fix issue: ${finding.title}\nLocation: ${pathRef}\nSummary: ${finding.summary}${planAction ? `\nSuggested approach: ${planAction}` : ""}`
+    );
+    setVillageTab("map");
+    setNotchOpen(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    setTimeout(() => {
+      const textarea = document.getElementById("issue-input") as HTMLTextAreaElement | null;
+      textarea?.focus();
+    }, 100);
   }
 
   const latest = run?.events[run.events.length - 1];
@@ -283,7 +428,7 @@ function App() {
           <div className="mission-copy"><div className="mode-switch" role="tablist" aria-label="Mission type"><button type="button" className={mode === "task" ? "selected" : ""} onClick={() => setMode("task")}>Fix a task</button><button type="button" className={mode === "discover" ? "selected" : ""} onClick={() => setMode("discover")}>Scan issues</button></div><h1>{mode === "discover" ? <>What needs<br /><em>attention?</em></> : <>What shall we<br /><em>build?</em></>}</h1><p>{mode === "discover" ? "Map suspicious paths, test gaps, and structural risks without touching the repository." : "Give SecondEgo a repository and a goal. Its plan, changes, and proof stay in view."}</p><div className="mission-proof"><span><i className="proof-bolt" />Autonomous</span><span><i className="proof-shield" />Evidence-led</span><span><i className="proof-orbit" />Local-first</span></div></div>
           <div className="mission-inputs">
             <label><span className="form-label"><i>↗</i>Repository</span><input id="repository-input" value={repository} onChange={(event) => setRepository(event.target.value)} placeholder="/path/to/repository or https://github.com/owner/repo" autoComplete="url" required /></label>
-            <label><span className="form-label"><i>▤</i>{mode === "discover" ? "Scan focus" : "Task"}</span><textarea value={issue} onChange={(event) => setIssue(event.target.value)} placeholder={mode === "discover" ? "Optional: describe the area to inspect." : "Describe the change and how it should be verified."} required={mode === "task"} /></label>
+            <label><span className="form-label"><i>▤</i>{mode === "discover" ? "Scan focus" : "Task"}</span><textarea id="issue-input" value={issue} onChange={(event) => setIssue(event.target.value)} placeholder={mode === "discover" ? "Optional: describe the area to inspect." : "Describe the change and how it should be verified."} required={mode === "task"} /></label>
             {mode === "discover" && <div className="lens-picker" aria-label="Discovery lenses">{discoveryLenses.map((lens) => <label key={lens.id}><input type="checkbox" checked={selectedLenses.includes(lens.id)} onChange={() => setSelectedLenses((current) => current.includes(lens.id) ? current.filter((item) => item !== lens.id) : [...current, lens.id])} /><span><strong>{lens.label}</strong><small>{lens.detail}</small></span></label>)}</div>}
           </div>
           <div className="mission-actions"><button className="primary-action" disabled={busy || (mode === "discover" && selectedLenses.length === 0)}>{busy ? <span className="button-spinner" aria-hidden="true" /> : <svg aria-hidden="true" viewBox="0 0 16 16"><path d="m5 3 7 5-7 5Z" /></svg>}<span>{busy ? "Initializing" : mode === "discover" ? "Scan repository" : "Start a run"}</span></button><span>{busy ? "Live engine signals will appear below." : mode === "discover" ? "Read-only · evidence-led" : "Autonomous · verified workspace"}</span>{error && <p role="alert">{error}</p>}</div>
@@ -293,8 +438,101 @@ function App() {
 
       <section className={`workspace ${run ? "has-run" : "is-welcome"}`}>
         <section className="village-panel">
-          <header className="village-header"><div className="village-heading"><span className="section-icon" aria-hidden="true">⌘</span><div><span className="kicker">Execution map</span><h2>{activeGroup ? `${activeGroup.label} in progress` : "The village is ready"}</h2><p>{latest ? label(latest) : "Your workers will light up as the run unfolds."}</p></div></div><div className="village-state"><span className={`status-chip ${statusTone}`}><i />{run ? statusLabel : "ready to start"}</span><small>{activePhase ? `engine phase · ${activePhase.toLowerCase()}` : "awaiting a brief"}</small></div></header>
-          <VillageScene activePhase={activePhase} events={run?.events || []} complete={complete} failed={failed} />
+          <header className="village-header">
+            <div className="village-heading">
+              <span className="section-icon" aria-hidden="true">{villageTab === "findings" ? "▤" : "⌘"}</span>
+              <div>
+                <span className="kicker">{villageTab === "findings" ? "Issue Intelligence" : "Execution map"}</span>
+                <h2>
+                  {complete
+                    ? isDiscovery
+                      ? "Discovery complete"
+                      : "Mission complete"
+                    : activeGroup
+                    ? `${activeGroup.label} in progress`
+                    : "The village is ready"}
+                </h2>
+                <p>
+                  {complete
+                    ? isDiscovery
+                      ? `${findings.length} issue candidate${findings.length === 1 ? "" : "s"} identified across ${selectedLenses.length} lenses; target repository unchanged`
+                      : verification?.passed
+                      ? "All verification checks passed; changes verified"
+                      : run?.error || "Run finished"
+                    : latest
+                    ? label(latest)
+                    : "Your workers will light up as the run unfolds."}
+                </p>
+              </div>
+            </div>
+            <div className="village-header-actions">
+              {findings.length > 0 && (
+                <div className="village-tab-toggle" role="tablist">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={villageTab === "findings"}
+                    className={villageTab === "findings" ? "active" : ""}
+                    onClick={() => setVillageTab("findings")}
+                  >
+                    <span>▤ Issues</span> <b className="tab-count">{findings.length}</b>
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={villageTab === "map"}
+                    className={villageTab === "map" ? "active" : ""}
+                    onClick={() => setVillageTab("map")}
+                  >
+                    <span>⌘ Village Map</span>
+                  </button>
+                </div>
+              )}
+              <div className="village-state">
+                <span className={`status-chip ${statusTone}`}><i />{run ? statusLabel : "ready to start"}</span>
+                <small>{activePhase ? `engine phase · ${activePhase.toLowerCase()}` : "awaiting a brief"}</small>
+              </div>
+            </div>
+          </header>
+
+          {busy && (isDiscovery || run?.mode === "discover") && (
+            <div className="scanner-live-panel">
+              <div className="scanner-radar-wrap">
+                <div className="scanner-radar">
+                  <div className="radar-sweep" />
+                  <div className="radar-blip" />
+                </div>
+              </div>
+              <div className="scanner-info-wrap">
+                <div className="scanner-phase-badge">
+                  <span className="live-dot" />
+                  <span>Live repository inspection</span>
+                  <b className="phase-badge">{activeGroup ? `${activeGroup.label} phase` : "Scanning"}</b>
+                </div>
+                <strong className="scanner-active-msg">{latest ? label(latest) : "Scanning code topology and structure..."}</strong>
+                <span className="scanner-sub-op">
+                  {activeOperation && activeOperation !== "—" ? `Operation: ${activeOperation}` : "Building AST index and evaluating lenses"}
+                </span>
+              </div>
+              <div className="scanner-quick-metrics">
+                <div><span>Signals</span><b>{run?.events.length ?? 0}</b></div>
+                <div><span>Phase</span><b>{activePhase || "explore"}</b></div>
+                <div><span>Lenses</span><b>{selectedLenses.length}</b></div>
+              </div>
+            </div>
+          )}
+
+          {villageTab === "findings" && findings.length > 0 ? (
+            <FindingsExplorer
+              findings={findings}
+              repositorySummary={repositorySummary}
+              selectedFilter={findingFilter}
+              onSelectFilter={setFindingFilter}
+              onFix={handleFixFinding}
+            />
+          ) : (
+            <VillageScene activePhase={activePhase} events={run?.events || []} complete={complete} failed={failed} />
+          )}
         </section>
 
         <aside className={`run-panel ${statusTone} ${run ? "has-run" : "is-welcome"}`}>
@@ -329,7 +567,7 @@ function App() {
 
       <section className="details-grid">
         <section className="transcript"><div className="panel-heading"><span className="kicker">Run log</span><span className="live-tag"><i />{run ? "live" : "waiting"}</span></div>{run?.events.length ? <div>{run.events.map((event, index) => { const operation = typeof event.payload.operation === "string" ? event.payload.operation : event.event_type; return <p key={`${event.timestamp}-${index}`}><time>{time(event.timestamp)}</time><b>{event.phase}</b><span><strong>{label(event)}</strong><small>{operation}</small></span></p>; })}</div> : <p className="empty">The engine event stream will appear here.</p>}</section>
-        <section className={`outcome ${isDiscovery ? "discovery-outcome" : ""}`}><div className="panel-heading"><span className="kicker">{isDiscovery ? "Discovery report" : "Verification"}</span><span className={`result-mark ${verification?.passed || (isDiscovery && run?.result?.target_mutated === false) ? "passed" : ""}`} aria-hidden="true">{verification?.passed || (isDiscovery && run?.result?.target_mutated === false) ? "✓" : "·"}</span></div><strong className={verification?.passed || (isDiscovery && run?.result?.target_mutated === false) ? "passed" : ""}>{isDiscovery ? `${findings.length} candidate${findings.length === 1 ? "" : "s"}` : verification ? (verification.passed ? "Passed" : verification.failure_class) : run?.status === "CANCELLED" ? "Cancelled" : run?.status === "BLOCKED" ? "Blocked" : run?.error ? "Failed" : "Pending"}</strong><p>{isDiscovery ? (run?.error || (run?.status === "CANCELLED" ? "Scan stopped safely before a report was produced." : run?.result?.target_mutated === false ? "Read-only scan complete. The target repository was not modified." : run?.result?.termination_reason || "Scan pending")) : run?.status === "CANCELLED" ? "Run stopped safely. Its isolated attempt was discarded." : run?.status === "BLOCKED" ? run.result?.termination_reason || "The engine stopped without applying a change." : run?.error || verification?.failure_summary || run?.result?.termination_reason || "Completion requires command evidence, not model narration."}</p>{isDiscovery && repositorySummary && <div className="discovery-summary"><span><b>{repositorySummary.files}</b> files</span><span><b>{repositorySummary.symbols}</b> symbols</span><span><b>{repositorySummary.tests}</b> tests</span><span><b>{repositorySummary.parser_failures}</b> parser issues</span></div>}{isDiscovery ? <div className="finding-list">{findings.length ? findings.map((finding) => <FindingRow key={finding.id} finding={finding} />) : <p className="empty">No candidate signals matched the selected lenses.</p>}</div> : <>{verification?.commands.length ? <ul className="command-list">{verification.commands.map((command) => <li key={command}><code>{command}</code></li>)}</ul> : null}{changedPaths.length ? <ul>{changedPaths.map((path) => <li key={path}>{path}</li>)}</ul> : null}</>}</section>
+        <section className={`outcome ${isDiscovery ? "discovery-outcome" : ""}`}><div className="panel-heading"><span className="kicker">{isDiscovery ? "Discovery report" : "Verification"}</span><span className={`result-mark ${verification?.passed || (isDiscovery && run?.result?.target_mutated === false) ? "passed" : ""}`} aria-hidden="true">{verification?.passed || (isDiscovery && run?.result?.target_mutated === false) ? "✓" : "·"}</span></div><strong className={verification?.passed || (isDiscovery && run?.result?.target_mutated === false) ? "passed" : ""}>{isDiscovery ? `${findings.length} candidate${findings.length === 1 ? "" : "s"}` : verification ? (verification.passed ? "Passed" : verification.failure_class) : run?.status === "CANCELLED" ? "Cancelled" : run?.status === "BLOCKED" ? "Blocked" : run?.error ? "Failed" : "Pending"}</strong><p>{isDiscovery ? (run?.error || (run?.status === "CANCELLED" ? "Scan stopped safely before a report was produced." : run?.result?.target_mutated === false ? "Read-only scan complete. The target repository was not modified." : run?.result?.termination_reason || "Scan pending")) : run?.status === "CANCELLED" ? "Run stopped safely. Its isolated attempt was discarded." : run?.status === "BLOCKED" ? run.result?.termination_reason || "The engine stopped without applying a change." : run?.error || verification?.failure_summary || run?.result?.termination_reason || "Completion requires command evidence, not model narration."}</p>{isDiscovery && repositorySummary && <div className="discovery-summary"><span><b>{repositorySummary.files}</b> files</span><span><b>{repositorySummary.symbols}</b> symbols</span><span><b>{repositorySummary.tests}</b> tests</span><span><b>{repositorySummary.parser_failures}</b> parser issues</span></div>}{isDiscovery ? <div className="finding-list">{findings.length ? findings.map((finding) => <FindingCard key={finding.id} finding={finding} onFix={handleFixFinding} />) : <p className="empty">No candidate signals matched the selected lenses.</p>}</div> : <>{verification?.commands.length ? <ul className="command-list">{verification.commands.map((command) => <li key={command}><code>{command}</code></li>)}</ul> : null}{changedPaths.length ? <ul>{changedPaths.map((path) => <li key={path}>{path}</li>)}</ul> : null}</>}</section>
       </section>
     </main>
   );
