@@ -280,6 +280,219 @@ fn spawn_reader(
         }
         (bytes, truncated)
     })
+/// Extract unified diff hunk if old_text contains diff markers like '-' and '+'.
+fn extract_diff_hunk(old_text: &str, new_text: &str) -> Option<(String, String)> {
+    let lines: Vec<&str> = old_text.lines().collect();
+    let has_minus = lines.iter().any(|l| l.starts_with('-') && !l.starts_with("---"));
+    let has_plus = lines.iter().any(|l| l.starts_with('+') && !l.starts_with("+++"));
+
+    if has_minus || has_plus {
+        let mut old_lines = Vec::new();
+        let mut new_lines = Vec::new();
+        for line in &lines {
+            if line.starts_with("---")
+                || line.starts_with("+++")
+                || line.starts_with("@@")
+                || line.starts_with("diff --git")
+            {
+                continue;
+            }
+            if let Some(stripped) = line.strip_prefix('-') {
+                let content = stripped.strip_prefix(' ').unwrap_or(stripped);
+                old_lines.push(content);
+            } else if let Some(stripped) = line.strip_prefix('+') {
+                let content = stripped.strip_prefix(' ').unwrap_or(stripped);
+                new_lines.push(content);
+            } else {
+                let content = line.strip_prefix(' ').unwrap_or(line);
+                old_lines.push(content);
+                new_lines.push(content);
+            }
+        }
+        let extracted_old = old_lines.join("\n");
+        let extracted_new = if !new_lines.is_empty() {
+            new_lines.join("\n")
+        } else if !new_text.is_empty() && new_text != old_text {
+            new_text.to_string()
+        } else {
+            String::new()
+        };
+        if !extracted_old.is_empty() && extracted_old != extracted_new {
+            return Some((extracted_old, extracted_new));
+        }
+    }
+    None
+}
+
+/// Perform resilient text replacement on `content`.
+///
+/// 1. Tries exact substring match.
+/// 2. If diff markers ('-' / '+') are detected in `old_text`, extracts the intended old and new fragments.
+/// 3. Normalizes CRLF / LF line endings.
+/// 4. Falls back to trimmed line-by-line matching with relative indentation preservation if exactly
+///    one block matches uniquely in the file.
+pub fn perform_text_replacement(
+    content: &str,
+    old_text: &str,
+    new_text: &str,
+) -> Result<String, String> {
+    if old_text.is_empty() {
+        return Err("old_text must not be empty".into());
+    }
+    if old_text == new_text {
+        return Err("old_text and new_text must differ".into());
+    }
+
+    // Check if old_text contains an inline diff hunk (e.g. from a recovery suggestion)
+    let (target_old, target_new) = match extract_diff_hunk(old_text, new_text) {
+        Some((diff_old, diff_new)) => (diff_old, diff_new),
+        None => (old_text.to_string(), new_text.to_string()),
+    };
+
+    let target_old_ref = target_old.as_str();
+    let target_new_ref = target_new.as_str();
+
+    // 1. Direct exact substring match
+    let matches = content.match_indices(target_old_ref).count();
+    if matches == 1 {
+        return Ok(content.replacen(target_old_ref, target_new_ref, 1));
+    }
+    if matches > 1 && target_new_ref.starts_with(target_old_ref) {
+        let (index, _) = content
+            .match_indices(target_old_ref)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .last()
+            .expect("matches exist");
+        let end = index + target_old_ref.len();
+        if content[end..].trim().is_empty() {
+            return Ok(format!("{}{}{}", &content[..index], target_new_ref, &content[end..]));
+        }
+    }
+
+    // 2. CRLF vs LF normalization match
+    let crlf = content.contains("\r\n");
+    let norm_content = content.replace("\r\n", "\n");
+    let norm_old = target_old_ref.replace("\r\n", "\n");
+    let norm_new = target_new_ref.replace("\r\n", "\n");
+
+    let norm_matches = norm_content.match_indices(&norm_old).count();
+    if norm_matches == 1 {
+        let updated = norm_content.replacen(&norm_old, &norm_new, 1);
+        return Ok(if crlf { updated.replace('\n', "\r\n") } else { updated });
+    }
+    if norm_matches > 1 && norm_new.starts_with(&norm_old) {
+        let (index, _) = norm_content
+            .match_indices(&norm_old)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .last()
+            .expect("matches exist");
+        let end = index + norm_old.len();
+        if norm_content[end..].trim().is_empty() {
+            let updated = format!("{}{}{}", &norm_content[..index], &norm_new, &norm_content[end..]);
+            return Ok(if crlf { updated.replace('\n', "\r\n") } else { updated });
+        }
+    }
+
+    // 3. Line-by-line trimmed and relative indentation matching
+    let c_lines: Vec<&str> = norm_content.lines().collect();
+    let o_lines: Vec<&str> = norm_old.lines().collect();
+    let k = o_lines.len();
+
+    if k > 0 && k <= c_lines.len() {
+        let mut candidates = Vec::new();
+        for start in 0..=(c_lines.len() - k) {
+            let slice = &c_lines[start..start + k];
+            let mut line_match = true;
+            for (c_l, o_l) in slice.iter().zip(o_lines.iter()) {
+                if c_l.trim() != o_l.trim() {
+                    line_match = false;
+                    break;
+                }
+            }
+            if line_match {
+                candidates.push(start);
+            }
+        }
+
+        if candidates.len() == 1 {
+            let start = candidates[0];
+            let c_slice = &c_lines[start..start + k];
+
+            // Determine indentation delta between the first non-empty lines
+            let c_first = c_slice.iter().find(|l| !l.trim().is_empty()).copied().unwrap_or("");
+            let o_first = o_lines.iter().find(|l| !l.trim().is_empty()).copied().unwrap_or("");
+            let c_indent_len = c_first.len() - c_first.trim_start().len();
+            let o_indent_len = o_first.len() - o_first.trim_start().len();
+            let c_indent_prefix = &c_first[..c_indent_len];
+
+            // Adjust indentation for target_new lines
+            let n_lines: Vec<&str> = norm_new.lines().collect();
+            let adjusted_new_lines: Vec<String> = if c_indent_len >= o_indent_len {
+                let extra_indent = &c_indent_prefix[..(c_indent_len - o_indent_len)];
+                n_lines
+                    .iter()
+                    .map(|l| {
+                        if l.trim().is_empty() {
+                            String::new()
+                        } else if l.starts_with(c_indent_prefix) {
+                            l.to_string()
+                        } else {
+                            format!("{extra_indent}{l}")
+                        }
+                    })
+                    .collect()
+            } else {
+                let strip_len = o_indent_len - c_indent_len;
+                n_lines
+                    .iter()
+                    .map(|l| {
+                        if l.trim().is_empty() {
+                            String::new()
+                        } else {
+                            let curr_indent = l.len() - l.trim_start().len();
+                            let actual_strip = strip_len.min(curr_indent);
+                            l[actual_strip..].to_string()
+                        }
+                    })
+                    .collect()
+            };
+
+            let mut result_lines = Vec::new();
+            result_lines.extend(c_lines[..start].iter().map(|s| s.to_string()));
+            result_lines.extend(adjusted_new_lines);
+            result_lines.extend(c_lines[start + k..].iter().map(|s| s.to_string()));
+
+            let mut updated = result_lines.join(if crlf { "\r\n" } else { "\n" });
+            if (content.ends_with('\n') || content.ends_with("\r\n")) && !updated.ends_with('\n') {
+                if crlf {
+                    updated.push_str("\r\n");
+                } else {
+                    updated.push('\n');
+                }
+            }
+            return Ok(updated);
+        } else if candidates.len() > 1 {
+            return Err(format!(
+                "old_text is ambiguous; found {} matches. Include more surrounding lines to match uniquely once.",
+                candidates.len()
+            ));
+        }
+    }
+
+    if matches > 1 || norm_matches > 1 {
+        let count = matches.max(norm_matches);
+        Err(format!(
+            "old_text is ambiguous; found {count} matches. Include more surrounding lines to match uniquely once."
+        ))
+    } else {
+        let observed: String = target_old_ref.chars().take(240).collect();
+        Err(format!(
+            "old_text must match exactly once; found 0 matches; requested={}",
+            serde_json::to_string(&observed).unwrap_or_else(|_| "<unavailable>".into())
+        ))
+    }
 }
 
 /// Finds a unique match of `target` lines inside `content` by comparing trimmed lines.
@@ -442,9 +655,8 @@ impl FileTool {
         }
     }
 
-    /// Replace one exact, previously observed fragment. Requiring exactly one
-    /// match provides stale-context protection without trusting model-written
-    /// unified-diff line numbers.
+    /// Replace one exact or uniquely matching fragment. Supports exact matching,
+    /// relative indentation alignment, line-ending normalization, and diff-hunk extraction.
     pub fn replace_text(
         &self,
         path: impl AsRef<Path>,
@@ -494,55 +706,15 @@ impl FileTool {
                 );
             }
         };
-        let matches = content.match_indices(old_text).count();
-        let updated = if matches == 1 {
-            content.replacen(old_text, new_text, 1)
-        } else if matches > 1 && new_text.starts_with(old_text) {
-            let (index, _) = content
-                .match_indices(old_text)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .last()
-                .expect("matches exist");
-            let end = index + old_text.len();
-            if !content[end..].trim().is_empty() {
-                let observed: String = old_text.chars().take(240).collect();
+        let updated = match perform_text_replacement(&content, old_text, new_text) {
+            Ok(updated) => updated,
+            Err(message) => {
                 return ToolResult::failure(
                     "replace_text",
-                    format!(
-                        "{}: ambiguous old_text is not the final non-whitespace fragment; requested={}",
-                        requested.display(),
-                        serde_json::to_string(&observed).unwrap_or_else(|_| "<unavailable>".into())
-                    ),
+                    format!("{}: {message}", requested.display()),
                     started.elapsed().as_millis(),
                 );
             }
-            format!("{}{}{}", &content[..index], new_text, &content[end..])
-        } else if matches == 0
-            && !old_text.trim().is_empty()
-            && content.match_indices(old_text.trim()).count() == 1
-        {
-            content.replacen(old_text.trim(), new_text.trim_end(), 1)
-        } else if let Some((span_start, span_end)) =
-            find_unique_trimmed_line_span(&content, old_text)
-        {
-            let replacement = if !new_text.ends_with('\n') && content[..span_end].ends_with('\n') {
-                format!("{new_text}\n")
-            } else {
-                new_text.to_owned()
-            };
-            format!("{}{}{}", &content[..span_start], replacement, &content[span_end..])
-        } else {
-            let observed: String = old_text.chars().take(240).collect();
-            return ToolResult::failure(
-                "replace_text",
-                format!(
-                    "{}: old_text must match exactly once; found {matches} matches; requested={}",
-                    requested.display(),
-                    serde_json::to_string(&observed).unwrap_or_else(|_| "<unavailable>".into())
-                ),
-                started.elapsed().as_millis(),
-            );
         };
         if updated.len() as u64 > self.max_file_bytes {
             return ToolResult::failure(
@@ -1494,6 +1666,48 @@ mod tests {
         let requested = "self.events.publish(Event {\n            kind: \"task.status_changed\".into(),\n            task_id: updated.id.clone(),\n            version: updated.version,\n        });\n        Ok(updated)";
         let result = files.replace_text("application.rs", requested, "replacement");
         assert!(result.success, "{}", result.stderr);
+    }
+
+    #[test]
+    fn replace_text_handles_flexible_indentation() {
+        let root = tempfile::tempdir().unwrap();
+        let original = "impl Service {\n    pub fn run(&self) {\n        self.events.publish(Event {\n            kind: \"task.status_changed\".into(),\n            task_id: updated.id.clone(),\n            version: updated.version,\n        });\n        Ok(updated)\n    }\n}\n";
+        fs::write(root.path().join("service.rs"), original).unwrap();
+        let files = FileTool {
+            workspace: WorkspacePolicy::new(root.path()).unwrap(),
+            max_file_bytes: 1024,
+        };
+
+        // Model provides 0-indent lines:
+        let requested_old = "self.events.publish(Event {\n    kind: \"task.status_changed\".into(),\n    task_id: updated.id.clone(),\n    version: updated.version,\n});\nOk(updated)";
+        let requested_new = "self.events.publish(Event {\n    kind: \"task.status_changed\".into(),\n    task_id: updated.id.clone(),\n    version: updated.version,\n    project_id: updated.project_id.clone(),\n});\nOk(updated)";
+
+        let result = files.replace_text("service.rs", requested_old, requested_new);
+        assert!(result.success, "{}", result.stderr);
+        let updated = fs::read_to_string(root.path().join("service.rs")).unwrap();
+        assert!(updated.contains("        self.events.publish(Event {"));
+        assert!(updated.contains("            project_id: updated.project_id.clone(),"));
+        assert!(updated.contains("        Ok(updated)"));
+    }
+
+    #[test]
+    fn replace_text_handles_unified_diff_hunks() {
+        let root = tempfile::tempdir().unwrap();
+        let original = "impl Service {\n    pub fn run(&self) {\n        Ok(updated)\n    }\n}\n";
+        fs::write(root.path().join("service.rs"), original).unwrap();
+        let files = FileTool {
+            workspace: WorkspacePolicy::new(root.path()).unwrap(),
+            max_file_bytes: 1024,
+        };
+
+        // Model passes a diff hunk directly in old_text:
+        let requested_diff = "-    Ok(updated)\n+    .get(&task.project_id)\n+    .into(),\n+    Ok(updated)";
+        let result = files.replace_text("service.rs", requested_diff, "");
+        assert!(result.success, "{}", result.stderr);
+        let updated = fs::read_to_string(root.path().join("service.rs")).unwrap();
+        assert!(updated.contains(".get(&task.project_id)"));
+        assert!(updated.contains(".into(),"));
+        assert!(updated.contains("Ok(updated)"));
     }
 
     #[test]

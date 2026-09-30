@@ -758,6 +758,7 @@ impl<P: ModelProvider> RustEngine<P> {
 
         while !verification.passed && recovery_attempts < max_recovery_attempts {
             recovery_attempts += 1;
+            let attempt_label = format!("(attempt {recovery_attempts}/{max_recovery_attempts})");
             if let Err(error) = self.check_cancel(&mut machine, &mut events) {
                 transaction.abort();
                 return Err(error);
@@ -767,9 +768,7 @@ impl<P: ModelProvider> RustEngine<P> {
                 machine
                     .move_to(
                         Phase::Diagnose,
-                        &format!(
-                            "classify verification failure before recovery (attempt {recovery_attempts}/{max_recovery_attempts})"
-                        ),
+                        &format!("classify verification failure before recovery {attempt_label}"),
                     )
                     .map_err(|error| RuntimeError::State(error.to_string()))?,
             );
@@ -788,7 +787,7 @@ impl<P: ModelProvider> RustEngine<P> {
                         &plan.verification_commands,
                         &recovery.additional_verification_commands,
                     ),
-                    "adaptive evidence-based recovery",
+                    "adaptive evidence-based recovery".to_string(),
                 )),
                 Err(error)
                     if matches!(error, RuntimeError::Cancelled | RuntimeError::Resource(_)) =>
@@ -814,7 +813,7 @@ impl<P: ModelProvider> RustEngine<P> {
                     Some((
                         plan.recovery_actions.clone(),
                         plan.verification_commands.clone(),
-                        "pre-planned fallback recovery",
+                        "pre-planned fallback recovery".to_string(),
                     ))
                 }
                 Err(error) => {
@@ -861,13 +860,37 @@ impl<P: ModelProvider> RustEngine<P> {
                 self.cancellation.as_ref(),
                 &mut tools_used,
             ) {
-                return self.abort_transaction_error(
-                    &mut transaction,
-                    &mut machine,
+                self.activity(
                     &mut events,
+                    &machine.state,
+                    "activity.failed",
                     "recovery.apply",
-                    error,
+                    &error.to_string(),
                 );
+                verification = secondego_verification::VerificationResult {
+                    passed: false,
+                    commands: Vec::new(),
+                    passed_tests: 0,
+                    failed_tests: 1,
+                    failure_class: secondego_verification::FailureClass::ToolFailure,
+                    failure_summary: Some(format!("Recovery action execution failed: {error}")),
+                    failure_record: Some(secondego_verification::FailureRecord {
+                        failure_class: secondego_verification::FailureClass::ToolFailure,
+                        summary: format!("Recovery action execution failed: {error}"),
+                        failing_tests: Vec::new(),
+                        error_locations: Vec::new(),
+                        fingerprint: None,
+                        changed_paths: Vec::new(),
+                    }),
+                    evidence: vec![secondego_verification::VerificationEvidence {
+                        command: Vec::new(),
+                        success: false,
+                        exit_code: None,
+                        duration_ms: 0,
+                        output: format!("Recovery action execution failed: {error}"),
+                    }],
+                };
+                continue;
             }
             self.activity(
                 &mut events,
@@ -902,7 +925,6 @@ impl<P: ModelProvider> RustEngine<P> {
                         RuntimeError::Resource(resource_error.to_string()),
                     );
                 }
-            }
             verification = verifier.run(&verification_commands);
             self.activity(
                 &mut events,
@@ -1767,6 +1789,10 @@ fn validate_plan_actions(plan: &ActionPlan, router: &ToolRouter) -> Result<(), R
                 .get("old_text")
                 .and_then(|v| v.as_str())
                 .unwrap_or_default();
+            let new_text = args
+                .get("new_text")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
             if path_str.is_empty() || old_text.is_empty() {
                 return Err(RuntimeError::Plan(
                     "replace_text: path and old_text arguments are required and must not be empty."
@@ -1786,33 +1812,8 @@ fn validate_plan_actions(plan: &ActionPlan, router: &ToolRouter) -> Result<(), R
                 }
                 if resolved.is_file() {
                     if let Ok(content) = std::fs::read_to_string(&resolved) {
-                        let count = content.match_indices(old_text).count();
-                        let trimmed = old_text.trim();
-                        let trimmed_count = if count == 0 && !trimmed.is_empty() {
-                            content.match_indices(trimmed).count()
-                        } else {
-                            0
-                        };
-                        let line_match = if count == 0 && trimmed_count != 1 {
-                            secondego_tools::find_unique_trimmed_line_span(&content, old_text)
-                                .is_some()
-                        } else {
-                            false
-                        };
-                        if count == 0 && trimmed_count != 1 && !line_match {
-                            return Err(RuntimeError::Plan(format!(
-                                "replace_text: {path_str}: old_text must match exactly once in the file; found 0 matches; requested={old_text:?}. Copy the exact lines verbatim from the source file."
-                            )));
-                        } else if count > 1 {
-                            let new_text = args
-                                .get("new_text")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or_default();
-                            if !new_text.starts_with(old_text) {
-                                return Err(RuntimeError::Plan(format!(
-                                    "replace_text: {path_str}: old_text is ambiguous; found {count} matches. Include more surrounding lines to match uniquely once."
-                                )));
-                            }
+                        if let Err(message) = secondego_tools::perform_text_replacement(&content, old_text, new_text) {
+                            return Err(RuntimeError::Plan(format!("replace_text: {path_str}: {message}")));
                         }
                     }
                 }

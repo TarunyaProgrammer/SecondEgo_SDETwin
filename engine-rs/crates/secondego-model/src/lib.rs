@@ -470,14 +470,41 @@ impl ModelProvider for GroqProvider {
     ) -> Result<ModelResponse, ProviderError> {
         let key = resolve_api_key(&self.api_key, Some("GROQ_API_KEY"), false)?;
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-        let response = post_json(
+        let initial_request = groq_request(&self.model, prompt, &context.phase);
+        let response = match post_json(
             "Groq",
             &url,
             &key,
-            groq_request(&self.model, prompt, &context.phase),
+            initial_request,
             self.timeout,
             Some(&self.model),
-        )?;
+        ) {
+            Ok(resp) => resp,
+            Err(ProviderError::HttpStatus { status: 400, code, .. })
+                if code.as_deref() == Some("json_validate_failed")
+                    || code.as_deref() == Some("json_schema_validation_failed") =>
+            {
+                // Fall back to standard json_object format if Groq's grammar validator fails
+                let fallback_request = serde_json::json!({
+                    "model": &self.model,
+                    "messages": [
+                        {"role": "system", "content": groq_json_response_contract(&context.phase)},
+                        {"role": "user", "content": format!("BEGIN RUNTIME INPUT\n{prompt}\nEND RUNTIME INPUT")}
+                    ],
+                    "response_format": {"type": "json_object"},
+                    "max_completion_tokens": GROQ_MAX_COMPLETION_TOKENS
+                });
+                post_json(
+                    "Groq",
+                    &url,
+                    &key,
+                    fallback_request,
+                    self.timeout,
+                    Some(&self.model),
+                )?
+            }
+            Err(err) => return Err(err),
+        };
         let proposal = parse_openai_content(&response.payload)
             .and_then(parse_action)
             .and_then(|proposal| validate_groq_response_action(proposal, &context.phase))?;
@@ -902,7 +929,10 @@ fn deepseek_request(model: &str, prompt: &str) -> Value {
 
 fn groq_request(model: &str, prompt: &str, phase: &str) -> Value {
     let runtime_input = format!("BEGIN RUNTIME INPUT\n{prompt}\nEND RUNTIME INPUT");
-    if groq_supports_strict_outputs(model) {
+    // Groq's strict-mode JSON Schema validator rejects nested arrays in submit_recovery
+    // (verification_commands: array of array of strings), causing HTTP 400 (json_validate_failed).
+    // During DIAGNOSE phase, use the portable json_object mode.
+    if groq_supports_strict_outputs(model) && !phase.eq_ignore_ascii_case("DIAGNOSE") {
         serde_json::json!({
             "model": model,
             "messages": [
@@ -912,7 +942,7 @@ fn groq_request(model: &str, prompt: &str, phase: &str) -> Value {
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {
-                    "name": if phase.eq_ignore_ascii_case("DIAGNOSE") { "second_ego_recovery" } else { "second_ego_plan" },
+                    "name": "second_ego_plan",
                     "strict": true,
                     "schema": groq_response_schema(phase)
                 }
