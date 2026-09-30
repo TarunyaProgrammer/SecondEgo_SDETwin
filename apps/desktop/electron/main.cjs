@@ -176,7 +176,12 @@ function gesturePython() {
 
 function recordGestureWatcherError(output) {
   const text = output.toString();
-  console.error(text.trim());
+  const visibleText = text
+    .split(/\r?\n/)
+    .filter((line) => !/portable_clearcut_uploader|Failed to send to clearcut|Not valid for uploading until|Source Location Trace|wireless\/android\/play\/playlog\/cplusplus/i.test(line))
+    .join("\n")
+    .trim();
+  if (visibleText) console.error(visibleText);
   if (/requires 'opencv-python' and 'mediapipe'/i.test(text)) {
     setGestureStatus("unavailable", "Landmark tracking is optional. From the repository root, run: .venv/bin/pip install -e '.[gesture]'");
   } else if (/cannot open camera/i.test(text)) {
@@ -212,6 +217,8 @@ function startGestureService() {
         ...process.env,
         PYTHONPATH: [path.join(repoRoot, "src"), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
         PYTHONUNBUFFERED: "1",
+        GLOG_minloglevel: process.env.GLOG_minloglevel || "3",
+        ABSL_MIN_LOG_LEVEL: process.env.ABSL_MIN_LOG_LEVEL || "3",
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -434,3 +441,12 @@ app.on("before-quit", () => {
   if (gatewayProcess) gatewayProcess.kill();
   stopGestureService();
 });
+
+function quitCleanlyFromTerminal() {
+  process.exitCode = 0;
+  if (app.isReady()) app.quit();
+  else process.exit(0);
+}
+
+process.once("SIGINT", quitCleanlyFromTerminal);
+process.once("SIGTERM", quitCleanlyFromTerminal);

@@ -333,6 +333,8 @@ pub struct RunReport {
     pub verification_passed: bool,
     pub changed_paths: Vec<String>,
     pub diff_transferred: bool,
+    #[serde(default)]
+    pub patch: Option<String>,
     pub tool_results: Vec<ToolResult>,
     pub index_files: usize,
     pub index_symbols: usize,
@@ -394,8 +396,14 @@ fn planning_context_profile(prompt_token_limit: Option<u32>) -> PlanningContextP
             state_tokens,
             response_tokens: 2_000,
         },
-        initial_evidence_files: 3,
-        source_excerpt_chars: 2_000,
+        initial_evidence_files: std::env::var("SECONDEGO_INITIAL_EVIDENCE_FILES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(5),
+        source_excerpt_chars: std::env::var("SECONDEGO_SOURCE_EXCERPT_CHARS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(3_600),
     }
 }
 
@@ -659,7 +667,6 @@ impl<P: ModelProvider> RustEngine<P> {
                     error,
                 );
             }
-            transaction.abort();
             self.activity(
                 &mut events,
                 &machine.state,
@@ -743,7 +750,14 @@ impl<P: ModelProvider> RustEngine<P> {
             );
             v
         };
-        if !verification.passed {
+        let mut recovery_attempts: usize = 0;
+        let max_recovery_attempts = std::env::var("SECONDEGO_MAX_RECOVERY_ATTEMPTS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(3);
+
+        while !verification.passed && recovery_attempts < max_recovery_attempts {
+            recovery_attempts += 1;
             if let Err(error) = self.check_cancel(&mut machine, &mut events) {
                 transaction.abort();
                 return Err(error);
@@ -753,7 +767,9 @@ impl<P: ModelProvider> RustEngine<P> {
                 machine
                     .move_to(
                         Phase::Diagnose,
-                        "classify verification failure before recovery",
+                        &format!(
+                            "classify verification failure before recovery (attempt {recovery_attempts}/{max_recovery_attempts})"
+                        ),
                     )
                     .map_err(|error| RuntimeError::State(error.to_string()))?,
             );
@@ -812,91 +828,93 @@ impl<P: ModelProvider> RustEngine<P> {
                     None
                 }
             };
-            if let Some((actions, verification_commands, strategy)) = recovery {
-                if let Err(resource_error) = self.resources.record_retry() {
+            let Some((actions, verification_commands, strategy)) = recovery else {
+                break;
+            };
+
+            if let Err(resource_error) = self.resources.record_retry() {
+                return self.abort_transaction_error(
+                    &mut transaction,
+                    &mut machine,
+                    &mut events,
+                    "resource.retry",
+                    RuntimeError::Resource(resource_error.to_string()),
+                );
+            }
+            self.append_event(
+                &mut events,
+                machine
+                    .move_to(Phase::Recover, strategy)
+                    .map_err(|error| RuntimeError::State(error.to_string()))?,
+            );
+            self.activity(
+                &mut events,
+                &machine.state,
+                "activity.started",
+                "recovery.apply",
+                &format!("Applying {strategy} (attempt {recovery_attempts}/{max_recovery_attempts})"),
+            );
+            if let Err(error) = execute_actions(
+                &mut self.resources,
+                &router,
+                &actions,
+                self.cancellation.as_ref(),
+                &mut tools_used,
+            ) {
+                return self.abort_transaction_error(
+                    &mut transaction,
+                    &mut machine,
+                    &mut events,
+                    "recovery.apply",
+                    error,
+                );
+            }
+            self.activity(
+                &mut events,
+                &machine.state,
+                "activity.completed",
+                "recovery.apply",
+                "Recovery actions completed",
+            );
+            if let Err(error) = self.check_cancel(&mut machine, &mut events) {
+                transaction.abort();
+                return Err(error);
+            }
+            self.append_event(
+                &mut events,
+                machine
+                    .move_to(Phase::Execute, "re-run verification after recovery")
+                    .map_err(|error| RuntimeError::State(error.to_string()))?,
+            );
+            self.append_event(
+                &mut events,
+                machine
+                    .move_to(Phase::Verify, "confirm recovery result")
+                    .map_err(|error| RuntimeError::State(error.to_string()))?,
+            );
+            for _ in &verification_commands {
+                if let Err(resource_error) = self.resources.record_tool_call() {
                     return self.abort_transaction_error(
                         &mut transaction,
                         &mut machine,
                         &mut events,
-                        "resource.retry",
+                        "resource.tool",
                         RuntimeError::Resource(resource_error.to_string()),
                     );
                 }
-                self.append_event(
-                    &mut events,
-                    machine
-                        .move_to(Phase::Recover, strategy)
-                        .map_err(|error| RuntimeError::State(error.to_string()))?,
-                );
-                self.activity(
-                    &mut events,
-                    &machine.state,
-                    "activity.started",
-                    "recovery.apply",
-                    &format!("Applying {strategy}"),
-                );
-                if let Err(error) = execute_actions(
-                    &mut self.resources,
-                    &router,
-                    &actions,
-                    self.cancellation.as_ref(),
-                    &mut tools_used,
-                ) {
-                    return self.abort_transaction_error(
-                        &mut transaction,
-                        &mut machine,
-                        &mut events,
-                        "recovery.apply",
-                        error,
-                    );
-                }
-                self.activity(
-                    &mut events,
-                    &machine.state,
-                    "activity.completed",
-                    "recovery.apply",
-                    "Recovery actions completed",
-                );
-                if let Err(error) = self.check_cancel(&mut machine, &mut events) {
-                    transaction.abort();
-                    return Err(error);
-                }
-                self.append_event(
-                    &mut events,
-                    machine
-                        .move_to(Phase::Execute, "re-run verification after recovery")
-                        .map_err(|error| RuntimeError::State(error.to_string()))?,
-                );
-                self.append_event(
-                    &mut events,
-                    machine
-                        .move_to(Phase::Verify, "confirm recovery result")
-                        .map_err(|error| RuntimeError::State(error.to_string()))?,
-                );
-                for _ in &verification_commands {
-                    if let Err(resource_error) = self.resources.record_tool_call() {
-                        return self.abort_transaction_error(
-                            &mut transaction,
-                            &mut machine,
-                            &mut events,
-                            "resource.tool",
-                            RuntimeError::Resource(resource_error.to_string()),
-                        );
-                    }
-                }
-                verification = verifier.run(&verification_commands);
-                self.activity(
-                    &mut events,
-                    &machine.state,
-                    "activity.completed",
-                    "verification.recheck",
-                    if verification.passed {
-                        "Recovery verification passed"
-                    } else {
-                        "Recovery verification still failed"
-                    },
-                );
             }
+            verification = verifier.run(&verification_commands);
+            self.activity(
+                &mut events,
+                &machine.state,
+                "activity.completed",
+                "verification.recheck",
+                if verification.passed {
+                    "Recovery verification passed"
+                } else {
+                    "Recovery verification still failed"
+                },
+            );
         }
         let passed = verification.passed;
         let transfer = match transaction.finish(passed) {
@@ -932,6 +950,7 @@ impl<P: ModelProvider> RustEngine<P> {
                 verification_passed: false,
                 changed_paths: transfer.changed_paths,
                 diff_transferred: transfer.transferred,
+                patch: transfer.patch,
                 tool_results: tools_used,
                 index_files: index.snapshot.files.len(),
                 index_symbols: index.symbols.len(),
@@ -966,6 +985,7 @@ impl<P: ModelProvider> RustEngine<P> {
             verification_passed: true,
             changed_paths: transfer.changed_paths,
             diff_transferred: transfer.transferred,
+            patch: transfer.patch,
             tool_results: tools_used,
             index_files: index.snapshot.files.len(),
             index_symbols: index.symbols.len(),
@@ -1165,6 +1185,7 @@ impl<P: ModelProvider> RustEngine<P> {
             },
         };
         let mut format_attempt = 0;
+        let mut repair_feedback: Option<String> = None;
         loop {
             self.check_cancel(machine, events)?;
             let mut prompt = packet.as_text();
@@ -1179,6 +1200,11 @@ impl<P: ModelProvider> RustEngine<P> {
             if format_attempt > 0 {
                 prompt.push_str("\n\n");
                 prompt.push_str(PLAN_FORMAT_REPAIR_INSTRUCTION);
+                if let Some(feedback) = &repair_feedback {
+                    prompt.push_str("\n\nPREVIOUS RESPONSE REJECTION:\n");
+                    prompt.push_str(feedback);
+                    prompt.push_str("\nCorrect this specific defect. Do not repeat the rejected action unchanged.");
+                }
             }
             let operation = if format_attempt == 0 {
                 "model.plan"
@@ -1194,6 +1220,7 @@ impl<P: ModelProvider> RustEngine<P> {
                 match self.request_proposal(machine, events, &prompt, "PLAN", operation, message) {
                     Ok(proposal) => proposal,
                     Err(error) => {
+                        repair_feedback = Some(compact_for_prompt(&error.to_string(), 1_000));
                         let retry = match self.schedule_protocol_repair(
                             machine,
                             events,
@@ -1215,6 +1242,7 @@ impl<P: ModelProvider> RustEngine<P> {
                 let plan = match parse_plan(proposal) {
                     Ok(plan) => plan,
                     Err(error) => {
+                        repair_feedback = Some(compact_for_prompt(&error.to_string(), 1_000));
                         let retry = match self.schedule_protocol_repair(
                             machine,
                             events,
@@ -1233,6 +1261,7 @@ impl<P: ModelProvider> RustEngine<P> {
                     }
                 };
                 if let Err(error) = validate_plan_actions(&plan, &planning_router) {
+                    repair_feedback = Some(compact_for_prompt(&error.to_string(), 1_000));
                     let retry = match self.schedule_protocol_repair(
                         machine,
                         events,
@@ -1260,6 +1289,7 @@ impl<P: ModelProvider> RustEngine<P> {
             }
             let proposal_error = validate_planning_proposal(&proposal, force_submission);
             if let Err(error) = proposal_error {
+                repair_feedback = Some(compact_for_prompt(&error.to_string(), 1_000));
                 let retry = match self.schedule_protocol_repair(
                     machine,
                     events,
@@ -1298,6 +1328,7 @@ impl<P: ModelProvider> RustEngine<P> {
                 Ok(result) => result,
                 Err(error) => {
                     let error = RuntimeError::Tool(error);
+                    repair_feedback = Some(compact_for_prompt(&error.to_string(), 1_000));
                     let retry = match self.schedule_protocol_repair(
                         machine,
                         events,
@@ -1339,6 +1370,7 @@ impl<P: ModelProvider> RustEngine<P> {
             inspections += 1;
             force_submission = inspections >= MAX_PLANNING_INSPECTIONS;
             format_attempt = 0;
+            repair_feedback = None;
             packet =
                 match self.assemble_planning_packet(machine, ledger, inspections, force_submission)
                 {
@@ -1425,8 +1457,10 @@ impl<P: ModelProvider> RustEngine<P> {
                         let retry_delay = delay
                             .saturating_add(RATE_LIMIT_RESET_GRACE)
                             .max(MIN_RATE_LIMIT_WAIT);
-                        if rate_limit_attempt < MAX_RATE_LIMIT_RETRIES
-                            && retry_delay <= MAX_RATE_LIMIT_WAIT
+                        let max_retries = max_rate_limit_retries();
+                        let max_wait = max_rate_limit_wait();
+                        if rate_limit_attempt < max_retries
+                            && retry_delay <= max_wait
                         {
                             if let Err(resource_error) = self.resources.record_retry() {
                                 let error = RuntimeError::Resource(resource_error.to_string());
@@ -1446,10 +1480,10 @@ impl<P: ModelProvider> RustEngine<P> {
                                 "activity.retrying",
                                 "model.rate_limit_wait",
                                 &format!(
-                                    "Provider rate limit reached; waiting {} before one retry ({}/{})",
+                                    "Provider rate limit reached; waiting {} before retry ({}/{})",
                                     format_wait_duration(retry_delay),
                                     rate_limit_attempt,
-                                    MAX_RATE_LIMIT_RETRIES
+                                    max_retries
                                 ),
                             );
                             self.wait_for_provider_retry(machine, events, retry_delay)?;
@@ -1551,11 +1585,17 @@ impl<P: ModelProvider> RustEngine<P> {
             machine.state.task, commands, failure, diff_text
         );
         let mut format_attempt = 0;
+        let mut repair_feedback: Option<String> = None;
         loop {
             let prompt = if format_attempt == 0 {
                 base_prompt.clone()
             } else {
-                format!("{base_prompt}\n\n{RECOVERY_FORMAT_REPAIR_INSTRUCTION}")
+                let feedback = repair_feedback
+                    .as_deref()
+                    .unwrap_or("The previous response did not satisfy the recovery contract.");
+                format!(
+                    "{base_prompt}\n\n{RECOVERY_FORMAT_REPAIR_INSTRUCTION}\n\nPREVIOUS RESPONSE REJECTION:\n{feedback}\nCorrect this specific defect. Do not repeat the rejected action unchanged."
+                )
             };
             let operation = if format_attempt == 0 {
                 "model.recovery"
@@ -1572,6 +1612,7 @@ impl<P: ModelProvider> RustEngine<P> {
             ) {
                 Ok(proposal) => proposal,
                 Err(error) => {
+                    repair_feedback = Some(compact_for_prompt(&error.to_string(), 1_000));
                     if self.schedule_protocol_repair(
                         machine,
                         events,
@@ -1597,6 +1638,7 @@ impl<P: ModelProvider> RustEngine<P> {
                     return Ok(plan);
                 }
                 Err(error) => {
+                    repair_feedback = Some(compact_for_prompt(&error.to_string(), 1_000));
                     if self.schedule_protocol_repair(
                         machine,
                         events,
@@ -1658,7 +1700,11 @@ impl<P: ModelProvider> RustEngine<P> {
             &machine.state,
             "activity.retrying",
             operation,
-            "Model response did not meet the machine-readable contract; retrying once before repository changes",
+            &format!(
+                "Model response did not meet the executable action contract; requesting correction ({}/{}) before repository changes",
+                *format_attempt + 1,
+                MAX_PLAN_FORMAT_ATTEMPTS
+            ),
         );
         Ok(true)
     }
@@ -1701,27 +1747,67 @@ fn execute_actions(
 }
 
 fn validate_plan_actions(plan: &ActionPlan, router: &ToolRouter) -> Result<(), RuntimeError> {
+    let mut seen_replace_paths = std::collections::HashSet::new();
     for action in &plan.actions {
         let args = match action.arguments.as_object() {
             Some(obj) => obj,
-            None => return Err(RuntimeError::Plan(format!("{}: arguments must be an object", action.action))),
+            None => {
+                return Err(RuntimeError::Plan(format!(
+                    "{}: arguments must be an object",
+                    action.action
+                )));
+            }
         };
         if action.action == "replace_text" {
-            let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or_default();
-            let old_text = args.get("old_text").and_then(|v| v.as_str()).unwrap_or_default();
+            let path_str = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let old_text = args
+                .get("old_text")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
             if path_str.is_empty() || old_text.is_empty() {
-                return Err(RuntimeError::Plan("replace_text: path and old_text arguments are required and must not be empty.".into()));
+                return Err(RuntimeError::Plan(
+                    "replace_text: path and old_text arguments are required and must not be empty."
+                        .into(),
+                ));
+            }
+            if !seen_replace_paths.insert(path_str.to_owned()) {
+                return Err(RuntimeError::Plan(format!(
+                    "replace_text: multiple actions modify the same file '{path_str}'. Combine all changes for this file into a single replace_text action."
+                )));
             }
             if let Ok(resolved) = router.files.workspace.resolve(path_str) {
+                if !resolved.exists() {
+                    return Err(RuntimeError::Plan(format!(
+                        "replace_text: {path_str}: file does not exist in the repository. Use write_file to create a new file, or verify the path is correct."
+                    )));
+                }
                 if resolved.is_file() {
                     if let Ok(content) = std::fs::read_to_string(&resolved) {
                         let count = content.match_indices(old_text).count();
-                        if count == 0 {
+                        let trimmed = old_text.trim();
+                        let trimmed_count = if count == 0 && !trimmed.is_empty() {
+                            content.match_indices(trimmed).count()
+                        } else {
+                            0
+                        };
+                        let line_match = if count == 0 && trimmed_count != 1 {
+                            secondego_tools::find_unique_trimmed_line_span(&content, old_text)
+                                .is_some()
+                        } else {
+                            false
+                        };
+                        if count == 0 && trimmed_count != 1 && !line_match {
                             return Err(RuntimeError::Plan(format!(
                                 "replace_text: {path_str}: old_text must match exactly once in the file; found 0 matches; requested={old_text:?}. Copy the exact lines verbatim from the source file."
                             )));
                         } else if count > 1 {
-                            let new_text = args.get("new_text").and_then(|v| v.as_str()).unwrap_or_default();
+                            let new_text = args
+                                .get("new_text")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or_default();
                             if !new_text.starts_with(old_text) {
                                 return Err(RuntimeError::Plan(format!(
                                     "replace_text: {path_str}: old_text is ambiguous; found {count} matches. Include more surrounding lines to match uniquely once."
@@ -1730,12 +1816,27 @@ fn validate_plan_actions(plan: &ActionPlan, router: &ToolRouter) -> Result<(), R
                         }
                     }
                 }
+            } else {
+                // workspace.resolve() itself failed — the path is outside the
+                // repository root or contains forbidden components.
+                return Err(RuntimeError::Plan(format!(
+                    "replace_text: {path_str}: path is outside the repository or is otherwise invalid."
+                )));
             }
         } else if action.action == "append_text" {
-            let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or_default();
-            let content = args.get("content").and_then(|v| v.as_str()).unwrap_or_default();
+            let path_str = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let content = args
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
             if path_str.is_empty() || content.is_empty() {
-                return Err(RuntimeError::Plan("append_text: path and content arguments are required and must not be empty.".into()));
+                return Err(RuntimeError::Plan(
+                    "append_text: path and content arguments are required and must not be empty."
+                        .into(),
+                ));
             }
             if let Ok(resolved) = router.files.workspace.resolve(path_str) {
                 if resolved.is_file() {
@@ -1749,9 +1850,14 @@ fn validate_plan_actions(plan: &ActionPlan, router: &ToolRouter) -> Result<(), R
                 }
             }
         } else if action.action == "apply_patch" {
-            let patch = args.get("patch").and_then(|v| v.as_str()).unwrap_or_default();
+            let patch = args
+                .get("patch")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
             if patch.is_empty() {
-                return Err(RuntimeError::Plan("apply_patch: patch argument is required and must not be empty.".into()));
+                return Err(RuntimeError::Plan(
+                    "apply_patch: patch argument is required and must not be empty.".into(),
+                ));
             }
             if let Err(error) = validate_unified_patch(patch) {
                 return Err(RuntimeError::Plan(format!(
@@ -1759,19 +1865,33 @@ fn validate_plan_actions(plan: &ActionPlan, router: &ToolRouter) -> Result<(), R
                 )));
             }
         } else if action.action == "edit_file" || action.action == "write_file" {
-            let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or_default();
-            let content = args.get("content").and_then(|v| v.as_str()).unwrap_or_default();
+            let path_str = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let content = args
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
             if path_str.is_empty() || content.is_empty() {
                 return Err(RuntimeError::Plan(format!(
-                    "{}: path and content arguments are required and must not be empty.", action.action
+                    "{}: path and content arguments are required and must not be empty.",
+                    action.action
                 )));
             }
         } else if action.action == "run_command" {
             if args.get("argv").and_then(|v| v.as_array()).is_none() {
-                return Err(RuntimeError::Plan("run_command: argv array argument is required.".into()));
+                return Err(RuntimeError::Plan(
+                    "run_command: argv array argument is required.".into(),
+                ));
             }
-        } else if !["read_file", "search_code", "git_diff", "git_status"].contains(&action.action.as_str()) {
-            return Err(RuntimeError::Plan(format!("unsupported action: {}", action.action)));
+        } else if !["read_file", "search_code", "git_diff", "git_status"]
+            .contains(&action.action.as_str())
+        {
+            return Err(RuntimeError::Plan(format!(
+                "unsupported action: {}",
+                action.action
+            )));
         }
     }
     Ok(())
@@ -2244,20 +2364,36 @@ fn task_focused_excerpt(content: &str, task: &str, max_chars: usize) -> String {
 const INITIAL_EVIDENCE_FILES: usize = 6;
 const DEFAULT_INITIAL_EVIDENCE_EXCERPT_CHARS: usize = 2_500;
 const MAX_PLANNING_INSPECTIONS: usize = 3;
-const MAX_PLAN_FORMAT_ATTEMPTS: usize = 2;
+const MAX_PLAN_FORMAT_ATTEMPTS: usize = 3;
 const MAX_TRANSIENT_PROVIDER_ATTEMPTS: usize = 3;
-const MAX_RATE_LIMIT_RETRIES: usize = 2;
-const MAX_RATE_LIMIT_WAIT: Duration = Duration::from_secs(60);
+const MAX_RATE_LIMIT_RETRIES: usize = 6;
+const MAX_RATE_LIMIT_WAIT: Duration = Duration::from_secs(120);
 const RATE_LIMIT_RESET_GRACE: Duration = Duration::from_millis(750);
 const MIN_RATE_LIMIT_WAIT: Duration = Duration::from_secs(2);
+
+fn max_rate_limit_retries() -> usize {
+    std::env::var("SECONDEGO_MAX_RATE_LIMIT_RETRIES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(MAX_RATE_LIMIT_RETRIES)
+}
+
+fn max_rate_limit_wait() -> Duration {
+    std::env::var("SECONDEGO_MAX_RATE_LIMIT_WAIT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(MAX_RATE_LIMIT_WAIT)
+}
+
 const MAX_PLANNING_OBSERVATION_CHARS: usize = 6_000;
 const MAX_RECOVERY_FAILURE_CHARS: usize = 8_000;
 const MAX_RECOVERY_DIFF_CHARS: usize = 8_000;
 const MAX_MODEL_PATCH_BYTES: usize = 512 * 1024;
-const PLAN_INSTRUCTION: &str = "Return only one JSON object and no Markdown. During bounded planning, choose exactly one top-level action:\n1. read_file with arguments {path:string} to inspect one safe repository file;\n2. search_code with arguments {query:string} to inspect bounded repository matches;\n3. submit_plan with arguments {actions:[{action,arguments,rationale}], verification_commands:[[\"cmd\",\"arg1\",...]], optional recovery_actions:[...]}.\nPlanning read_file/search_code actions are read-only. After the inspection limit, you must use submit_plan. For existing-file changes use replace_text with {path,old_text,new_text}; old_text must be an exact source fragment copied verbatim from retrieved repository evidence, and new_text must be the full replacement including the intended change. Use write_file only for genuinely new files. Each action arguments object must contain exactly the fields: path, content, old_text, new_text (use empty string for unused fields). Put test commands only in verification_commands, never in actions. Allowed executable actions are replace_text, write_file, git_diff, git_status. Never return shell strings, apply_patch, or Markdown.\nSDETwin Directives:\n1. Multi-File: When an issue spans multiple files or requires updating dependencies/callers, include actions for all necessary files.\n2. Autonomous Test Verification: Include a focused regression test where appropriate.";
-const PLAN_FORMAT_REPAIR_INSTRUCTION: &str = "FORMAT REPAIR: Return only one JSON object with top-level action submit_plan and no Markdown or prose. arguments.actions must contain at least one effective repository change. Each action must use exactly these argument fields: path, content, old_text, new_text (empty string for unused fields). Use replace_text with exact unique old_text and different new_text. Use write_file only for a new file. Put commands in verification_commands, not actions. Never use apply_patch or any other action type.";
-const RECOVERY_INSTRUCTION: &str = "You are in the DIAGNOSE phase of a bounded coding run. Inspect the failed verification evidence and current isolated-worktree diff. Return only one JSON object with top-level action submit_recovery and arguments {actions:[{action,arguments,rationale}], verification_commands:[[\"cmd\",\"arg1\",...]], recovery_actions:[]}. Actions must be evidence-based, minimal, and safe. Each action arguments object must contain exactly: path, content, old_text, new_text (empty string for unused fields). For existing-file changes use replace_text with an exact unique old_text fragment and a different new_text. Use write_file only for new files. Do not repeat unchanged actions, do not narrate, and do not return Markdown.";
-const RECOVERY_FORMAT_REPAIR_INSTRUCTION: &str = "FORMAT REPAIR: Return only one submit_recovery JSON object. actions must be non-empty and effective. Use replace_text with exact unique old_text and different new_text, append_text to add content at the end of an existing file, or write_file for a new file. Include non-empty verification_commands. Do not return Markdown or prose.";
+const PLAN_INSTRUCTION: &str = "Return only one JSON object and no Markdown. During bounded planning, choose exactly one top-level action:\n1. read_file with arguments {path:string} to inspect one safe repository file;\n2. search_code with arguments {query:string} to inspect bounded repository matches;\n3. submit_plan with arguments {actions:[{action,arguments,rationale}], verification_commands:[[\"cmd\",\"arg1\",...]], optional recovery_actions:[...]}.\nPlanning read_file/search_code actions are read-only. After the inspection limit, you must use submit_plan. For existing-file changes use replace_text with {path,old_text,new_text}; old_text must be an exact source fragment copied verbatim from retrieved repository evidence, and new_text must be the full replacement including the intended change. Keep old_text minimal and exact: ideally 1 to 2 lines of unique code (such as the single statement line right before or after the insertion point) copied verbatim from retrieved repository evidence, rather than guessing large multi-line blocks. Use write_file only for genuinely new files. Each action arguments object must contain exactly the fields: path, content, old_text, new_text (use empty string for unused fields). Put test commands only in verification_commands, never in actions. Allowed executable actions are replace_text, write_file, git_diff, git_status. Never return shell strings, apply_patch, or Markdown.\nSDETwin Directives:\n1. Multi-File: When an issue spans multiple files or requires updating dependencies/callers, include actions for all necessary files.\n2. Test Integrity: Do NOT modify existing test files with replace_text unless adding a new test function via append_text or creating a new test file with write_file. The existing repository test suite is authoritative. Put test commands in verification_commands.\n3. Single Action Per File: Submit at most ONE replace_text action per target file. Combine all changes for that file into one concise edit. Never submit multiple separate replace_text actions targeting the same file.";
+const PLAN_FORMAT_REPAIR_INSTRUCTION: &str = "FORMAT REPAIR: Return only one JSON object with top-level action submit_plan and no Markdown or prose. arguments.actions must contain at least one effective repository change. Each action must use exactly these argument fields: path, content, old_text, new_text (empty string for unused fields). Use replace_text with exact unique old_text (minimal 1-2 lines copied verbatim) and different new_text. Use write_file only for a new file. Put commands in verification_commands, not actions. Never use apply_patch or any other action type.";
+const RECOVERY_INSTRUCTION: &str = "You are in the DIAGNOSE phase of a bounded coding run. Inspect the failed verification evidence and current isolated-worktree diff. Return only one JSON object with top-level action submit_recovery and arguments {actions:[{action,arguments,rationale}], verification_commands:[[\"cmd\",\"arg1\",...]], recovery_actions:[]}. Actions must be evidence-based, minimal, and safe. Each action arguments object must contain exactly: path, content, old_text, new_text (empty string for unused fields). For existing-file changes use replace_text with an exact unique old_text fragment (minimal 1-2 lines copied verbatim) and a different new_text. Never use ambiguous or repetitive 1-line anchors like 'assert_eq!' that appear multiple times in the file; old_text must match exactly once. Use write_file only for new files. Do not repeat unchanged actions, do not narrate, and do not return Markdown.";
+const RECOVERY_FORMAT_REPAIR_INSTRUCTION: &str = "FORMAT REPAIR: Return only one submit_recovery JSON object. actions must be non-empty and effective. Use replace_text with exact unique old_text (minimal 1-2 lines copied verbatim) and different new_text, append_text to add content at the end of an existing file, or write_file for a new file. Include non-empty verification_commands. Do not return Markdown or prose.";
 
 #[cfg(test)]
 mod tests {
@@ -2630,6 +2766,33 @@ mod tests {
     }
 
     #[test]
+    fn multi_attempt_rate_limit_recovers_autonomously_up_to_max_retries() {
+        let root = initialized_repository("VALUE = 1\n");
+        let provider = SequenceProvider::new(vec![
+            Err(ProviderError::RateLimited {
+                provider: "Groq".into(),
+                retry_after: Some(Duration::ZERO),
+            }),
+            Err(ProviderError::RateLimited {
+                provider: "Groq".into(),
+                retry_after: Some(Duration::ZERO),
+            }),
+            Err(ProviderError::RateLimited {
+                provider: "Groq".into(),
+                retry_after: Some(Duration::ZERO),
+            }),
+            Ok(plan_with_edit("VALUE = 2\n", "VALUE = 2\\n")),
+        ]);
+        let mut engine = RustEngine::new(provider.clone());
+
+        let report = engine.run("update value", root.path()).unwrap();
+
+        assert!(report.verification_passed);
+        assert_eq!(provider.call_count(), 4);
+        assert_eq!(report.resource_usage.get("retries"), Some(&3));
+    }
+
+    #[test]
     fn compact_provider_profile_bounds_planning_context_before_request() {
         let profile = planning_context_profile(Some(3_500));
         assert_eq!(profile.budget.total_tokens, 5_500);
@@ -2637,8 +2800,8 @@ mod tests {
             profile.budget.total_tokens - profile.budget.response_tokens,
             3_500
         );
-        assert_eq!(profile.initial_evidence_files, 3);
-        assert_eq!(profile.source_excerpt_chars, 2_000);
+        assert_eq!(profile.initial_evidence_files, 5);
+        assert_eq!(profile.source_excerpt_chars, 3_600);
     }
 
     const TASKFLOW_STATUS_TASK: &str = "In TaskFlow, project task lists can return stale data after a task's status is successfully changed.
@@ -2780,6 +2943,58 @@ Run the existing Rust test suite before and after the change.";
     }
 
     #[test]
+    fn multi_attempt_recovery_heals_after_initial_syntax_error() {
+        let root = initialized_repository("VALUE = 1\n");
+        let initial = ActionProposal {
+            action: "submit_plan".into(),
+            arguments: serde_json::json!({
+                "actions": [{
+                    "action": "edit_file",
+                    "arguments": {"path": "value.py", "content": "VALUE = 3\n"},
+                    "rationale": "first attempt fails test"
+                }],
+                "verification_commands": [["python3", "-c", "from pathlib import Path; assert Path('value.py').read_text() == 'VALUE = 2\\n'"]]
+            }),
+            rationale: "initial plan".into(),
+        };
+        // Recovery 1 introduces an invalid value / syntax error, causing verification to fail again
+        let recovery_1 = ActionProposal {
+            action: "submit_recovery".into(),
+            arguments: serde_json::json!({
+                "actions": [{
+                    "action": "edit_file",
+                    "arguments": {"path": "value.py", "content": "VALUE = 4\n"},
+                    "rationale": "flawed first recovery attempt"
+                }]
+            }),
+            rationale: "first recovery".into(),
+        };
+        // Recovery 2 receives the second failure evidence and corrects the file to VALUE = 2\n
+        let recovery_2 = ActionProposal {
+            action: "submit_recovery".into(),
+            arguments: serde_json::json!({
+                "actions": [{
+                    "action": "edit_file",
+                    "arguments": {"path": "value.py", "content": "VALUE = 2\n"},
+                    "rationale": "self-healed second recovery attempt"
+                }]
+            }),
+            rationale: "second recovery".into(),
+        };
+        let provider = SequenceProvider::new(vec![Ok(initial), Ok(recovery_1), Ok(recovery_2)]);
+        let mut engine = RustEngine::new(provider.clone());
+        let report = engine.run("repair value", root.path()).unwrap();
+
+        assert!(report.verification_passed);
+        assert_eq!(provider.call_count(), 3);
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("value.py")).unwrap(),
+            "VALUE = 2\n"
+        );
+        assert_eq!(report.resource_usage.get("retries"), Some(&2));
+    }
+
+    #[test]
     fn invalid_plan_shape_is_repaired_once_before_execution() {
         let root = tempfile::tempdir().unwrap();
         git(root.path(), &["init", "-q"]);
@@ -2824,6 +3039,84 @@ Run the existing Rust test suite before and after the change.";
                     .get("operation")
                     .and_then(|value| value.as_str())
                     == Some("plan.validate")
+        }));
+    }
+
+    #[test]
+    fn empty_replace_text_is_corrected_with_specific_feedback_before_execution() {
+        let root = initialized_repository("VALUE = 1\n");
+        let empty_old_text = ActionProposal {
+            action: "submit_plan".into(),
+            arguments: serde_json::json!({
+                "actions": [{
+                    "action": "replace_text",
+                    "arguments": {"path":"value.py","content":"","old_text":"","new_text":"VALUE = 2\n"},
+                    "rationale": "update value"
+                }],
+                "verification_commands": [["python3", "-c", "from pathlib import Path; assert Path('value.py').read_text() == 'VALUE = 2\\n'"]],
+                "recovery_actions": []
+            }),
+            rationale: "invalid first attempt".into(),
+        };
+        let stale_old_text = ActionProposal {
+            action: "submit_plan".into(),
+            arguments: serde_json::json!({
+                "actions": [{
+                    "action": "replace_text",
+                    "arguments": {"path":"value.py","content":"","old_text":"VALUE = 0\n","new_text":"VALUE = 2\n"},
+                    "rationale": "update value"
+                }],
+                "verification_commands": [["python3", "-c", "from pathlib import Path; assert Path('value.py').read_text() == 'VALUE = 2\\n'"]],
+                "recovery_actions": []
+            }),
+            rationale: "invalid second attempt".into(),
+        };
+        let valid = ActionProposal {
+            action: "submit_plan".into(),
+            arguments: serde_json::json!({
+                "actions": [{
+                    "action": "replace_text",
+                    "arguments": {"path":"value.py","content":"","old_text":"VALUE = 1\n","new_text":"VALUE = 2\n"},
+                    "rationale": "update value"
+                }],
+                "verification_commands": [["python3", "-c", "from pathlib import Path; assert Path('value.py').read_text() == 'VALUE = 2\\n'"]],
+                "recovery_actions": []
+            }),
+            rationale: "corrected plan".into(),
+        };
+        let provider =
+            SequenceProvider::new(vec![Ok(empty_old_text), Ok(stale_old_text), Ok(valid)]);
+        let mut engine = RustEngine::new(provider.clone());
+
+        let report = engine.run("update value", root.path()).unwrap();
+
+        assert!(report.verification_passed);
+        assert_eq!(provider.call_count(), 3);
+        assert_eq!(report.resource_usage.get("retries"), Some(&2));
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("value.py")).unwrap(),
+            "VALUE = 2\n"
+        );
+        let prompts = provider.prompts();
+        assert!(prompts[1].contains("requires non-empty old_text"));
+        assert!(prompts[2].contains("found 0 matches"));
+        let execution_index = report
+            .events
+            .iter()
+            .position(|event| {
+                event
+                    .payload
+                    .get("operation")
+                    .and_then(|value| value.as_str())
+                    == Some("execute.actions")
+            })
+            .unwrap();
+        assert!(report.events[..execution_index].iter().all(|event| {
+            event
+                .payload
+                .get("operation")
+                .and_then(|value| value.as_str())
+                != Some("execute.actions")
         }));
     }
 
@@ -2911,18 +3204,14 @@ Run the existing Rust test suite before and after the change.";
         let provider = SequenceProvider::new(vec![
             Err(ProviderError::InvalidResponse),
             Err(ProviderError::InvalidAction("missing action".into())),
-            Ok(ActionProposal {
-                action: "submit_plan".into(),
-                arguments: serde_json::json!({}),
-                rationale: "must not be requested".into(),
-            }),
+            Err(ProviderError::InvalidResponse),
         ]);
         let mut engine = RustEngine::new(provider.clone());
         let error = engine.run("update value", root.path()).unwrap_err();
 
         assert!(matches!(
             error,
-            RuntimeError::Provider(ProviderError::InvalidAction(_))
+            RuntimeError::Provider(ProviderError::InvalidResponse)
         ));
         assert_eq!(provider.call_count(), MAX_PLAN_FORMAT_ATTEMPTS);
         assert_eq!(
@@ -3030,6 +3319,87 @@ Run the existing Rust test suite before and after the change.";
             RustEngine::new(ScriptedProvider::new(Vec::new())).with_cancellation(cancellation);
         let error = engine.run("cancel me", root.path()).unwrap_err();
         assert!(matches!(error, RuntimeError::Cancelled));
+    }
+
+    #[test]
+    fn replace_text_nonexistent_file_is_rejected_at_plan_validation_not_at_execution() {
+        // The model proposes replace_text on a path that does not exist in the
+        // repository.  validate_plan_actions must surface this as a plan-level
+        // repair opportunity before any worktree mutation occurs.
+        let root = initialized_repository("VALUE = 1\n");
+        let bad_plan = ActionProposal {
+            action: "submit_plan".into(),
+            arguments: serde_json::json!({
+                "actions": [{
+                    "action": "replace_text",
+                    "arguments": {
+                        "path": "does_not_exist.py",
+                        "content": "",
+                        "old_text": "VALUE = 1\n",
+                        "new_text": "VALUE = 2\n"
+                    },
+                    "rationale": "update a file that does not exist"
+                }],
+                "verification_commands": [["python3", "-c", "assert True"]],
+                "recovery_actions": []
+            }),
+            rationale: "invalid plan".into(),
+        };
+        let good_plan = plan_with_edit("VALUE = 2\n", "VALUE = 2\\n");
+        let provider = SequenceProvider::new(vec![Ok(bad_plan), Ok(good_plan)]);
+        let mut engine = RustEngine::new(provider.clone());
+
+        let report = engine.run("update value", root.path()).unwrap();
+
+        // The bad plan must be caught and repaired before execution starts.
+        assert!(report.verification_passed);
+        assert_eq!(provider.call_count(), 2);
+        assert_eq!(report.resource_usage.get("retries"), Some(&1));
+        // The repair feedback sent to the model must name the missing file.
+        assert!(provider.prompts()[1].contains("does_not_exist.py"));
+        assert!(provider.prompts()[1].contains("does not exist"));
+        // No execution event should appear before the retrying event.
+        let first_retry = report
+            .events
+            .iter()
+            .position(|e| e.event_type == "activity.retrying")
+            .expect("retrying event must be present");
+        let first_execute = report
+            .events
+            .iter()
+            .position(|e| {
+                e.event_type == "activity.started"
+                    && e.payload
+                        .get("operation")
+                        .and_then(|v| v.as_str())
+                        == Some("execute.actions")
+            })
+            .expect("execute.actions event must be present");
+        assert!(first_retry < first_execute, "repair must happen before execution");
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("value.py")).unwrap(),
+            "VALUE = 2\n"
+        );
+    }
+
+    #[test]
+    fn execute_to_diagnose_transition_is_legal_when_action_fails_at_runtime() {
+        // Simulate a replace_text execution failure that bypasses plan
+        // validation (e.g., a worktree race).  The state machine must accept
+        // Execute → Diagnose and produce a FAILED report rather than panicking.
+        use secondego_core::Phase;
+        let mut machine =
+            StateMachine::new(ExecutionState::new("task", "/repo"));
+        machine.move_to(Phase::Understand, "start").unwrap();
+        machine.move_to(Phase::Explore, "scan").unwrap();
+        machine.move_to(Phase::Plan, "plan").unwrap();
+        machine.move_to(Phase::Execute, "execute").unwrap();
+        // This must not return Err(StateError::InvalidTransition).
+        let event = machine
+            .move_to(Phase::Diagnose, "action failed at runtime")
+            .expect("Execute → Diagnose must be a legal transition");
+        assert_eq!(event.event_type, "state.changed");
+        assert_eq!(machine.state.phase, Phase::Diagnose);
     }
 
     fn initialized_repository(value: &str) -> tempfile::TempDir {

@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "electron": "env -u ELECTRON_RUN_AS_NODE electron electron/main.cjs",
+    "electron": "node electron/launch.cjs",
     "desktop": "npm run build && npm run electron"
   },
   "dependencies": {

@@ -41,6 +41,11 @@ impl Phase {
                 | (Self::Explore, Self::Plan)
                 | (Self::Plan, Self::Execute)
                 | (Self::Execute, Self::Verify)
+                // When a tool action itself fails during Execute (e.g. replace_text
+                // targets a non-existent path), the runtime synthesises a failed
+                // VerificationResult and skips the Verify step so the event log
+                // accurately reflects that verification was never attempted.
+                | (Self::Execute, Self::Diagnose)
                 | (Self::Verify, Self::Diagnose)
                 | (Self::Diagnose, Self::Recover)
                 | (Self::Recover, Self::Execute)
@@ -149,10 +154,14 @@ pub struct ResourceBudget {
 
 impl Default for ResourceBudget {
     fn default() -> Self {
+        let max_retries = std::env::var("SECONDEGO_MAX_RETRIES")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(12);
         Self {
             max_model_calls: 20,
             max_tool_calls: 80,
-            max_retries: 6,
+            max_retries,
             max_runtime: Duration::from_secs(900),
             max_context_tokens_per_call: 24_000,
         }

@@ -1,7 +1,7 @@
 use std::env;
 use std::fs;
 use std::io::{self, IsTerminal, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::thread;
@@ -89,6 +89,7 @@ fn main() {
         .first()
         .is_some_and(|argument| argument == "launch")
     {
+        let _terminal_foreground = take_terminal_foreground();
         if let Err(error) = run_launcher(&arguments[1..]) {
             eprintln!("SecondEgo launcher failed: {error}");
             std::process::exit(2);
@@ -180,7 +181,7 @@ fn main() {
     }
     let result = match script {
         Some(script_path) => run_scripted(
-            resolved.root,
+            resolved.root.clone(),
             task,
             PathBuf::from(script_path),
             events,
@@ -189,7 +190,7 @@ fn main() {
             cancellation,
         ),
         None => run_configured(
-            resolved.root,
+            resolved.root.clone(),
             task,
             events,
             state_db,
@@ -204,7 +205,11 @@ fn main() {
             return;
         }
         restore_terminal_foreground();
-        eprintln!("SecondEgo failed: {error}");
+        if interactive {
+            print_error_card(error.as_ref(), &resolved.root);
+        } else {
+            eprintln!("SecondEgo failed: {error}");
+        }
         std::process::exit(1);
     }
 }
@@ -629,7 +634,7 @@ fn launch_terminal(
     if status.success() || status.code() == Some(130) {
         Ok(())
     } else {
-        Err(format!("terminal run exited with {status}").into())
+        std::process::exit(status.code().unwrap_or(1));
     }
 }
 
@@ -902,8 +907,8 @@ fn run_scripted(
     if interactive && !events {
         engine = engine.with_event_sink(print_live_event);
     }
-    let report = engine.run(task, workspace)?;
-    emit_report(report, events, state_db, interactive, Some(&voice))
+    let report = engine.run(task, &workspace)?;
+    emit_report(report, events, state_db, interactive, Some(&voice), &workspace)
 }
 
 fn run_configured(
@@ -921,8 +926,8 @@ fn run_configured(
     if interactive && !events {
         engine = engine.with_event_sink(print_live_event);
     }
-    let report = engine.run(task, workspace)?;
-    emit_report(report, events, state_db, interactive, Some(&voice))
+    let report = engine.run(task, &workspace)?;
+    emit_report(report, events, state_db, interactive, Some(&voice), &workspace)
 }
 
 fn emit_report(
@@ -931,6 +936,7 @@ fn emit_report(
     state_db: Option<String>,
     interactive: bool,
     voice: Option<&VoiceService>,
+    workspace: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if events {
         for event in &report.events {
@@ -940,13 +946,30 @@ fn emit_report(
     if let Some(path) = state_db {
         secondego_storage::SQLiteRunStore::open(path)?.save(&report.state, &report.events)?;
     }
+    let patch_path = if let Some(ref patch) = report.patch {
+        if !patch.is_empty() {
+            let dot_secondego = PathBuf::from(".secondego");
+            let _ = fs::create_dir_all(&dot_secondego);
+            let path = dot_secondego.join("latest.patch");
+            if fs::write(&path, patch).is_ok() {
+                fs::canonicalize(&path).ok().or(Some(path))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     if interactive {
-        print_result_card(&report);
+        print_result_card(&report, workspace, patch_path.as_deref());
         if let Some(voice) = voice {
             print_voice_summary(voice, report.state.run_id);
         }
+    } else {
+        println!("{}", serde_json::to_string_pretty(&report)?);
     }
-    println!("{}", serde_json::to_string_pretty(&report)?);
     if report.verification_passed {
         Ok(())
     } else {
@@ -1291,11 +1314,51 @@ fn print_live_event(event: &secondego_core::EngineEvent) {
     );
 }
 
-fn print_result_card(report: &secondego_runtime::RunReport) {
-    let status = if report.verification_passed {
-        "VERIFIED"
+fn truncate_str(value: &str, max_len: usize) -> String {
+    if value.chars().count() <= max_len {
+        value.to_string()
     } else {
-        "FAILED"
+        let truncated: String = value.chars().take(max_len.saturating_sub(3)).collect();
+        format!("{truncated}...")
+    }
+}
+
+fn compute_diffstat(patch: &str) -> Vec<(String, usize, usize)> {
+    let mut stats = Vec::new();
+    let mut current_file: Option<String> = None;
+    let mut ins = 0;
+    let mut del = 0;
+    for line in patch.lines() {
+        if line.starts_with("diff --git a/") {
+            if let Some(file) = current_file.take() {
+                stats.push((file, ins, del));
+                ins = 0;
+                del = 0;
+            }
+            if let Some(path) = line.split(" b/").nth(1) {
+                current_file = Some(path.to_string());
+            }
+        } else if line.starts_with('+') && !line.starts_with("+++") {
+            ins += 1;
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            del += 1;
+        }
+    }
+    if let Some(file) = current_file {
+        stats.push((file, ins, del));
+    }
+    stats
+}
+
+fn print_result_card(
+    report: &secondego_runtime::RunReport,
+    workspace: &Path,
+    patch_file: Option<&Path>,
+) {
+    let status = if report.verification_passed {
+        "VERIFIED - CHANGES TRANSFERRED TO REPOSITORY"
+    } else {
+        "VERIFICATION FAILED - CHANGES DISCARDED (REPO PROTECTED)"
     };
     let color = if report.verification_passed {
         PARCHEMENT
@@ -1322,7 +1385,153 @@ fn print_result_card(report: &secondego_runtime::RunReport) {
         "{}",
         paint(
             color,
-            &format!("│  changed    {:<58}│", report.state.changed_paths.len())
+            &format!(
+                "│  files      {:<58}│",
+                if report.changed_paths.is_empty() {
+                    "none".to_string()
+                } else {
+                    format!("{} file(s) modified", report.changed_paths.len())
+                }
+            ),
+        )
+    );
+    println!(
+        "{}",
+        paint(
+            color,
+            &format!(
+                "│  transfer   {:<58}│",
+                if report.diff_transferred {
+                    "applied to target repository"
+                } else {
+                    "discarded (isolated worktree tests did not pass)"
+                }
+            )
+        )
+    );
+    if let Some(reason) = &report.state.termination_reason {
+        let first_line = reason.lines().next().unwrap_or(reason);
+        println!(
+            "{}",
+            paint(
+                color,
+                &format!("│  detail     {:<58}│", truncate_str(first_line, 58))
+            )
+        );
+    }
+    println!(
+        "{}",
+        paint(
+            color,
+            "╰───────────────────────────────────────────────────────────────────────╯"
+        )
+    );
+    if !report.verification_passed {
+        println!(
+            "  {} {}",
+            paint(CORAL, "!"),
+            paint(
+                MUTED,
+                "Verification commands failed. Target repository was left untouched for safety."
+            )
+        );
+    } else {
+        println!(
+            "  {} {}",
+            paint(PARCHEMENT, "✓"),
+            paint(
+                MUTED,
+                "All verification checks passed. Verified changes were transferred to your repository."
+            )
+        );
+    }
+
+    if !report.changed_paths.is_empty() {
+        println!();
+        println!(
+            "  {}",
+            paint(PEACH, "Changed Files (Cmd+Click to open in editor):")
+        );
+        let stats = report
+            .patch
+            .as_deref()
+            .map(compute_diffstat)
+            .unwrap_or_default();
+        for relative in &report.changed_paths {
+            let abs_path = workspace.join(relative);
+            let stat_str = stats
+                .iter()
+                .find(|(path, _, _)| path == relative)
+                .map(|(_, ins, del)| format!(" (+{ins} -{del})"))
+                .unwrap_or_default();
+            println!(
+                "  {} file://{}{}",
+                paint(MUTED, "•"),
+                abs_path.display(),
+                paint(PEACH, &stat_str)
+            );
+        }
+    }
+
+    if let Some(patch_path) = patch_file {
+        println!();
+        println!("  {}", paint(PEACH, "Full Unified Patch:"));
+        println!("  {} file://{}", paint(MUTED, "•"), patch_path.display());
+    }
+
+    let current_dir = env::current_dir().unwrap_or_default();
+    if workspace != current_dir {
+        println!();
+        println!("  {}", paint(PEACH, "Target Repository Location:"));
+        println!("  {} file://{}", paint(MUTED, "•"), workspace.display());
+        if report.diff_transferred {
+            println!("  {} Inspect diff in target repo directly:", paint(MUTED, "→"));
+            println!("    git -C \"{}\" diff", workspace.display());
+        }
+    }
+}
+
+fn print_error_card(error: &dyn std::error::Error, workspace: &Path) {
+    let color = CORAL;
+    println!();
+    println!(
+        "{}",
+        paint(
+            color,
+            "╭─ RUN TERMINATED ─────────────────────────────────────────────────────╮"
+        )
+    );
+    println!(
+        "{}",
+        paint(
+            color,
+            "│  EXECUTION STOPPED - TARGET REPOSITORY UNTOUCHED (PROTECTED)          │"
+        )
+    );
+    println!(
+        "{}",
+        paint(
+            color,
+            &format!(
+                "│  workspace  {:<58}│",
+                truncate_str(&workspace.display().to_string(), 58)
+            )
+        )
+    );
+    println!(
+        "{}",
+        paint(
+            color,
+            &format!("│  status     {:<58}│", "isolated worktree discarded cleanly")
+        )
+    );
+    let error_str = error.to_string();
+    let first = error_str.lines().next().unwrap_or(&error_str);
+    println!(
+        "{}",
+        paint(
+            color,
+            &format!("│  cause      {:<58}│", truncate_str(first, 58))
         )
     );
     println!(
@@ -1333,9 +1542,17 @@ fn print_result_card(report: &secondego_runtime::RunReport) {
         )
     );
     println!(
-        "  {}",
-        paint(MUTED, "Machine-readable report follows below.")
+        "  {} {}",
+        paint(CORAL, "!"),
+        paint(
+            MUTED,
+            "No unverified changes were committed to your repository. The working tree remains safe."
+        )
     );
+    println!();
+    println!("  {}", paint(PEACH, "Target Repository Location:"));
+    println!("  {} file://{}", paint(MUTED, "•"), workspace.display());
+    println!();
 }
 
 fn paint(code: &str, value: &str) -> String {

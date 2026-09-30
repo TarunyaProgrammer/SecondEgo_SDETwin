@@ -21,7 +21,7 @@ class RepositorySourceError(ValueError):
     """Raised when a repository source cannot be safely acquired."""
 
 
-@dataclass(frozen=True)
+@dataclass
 class ResolvedRepository:
     source: str
     root: Path

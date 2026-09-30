@@ -105,7 +105,17 @@ impl RepositoryIndex {
     }
 
     pub fn rank(&self, query: &str, limit: usize, failure_mode: bool) -> Vec<RankedFile> {
-        let terms = query_terms(query);
+        const STOP_WORDS: &[&str] = &[
+            "the", "in", "on", "at", "to", "for", "of", "and", "or", "is", "are",
+            "was", "were", "not", "do", "does", "did", "so", "that", "this", "after",
+            "before", "from", "with", "a", "an", "be", "been", "can", "could", "would",
+            "should", "have", "has", "had", "once", "again", "st", "nd", "rd", "th",
+        ];
+        let raw_terms = query_terms(query);
+        let terms: Vec<String> = raw_terms
+            .into_iter()
+            .filter(|t| t.len() >= 3 && !STOP_WORDS.contains(&t.as_str()))
+            .collect();
         let mut scores: BTreeMap<String, i32> = BTreeMap::new();
         let mut reasons: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         let symbols_by_path =
@@ -117,6 +127,15 @@ impl RepositoryIndex {
                         .push(symbol.name.to_lowercase());
                     map
                 });
+
+        let mut doc_freq: BTreeMap<&str, usize> = BTreeMap::new();
+        for terms_set in self.content_terms.values() {
+            for term in &terms {
+                if terms_set.contains(term) {
+                    *doc_freq.entry(term.as_str()).or_default() += 1;
+                }
+            }
+        }
 
         for path in &self.snapshot.files {
             let lowered = path.to_lowercase();
@@ -135,11 +154,19 @@ impl RepositoryIndex {
                     .get(path)
                     .is_some_and(|terms| terms.contains(term))
                 {
+                    let df = doc_freq.get(term.as_str()).copied().unwrap_or(1);
+                    let specificity_score = if df <= 2 {
+                        8
+                    } else if df <= 4 {
+                        4
+                    } else {
+                        2
+                    };
                     add_score(
                         &mut scores,
                         &mut reasons,
                         path,
-                        2,
+                        specificity_score,
                         format!("content:{term}"),
                     );
                 }
@@ -150,6 +177,13 @@ impl RepositoryIndex {
                     .any(|term| matches!(term.as_str(), "test" | "bug" | "fix" | "regression"))
             {
                 add_score(&mut scores, &mut reasons, path, 1, "test-relevance".into());
+            }
+            if (path.ends_with("/lib.rs") || path.ends_with("/main.rs"))
+                && !terms.iter().any(|t| t == "lib" || t == "main")
+            {
+                if let Some(score) = scores.get_mut(path) {
+                    *score = score.saturating_sub(10);
+                }
             }
         }
 

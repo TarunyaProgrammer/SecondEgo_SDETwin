@@ -187,9 +187,16 @@ impl ContextAssembler {
         for item in evidence.iter().filter(|item| item.stale) {
             dropped.push(item.reference.clone());
         }
+        // Headroom sharing: unused budget from task, action, and state
+        // dynamically expands evidence capacity up to total available tokens.
+        let headroom = self.budget.task_tokens.saturating_sub(task_tokens)
+            + self.budget.action_tokens.saturating_sub(action_tokens)
+            + self.budget.state_tokens.saturating_sub(state_tokens);
+        let effective_evidence_budget = self.budget.evidence_tokens.saturating_add(headroom);
+
         for item in ordered {
             let item_tokens = Self::estimate_tokens(&item.summary);
-            if used_evidence + item_tokens > self.budget.evidence_tokens {
+            if used_evidence + item_tokens > effective_evidence_budget {
                 dropped.push(item.reference.clone());
             } else {
                 selected.push(item.clone());

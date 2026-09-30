@@ -36,7 +36,7 @@ from SecondEgo.orchestration.engine import HarnessEngine
 from SecondEgo.repository.scanner import RepositoryScanner
 from SecondEgo.repository.index import RepositoryIndexer
 from SecondEgo.repository.retrieval import RepositoryRetriever
-from SecondEgo.repository.source import RepositorySourceError, resolve_repository
+from SecondEgo.repository.source import ResolvedRepository, RepositorySourceError, resolve_repository
 from SecondEgo.lifecycle import GcConfig, OwnedTempLease, collect_garbage
 from SecondEgo.storage.sqlite import SQLiteRunStore
 from SecondEgo.storage.redaction import redact_sensitive
@@ -113,6 +113,23 @@ def test_repository_source_accepts_local_directory(tmp_path) -> None:
 
     assert resolved.root == tmp_path.resolve()
     assert resolved.cloned is False
+
+
+def test_resolved_repository_cleanup_is_idempotent(tmp_path) -> None:
+    clone_root = tmp_path / "secondego-remote-test"
+    lease = OwnedTempLease(clone_root, "remote")
+    resolved = ResolvedRepository(
+        source="https://github.com/example/project",
+        root=clone_root,
+        cloned=True,
+        lease=lease,
+    )
+
+    resolved.cleanup()
+    resolved.cleanup()
+
+    assert resolved.lease is None
+    assert not clone_root.exists()
 
 
 def test_repository_source_rejects_unsafe_remote_forms() -> None:

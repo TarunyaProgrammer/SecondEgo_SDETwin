@@ -642,6 +642,7 @@ mod tests {
             verification_passed: true,
             changed_paths: vec!["src/example.py".into()],
             diff_transferred: true,
+            patch: None,
             tool_results: Vec::new(),
             index_files: 1,
             index_symbols: 1,

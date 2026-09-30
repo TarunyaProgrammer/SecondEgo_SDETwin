@@ -282,6 +282,50 @@ fn spawn_reader(
     })
 }
 
+/// Finds a unique match of `target` lines inside `content` by comparing trimmed lines.
+/// Returns `Some((byte_start, byte_end))` in `content` if there is exactly ONE match.
+/// Returns `None` if there are 0 matches or more than 1 match.
+pub fn find_unique_trimmed_line_span(content: &str, target: &str) -> Option<(usize, usize)> {
+    let target_lines: Vec<&str> = target.lines().map(str::trim).collect();
+    let start_idx = target_lines.iter().position(|l| !l.is_empty())?;
+    let end_idx = target_lines.iter().rposition(|l| !l.is_empty())?;
+    let target_slice = &target_lines[start_idx..=end_idx];
+    if target_slice.is_empty() {
+        return None;
+    }
+
+    // Collect all lines with their byte offsets in content
+    let mut content_lines = Vec::new();
+    let mut offset = 0;
+    for line in content.split_inclusive('\n') {
+        let len = line.len();
+        let trimmed = line.trim_end_matches(&['\r', '\n'][..]).trim();
+        content_lines.push((trimmed, offset, offset + len));
+        offset += len;
+    }
+
+    let n = target_slice.len();
+    if n > content_lines.len() {
+        return None;
+    }
+
+    let mut matches = Vec::new();
+    for i in 0..=(content_lines.len() - n) {
+        let is_match = (0..n).all(|k| content_lines[i + k].0 == target_slice[k]);
+        if is_match {
+            let span_start = content_lines[i].1;
+            let span_end = content_lines[i + n - 1].2;
+            matches.push((span_start, span_end));
+        }
+    }
+
+    if matches.len() == 1 {
+        Some(matches[0])
+    } else {
+        None
+    }
+}
+
 pub struct FileTool {
     pub workspace: WorkspacePolicy,
     pub max_file_bytes: u64,
@@ -474,6 +518,20 @@ impl FileTool {
                 );
             }
             format!("{}{}{}", &content[..index], new_text, &content[end..])
+        } else if matches == 0
+            && !old_text.trim().is_empty()
+            && content.match_indices(old_text.trim()).count() == 1
+        {
+            content.replacen(old_text.trim(), new_text.trim_end(), 1)
+        } else if let Some((span_start, span_end)) =
+            find_unique_trimmed_line_span(&content, old_text)
+        {
+            let replacement = if !new_text.ends_with('\n') && content[..span_end].ends_with('\n') {
+                format!("{new_text}\n")
+            } else {
+                new_text.to_owned()
+            };
+            format!("{}{}{}", &content[..span_start], replacement, &content[span_end..])
         } else {
             let observed: String = old_text.chars().take(240).collect();
             return ToolResult::failure(
@@ -982,6 +1040,7 @@ pub struct TransactionResult {
     pub transferred: bool,
     pub changed_paths: Vec<String>,
     pub reason: String,
+    pub patch: Option<String>,
 }
 
 #[derive(Debug)]
@@ -1083,26 +1142,29 @@ impl GitAttemptTransaction {
         };
         let result = (|| {
             let changed_paths = status_paths(&attempt_root)?;
+            let patch_result = git_checked_with_limit(
+                &attempt_root,
+                &["diff", "--binary", "--no-ext-diff", "HEAD"],
+                Duration::from_secs(30),
+                self.max_patch_bytes,
+            ).ok();
+            let patch_text = patch_result
+                .filter(|r| !r.truncated && r.stdout.len() <= self.max_patch_bytes)
+                .map(|r| r.stdout);
+
             if !passed {
                 return Ok(TransactionResult {
                     passed: false,
                     transferred: false,
                     changed_paths,
                     reason: "failed attempt discarded".into(),
+                    patch: patch_text,
                 });
             }
-            let patch_result = git_checked_with_limit(
-                &attempt_root,
-                &["diff", "--binary", "--no-ext-diff", "HEAD"],
-                Duration::from_secs(30),
-                self.max_patch_bytes,
-            );
-            let patch_result = patch_result?;
-            if patch_result.truncated || patch_result.stdout.len() > self.max_patch_bytes {
-                return Err(PolicyError::FileTooLarge);
-            }
-            if !patch_result.stdout.is_empty() {
-                git_apply(&self.workspace.root, &patch_result.stdout)?;
+            if let Some(ref patch) = patch_text {
+                if !patch.is_empty() {
+                    git_apply(&self.workspace.root, patch)?;
+                }
             }
             for relative in untracked_paths(&attempt_root)? {
                 self.transfer_new_file(&attempt_root, &relative)?;
@@ -1112,6 +1174,7 @@ impl GitAttemptTransaction {
                 transferred: true,
                 changed_paths,
                 reason: "verified attempt transferred to target workspace".into(),
+                patch: patch_text,
             })
         })();
         self.cleanup(result)
@@ -1384,6 +1447,53 @@ mod tests {
                 .unwrap()
                 .ends_with("#[test]\nfn appended_regression() {}\n")
         );
+    }
+
+    #[test]
+    fn replace_text_tolerates_whitespace_and_indentation() {
+        let root = tempfile::tempdir().unwrap();
+        let original = r#"    pub fn change_status() {
+        let updated = self.repository.update(task, version)?;
+        self.events.push(Event);
+    }
+"#;
+        fs::write(root.path().join("service.rs"), original).unwrap();
+        let files = FileTool {
+            workspace: WorkspacePolicy::new(root.path()).unwrap(),
+            max_file_bytes: 1024,
+        };
+
+        // Model provided 8 spaces instead of 8 spaces, or no leading spaces at all on anchor:
+        let result = files.replace_text(
+            "service.rs",
+            "let updated = self.repository.update(task, version)?;\n",
+            "        let updated = self.repository.update(task, version)?;\n        self.invalidate(&updated.project_id);\n",
+        );
+        assert!(result.success, "{}", result.stderr);
+        let updated = fs::read_to_string(root.path().join("service.rs")).unwrap();
+        assert!(updated.contains("self.invalidate(&updated.project_id);"));
+        assert!(updated.contains("self.events.push(Event);"));
+    }
+
+    #[test]
+    fn replace_text_diagnose_exact_user_failure() {
+        let root = tempfile::tempdir().unwrap();
+        let content = r#"        let updated = self.repository.update(updated, expected_version)?;
+        self.events.publish(Event {
+            kind: "task.status_changed".into(),
+            task_id: updated.id.clone(),
+            version: updated.version,
+        });
+        Ok(updated)
+"#;
+        fs::write(root.path().join("application.rs"), content).unwrap();
+        let files = FileTool {
+            workspace: WorkspacePolicy::new(root.path()).unwrap(),
+            max_file_bytes: 1024 * 1024,
+        };
+        let requested = "self.events.publish(Event {\n            kind: \"task.status_changed\".into(),\n            task_id: updated.id.clone(),\n            version: updated.version,\n        });\n        Ok(updated)";
+        let result = files.replace_text("application.rs", requested, "replacement");
+        assert!(result.success, "{}", result.stderr);
     }
 
     #[test]

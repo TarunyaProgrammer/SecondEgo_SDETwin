@@ -122,14 +122,19 @@ impl ProviderError {
     /// Errors that can plausibly succeed without changing the request. The
     /// runtime owns the bounded retry budget; providers only classify errors.
     pub fn is_transient(&self) -> bool {
-        matches!(
-            self,
-            Self::Transport(_)
-                | Self::HttpStatus {
-                    status: 500 | 502 | 503 | 504,
-                    ..
-                }
-        )
+        match self {
+            Self::Transport(_) => true,
+            Self::HttpStatus {
+                status: 500 | 502 | 503 | 504,
+                ..
+            } => true,
+            Self::HttpStatus {
+                status: 400,
+                code: Some(code),
+                ..
+            } if code == "json_validate_failed" => true,
+            _ => false,
+        }
     }
 
     pub fn rate_limit_delay(&self) -> Option<Duration> {
@@ -505,6 +510,7 @@ fn gemini_request(prompt: &str) -> Value {
     serde_json::json!({
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
+            "temperature": 0.0,
             "responseMimeType": "application/json",
             "responseSchema": {
                 "type": "OBJECT",
@@ -649,7 +655,7 @@ fn post_json(
     provider: &str,
     url: &str,
     api_key: &str,
-    request: Value,
+    mut request: Value,
     timeout: Duration,
     model: Option<&str>,
 ) -> Result<HttpJsonResponse, ProviderError> {
@@ -666,11 +672,38 @@ fn post_json(
     let status = response.status();
     let rate_limit = rate_limit_snapshot(response.headers());
     if !status.is_success() {
+        let code = response_error_code(response);
+        // Fallback: If server rejects strict JSON schema (e.g. Groq json_validate_failed),
+        // seamlessly downgrade response_format to {"type": "json_object"} and retry once.
+        if status.as_u16() == 400 && code.as_deref() == Some("json_validate_failed") {
+            if let Some(format_val) = request.get_mut("response_format") {
+                if format_val.get("type").and_then(|v| v.as_str()) == Some("json_schema") {
+                    *format_val = serde_json::json!({"type": "json_object"});
+                    if let Ok(retry_resp) = client
+                        .post(url)
+                        .bearer_auth(api_key)
+                        .json(&request)
+                        .send()
+                    {
+                        let retry_status = retry_resp.status();
+                        let retry_rate_limit = rate_limit_snapshot(retry_resp.headers());
+                        if retry_status.is_success() {
+                            if let Ok(payload) = retry_resp.json() {
+                                return Ok(HttpJsonResponse {
+                                    payload,
+                                    rate_limit: retry_rate_limit,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
         return Err(http_status_error(
             provider,
             status,
             model,
-            response_error_code(response),
+            code,
             rate_limit,
         ));
     }
@@ -862,6 +895,7 @@ fn deepseek_request(model: &str, prompt: &str) -> Value {
         ],
         "response_format": {"type": "json_object"},
         "thinking": {"type": "disabled"},
+        "temperature": 0.0,
         "max_tokens": 4096
     })
 }
@@ -883,6 +917,7 @@ fn groq_request(model: &str, prompt: &str, phase: &str) -> Value {
                     "schema": groq_response_schema(phase)
                 }
             },
+            "temperature": 0.0,
             "max_completion_tokens": GROQ_MAX_COMPLETION_TOKENS
         })
     } else {
@@ -895,6 +930,7 @@ fn groq_request(model: &str, prompt: &str, phase: &str) -> Value {
                 {"role": "user", "content": runtime_input}
             ],
             "response_format": {"type": "json_object"},
+            "temperature": 0.0,
             "max_completion_tokens": GROQ_MAX_COMPLETION_TOKENS
         })
     }
@@ -1069,16 +1105,31 @@ pub fn parse_action(text: &str) -> Result<ActionProposal, ProviderError> {
 
 fn parse_structured_json(text: &str) -> Result<Value, ProviderError> {
     let trimmed = text.trim();
-    let json = if let Some(fenced) = trimmed.strip_prefix("```") {
-        let body_start = fenced.find('\n').ok_or(ProviderError::InvalidResponse)? + 1;
-        fenced[body_start..]
-            .strip_suffix("```")
-            .map(str::trim)
-            .ok_or(ProviderError::InvalidResponse)?
-    } else {
-        trimmed
-    };
-    serde_json::from_str(json).map_err(|_| ProviderError::InvalidResponse)
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        return Ok(value);
+    }
+    // Markdown code fence extraction: ```json ... ``` or ``` ... ```
+    if let Some(start_fence) = trimmed.find("```") {
+        let after_fence = &trimmed[start_fence + 3..];
+        let body_start = after_fence.find('\n').map(|idx| idx + 1).unwrap_or(0);
+        let remainder = &after_fence[body_start..];
+        if let Some(end_fence) = remainder.rfind("```") {
+            let json_str = remainder[..end_fence].trim();
+            if let Ok(value) = serde_json::from_str::<Value>(json_str) {
+                return Ok(value);
+            }
+        }
+    }
+    // Outer curly brace extraction: { ... }
+    if let (Some(first_brace), Some(last_brace)) = (trimmed.find('{'), trimmed.rfind('}')) {
+        if first_brace < last_brace {
+            let json_str = &trimmed[first_brace..=last_brace];
+            if let Ok(value) = serde_json::from_str::<Value>(json_str) {
+                return Ok(value);
+            }
+        }
+    }
+    Err(ProviderError::InvalidResponse)
 }
 
 fn normalize_rationale(value: Option<&Value>) -> String {
@@ -1320,6 +1371,17 @@ mod tests {
             parse_action(r#"{"action":"submit_plan","arguments":{},"rationale":{"detail":true}}"#)
                 .unwrap();
         assert_eq!(fallback.rationale, FALLBACK_RATIONALE);
+    }
+
+    #[test]
+    fn action_parser_accepts_json_with_outer_commentary() {
+        let text = "Here is your plan:\n```json\n{\"action\":\"read_file\",\"arguments\":{\"path\":\"src/lib.rs\"},\"rationale\":\"inspect\"}\n```\nHope this helps!";
+        let proposal = parse_action(text).unwrap();
+        assert_eq!(proposal.action, "read_file");
+
+        let prose_text = "Sure! {\"action\":\"submit_plan\",\"arguments\":{},\"rationale\":\"plan\"} Thanks.";
+        let proposal2 = parse_action(prose_text).unwrap();
+        assert_eq!(proposal2.action, "submit_plan");
     }
 
     #[test]
