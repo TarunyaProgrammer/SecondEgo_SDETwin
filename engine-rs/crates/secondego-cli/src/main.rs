@@ -1550,6 +1550,27 @@ fn print_error_card(error: &dyn std::error::Error, workspace: &Path) {
         )
     );
     println!();
+    println!("  {}", paint(PEACH, "Failure Details:"));
+    println!("  {} {}", paint(MUTED, "•"), error);
+    if error_str.contains("clean target repository") {
+        println!();
+        println!("  {}", paint(PEACH, "How to resolve:"));
+        println!(
+            "  {} Target repository has uncommitted changes from a previous run or edit.",
+            paint(MUTED, "•")
+        );
+        println!(
+            "  {} To discard uncommitted changes: git -C \"{}\" restore .",
+            paint(MUTED, "•"),
+            workspace.display()
+        );
+        println!(
+            "  {} To keep uncommitted changes:    git -C \"{}\" commit -am \"save current work\"",
+            paint(MUTED, "•"),
+            workspace.display()
+        );
+    }
+    println!();
     println!("  {}", paint(PEACH, "Target Repository Location:"));
     println!("  {} file://{}", paint(MUTED, "•"), workspace.display());
     println!();
