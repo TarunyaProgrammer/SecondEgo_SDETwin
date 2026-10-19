@@ -37,27 +37,27 @@ The current source of truth is in `engine-rs/crates/secondego-runtime`. The Pyth
 
 ### Current production gaps
 
-1. Provider configuration is not a product-level registry. The required set is not present: DeepSeek, Gemini, OpenAI, Anthropic, and OpenRouter must all be first-class; Groq is currently present but is not one of the five required providers.
-2. Credentials are modeled as one `AI_API_KEY` plus provider-specific exceptions. That does not support multiple saved provider profiles safely.
-3. The desktop gateway is an observer API, not a versioned product API. Run payloads do not yet expose a complete diff model, replay metadata, or a durable profile/workspace contract.
-4. The Electron shell has a visual notch/village concept but no release-grade settings, provider setup, diff review, update, or failure recovery experience.
-5. Packaging is a development launcher. There is no signed/notarized release pipeline, update channel, checksums, or supported installer contract.
-6. The terminal path is functional but not a stable, documented product interface comparable to modern coding-agent CLIs.
-7. SQLite stores useful evidence but is not yet a migration-managed replay database with configuration snapshots and provider/model metadata.
+1. The provider registry and five required adapters exist, but Gemini/OpenAI/Anthropic/OpenRouter/DeepSeek need live cross-platform contract tests against current provider accounts and model availability.
+2. Credentials support multiple named profiles in the desktop and macOS/Linux terminal paths. Windows terminal support, vault migration UX, rotation, and a versioned gateway profile contract remain.
+3. The desktop gateway is an observer API, not yet the complete versioned product API. Replay metadata, workspace ownership, and durable profile/workspace operations remain.
+4. The Electron shell has provider setup and diff review foundations, but still needs release-grade update UX, recovery flows, accessibility hardening, and a fuller workspace information architecture.
+5. Packaging has an unsigned DMG candidate pipeline. Signed/notarized artifacts, checksums, update channels, and a supported installer contract remain gated on release credentials and CI validation.
+6. The terminal path now has documented native profiles and safe probes, but still needs a stable machine-readable command schema, richer TUI, shell completion, and cross-platform smoke tests.
+7. SQLite stores useful evidence but is not yet a migration-managed replay database with configuration snapshots, provider/model metadata, workspace ownership, and retention policies.
 
 ### Increment delivered in this repository
 
 The provider transport layer now has first-class Rust and Python compatibility
 adapters for DeepSeek, Gemini, OpenAI, Anthropic, and OpenRouter, plus the
 existing Groq adapter. The CLI/Makefile recognize named credentials, preserve
-`AI_API_KEY` only as a migration fallback, and never print key values. This is
-not yet the complete terminal profile system, but the Electron shell now has a
-profile manager backed by Electron `safeStorage`: only encrypted blobs and
-non-secret metadata are written to the app data directory, and only the active
-profile is decrypted into the gateway child environment. The terminal now has
-the same safe connection probe (`provider test`) as the desktop. The remaining
-work is to give the terminal persistent keychain profile commands and add a
-versioned authenticated gateway profile contract.
+`AI_API_KEY` only as a migration fallback, and never print key values. The
+Electron shell has a profile manager backed by the OS credential vault, and the
+terminal has native profile commands backed by macOS Keychain or Linux Secret
+Service. Both surfaces share non-secret profile metadata and the same safe
+connection probe (`provider test`). The remaining work is to add a versioned
+authenticated gateway profile contract, finish Windows Credential Manager
+support, and replace the current environment injection with a short-lived
+credential handle or in-process provider session where possible.
 
 ## 2. Target architecture
 
@@ -143,7 +143,7 @@ Terminal:
 ```text
 secondego provider list
 secondego provider add openai --key-stdin
-secondego provider test openai
+secondego provider test
 secondego provider use openai --model gpt-5
 ```
 

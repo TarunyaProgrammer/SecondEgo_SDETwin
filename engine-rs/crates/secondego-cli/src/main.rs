@@ -18,6 +18,8 @@ use secondego_runtime::{
     resolve_repository_with_cancellation, voice::VoiceService,
 };
 
+mod profiles;
+
 const CORAL: &str = "38;2;255;205;0";
 const PARCHEMENT: &str = "38;2;255;241;216";
 const PEACH: &str = "38;2;223;143;45";
@@ -92,6 +94,15 @@ fn main() {
         .first()
         .is_some_and(|argument| argument == "provider" || argument == "providers")
     {
+        if arguments.get(1).is_some_and(|argument| {
+            matches!(argument.as_str(), "add" | "use" | "remove")
+        }) {
+            if let Err(error) = profiles::run_command(&arguments[1..]) {
+                eprintln!("SecondEgo provider profile command failed: {error}");
+                std::process::exit(2);
+            }
+            return;
+        }
         if let Err(error) = run_provider_command(&arguments[1..]) {
             eprintln!("SecondEgo provider command failed: {error}");
             std::process::exit(2);
@@ -139,6 +150,13 @@ fn main() {
         return;
     }
     let script = value(&arguments, "--script");
+    if script.is_none() {
+        if let Err(error) = profiles::load_active_into_environment() {
+            restore_terminal_foreground();
+            eprintln!("SecondEgo provider profile error: {error}");
+            std::process::exit(2);
+        }
+    }
     let model_identity = if script.is_some() {
         ("scripted".to_owned(), "local fixture plan".to_owned())
     } else {
@@ -319,9 +337,11 @@ fn run_provider_command(arguments: &[String]) -> Result<(), Box<dyn std::error::
             }
             println!();
             println!("Select a provider with SECONDEGO_PROVIDER and optionally override SECONDEGO_MODEL.");
+            let _ = profiles::run_command(&["list".into()]);
             Ok(())
         }
         "test" => {
+            profiles::load_active_into_environment()?;
             let provider = ProviderKind::from_environment()?;
             let model = configured_model()?;
             let started = std::time::Instant::now();
@@ -342,13 +362,14 @@ fn run_provider_command(arguments: &[String]) -> Result<(), Box<dyn std::error::
             Ok(())
         }
         "help" => {
-            println!("Usage: secondego provider list | secondego provider test");
+            println!("Usage: secondego provider list | test | add | use | remove");
+            println!("Run 'secondego provider help' for profile command details.");
             Ok(())
         }
-        command => Err(
-            format!("unknown provider command '{command}'; use 'provider list' or 'provider test'")
-                .into(),
-        ),
+        command => Err(format!(
+            "unknown provider command '{command}'; use 'provider list', 'provider test', or 'provider help'"
+        )
+        .into()),
     }
 }
 

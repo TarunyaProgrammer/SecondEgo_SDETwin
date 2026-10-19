@@ -20,6 +20,9 @@ and is intentionally aimed at end users rather than only evaluators.
 The current authenticated loopback contract is documented in
 [docs/api/gateway-v1.md](docs/api/gateway-v1.md).
 
+Provider profile storage and terminal/desktop setup are documented in
+[docs/api/provider-profiles.md](docs/api/provider-profiles.md).
+
 ## Organizer quick start
 
 From the repository root, the standard evaluation flow is:
@@ -198,10 +201,24 @@ the operating system's `safeStorage` backend and starts the gateway with only
 the selected profile's named environment variable. If the operating system
 does not provide an encrypted backend, SecondEgo refuses to save the key.
 
-The terminal currently uses the same provider names and environment contract.
-Terminal-native keychain commands are the next migration step; until then use
-an exported variable or an ignored `.env` file and verify the resolved profile
-with `make config`.
+The terminal uses the same provider names and environment contract. On macOS,
+terminal profiles use Keychain; on Linux they use Secret Service/libsecret. The
+profile metadata is shared with the desktop app, while the secret remains in
+the native credential vault. Windows terminal profiles currently require an
+environment variable or the desktop vault because the native Credential
+Manager adapter is not implemented yet.
+
+```bash
+# Read the key without putting it in shell history.
+printf '%s\n' "$OPENAI_API_KEY" | secondego provider add openai --key-stdin --profile work --model gpt-5-mini
+secondego provider list
+secondego provider use openai --profile work
+secondego provider test
+```
+
+For automation, use an exported provider-specific variable or an ignored `.env`
+file and verify the resolved profile with `make config`. `provider test` makes a
+small authenticated request; it does not print the key or prompt contents.
 
 Run `make config` to display the resolved provider/model and whether a key is
 present. It never prints the key.

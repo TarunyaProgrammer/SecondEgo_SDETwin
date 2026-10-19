@@ -1,4 +1,5 @@
 const { app, safeStorage } = require("electron");
+const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -11,6 +12,7 @@ const KEY_ENV = {
   openrouter: "OPENROUTER_API_KEY",
   groq: "GROQ_API_KEY",
 };
+const KEYCHAIN_SERVICE = "com.secondego.provider";
 
 function assertSafeValue(value, label, max = 96) {
   if (typeof value !== "string" || !/^[a-z0-9._-]+$/i.test(value) || value.length < 1 || value.length > max) {
@@ -47,12 +49,21 @@ function writeJson(name, value) {
 }
 
 function ensureSecureStorage() {
+  if (nativeBackend()) return;
   if (!safeStorage.isEncryptionAvailable()) {
     throw new Error("The operating system credential vault is not ready; restart SecondEgo and try again.");
   }
   if (typeof safeStorage.getSelectedStorageBackend === "function" && safeStorage.getSelectedStorageBackend() === "basic_text") {
     throw new Error("SecondEgo refused an unencrypted credential backend. Enable the OS keychain and retry.");
   }
+}
+
+function nativeBackend() {
+  if (process.platform === "darwin") return "macos-keychain";
+  if (process.platform === "linux" && spawnSync("secret-tool", ["--version"], { encoding: "utf8" }).status === 0) {
+    return "linux-secret-service";
+  }
+  return null;
 }
 
 function credentialId(provider, profile) {
@@ -67,6 +78,60 @@ function readProfiles() {
   return readJson("profiles.json", { active: null, entries: {} });
 }
 
+function runNative(args, input = "") {
+  const command = process.platform === "darwin" ? "security" : "secret-tool";
+  const result = spawnSync(command, args, {
+    input,
+    encoding: "utf8",
+    timeout: 10_000,
+    maxBuffer: 64 * 1024,
+  });
+  if (result.error || result.status !== 0) throw new Error("The operating system credential vault rejected the request.");
+  return result.stdout.trim();
+}
+
+function nativeCredential(provider, profile, action, secret = "") {
+  const account = credentialId(provider, profile);
+  if (nativeBackend() === "macos-keychain") {
+    // `security` only works non-interactively when the password is the final
+    // -w argument. The value is never persisted outside Keychain, but exists
+    // briefly in the child argv while the native command runs.
+    if (action === "save") runNative(["add-generic-password", "-U", "-a", account, "-s", KEYCHAIN_SERVICE, "-w", secret]);
+    if (action === "read") return runNative(["find-generic-password", "-a", account, "-s", KEYCHAIN_SERVICE, "-w"]);
+    if (action === "delete") runNative(["delete-generic-password", "-a", account, "-s", KEYCHAIN_SERVICE]);
+    return "";
+  }
+  if (nativeBackend() === "linux-secret-service") {
+    if (action === "save") runNative(["store", "--label=SecondEgo provider key", "service", KEYCHAIN_SERVICE, "account", account], `${secret}\n`);
+    if (action === "read") return runNative(["lookup", "service", KEYCHAIN_SERVICE, "account", account]);
+    if (action === "delete") runNative(["clear", "service", KEYCHAIN_SERVICE, "account", account]);
+    return "";
+  }
+  throw new Error("Native terminal profiles require macOS Keychain or Linux Secret Service.");
+}
+
+function hasCredential(provider, profile) {
+  try {
+    if (nativeBackend()) {
+      if (nativeCredential(provider, profile, "read")) return true;
+    }
+    const encoded = readCredentials()[credentialId(provider, profile)];
+    return Boolean(encoded);
+  } catch {
+    return false;
+  }
+}
+
+function readCredential(provider, profile) {
+  if (nativeBackend()) {
+    try { return nativeCredential(provider, profile, "read"); } catch { /* migrate legacy safeStorage below */ }
+  }
+  const encoded = readCredentials()[credentialId(provider, profile)];
+  if (!encoded) throw new Error("Provider profile key is missing");
+  ensureSecureStorage();
+  return safeStorage.decryptString(Buffer.from(encoded, "base64"));
+}
+
 function saveProfile({ provider, profile, model, apiKey }) {
   provider = assertProvider(provider);
   profile = assertSafeValue(profile, "Profile name");
@@ -75,9 +140,13 @@ function saveProfile({ provider, profile, model, apiKey }) {
   }
   ensureSecureStorage();
   const id = credentialId(provider, profile);
-  const credentials = readCredentials();
-  credentials[id] = safeStorage.encryptString(apiKey.trim()).toString("base64");
-  writeJson("credentials.json", credentials);
+  if (nativeBackend()) {
+    nativeCredential(provider, profile, "save", apiKey.trim());
+  } else {
+    const credentials = readCredentials();
+    credentials[id] = safeStorage.encryptString(apiKey.trim()).toString("base64");
+    writeJson("credentials.json", credentials);
+  }
 
   const profiles = readProfiles();
   profiles.entries[id] = {
@@ -98,7 +167,7 @@ function listProfiles() {
     entries: Object.entries(profiles.entries || {}).map(([id, entry]) => ({
       ...entry,
       id,
-      keyPresent: Boolean(readCredentials()[id]),
+      keyPresent: hasCredential(entry.provider, entry.profile),
       envName: KEY_ENV[entry.provider],
     })),
   };
@@ -107,7 +176,7 @@ function listProfiles() {
 function setActiveProfile({ provider, profile }) {
   const profiles = readProfiles();
   const id = credentialId(provider, profile);
-  if (!profiles.entries[id] || !readCredentials()[id]) throw new Error("That provider profile has no saved key");
+  if (!profiles.entries[id] || !hasCredential(provider, profile)) throw new Error("That provider profile has no saved key");
   profiles.active = id;
   writeJson("profiles.json", profiles);
   return listProfiles();
@@ -115,9 +184,13 @@ function setActiveProfile({ provider, profile }) {
 
 function deleteProfile({ provider, profile }) {
   const id = credentialId(provider, profile);
-  const credentials = readCredentials();
-  delete credentials[id];
-  writeJson("credentials.json", credentials);
+  if (nativeBackend()) {
+    try { nativeCredential(provider, profile, "delete"); } catch { /* already absent */ }
+  } else {
+    const credentials = readCredentials();
+    delete credentials[id];
+    writeJson("credentials.json", credentials);
+  }
   const profiles = readProfiles();
   delete profiles.entries[id];
   if (profiles.active === id) profiles.active = Object.keys(profiles.entries)[0] || null;
@@ -129,10 +202,8 @@ function activeEnvironment() {
   const profiles = readProfiles();
   if (!profiles.active) return {};
   const entry = profiles.entries[profiles.active];
-  const encoded = readCredentials()[profiles.active];
-  if (!entry || !encoded) return {};
-  ensureSecureStorage();
-  const key = safeStorage.decryptString(Buffer.from(encoded, "base64"));
+  if (!entry || !hasCredential(entry.provider, entry.profile)) return {};
+  const key = readCredential(entry.provider, entry.profile);
   return {
     SECONDEGO_PROVIDER: entry.provider,
     ...(entry.model ? { SECONDEGO_MODEL: entry.model } : {}),
