@@ -501,6 +501,9 @@ fn run_preflight(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>>
         || env_flag("SECONDEGO_NONINTERACTIVE")
         || !io::stdin().is_terminal()
         || !io::stdout().is_terminal();
+    // Resolve the active native profile before rendering readiness. The key
+    // remains process-local and is never printed or persisted by preflight.
+    let _ = profiles::load_active_into_environment();
     let mut config = launch_config_from_environment();
     if configure && !noninteractive {
         configure_launch(&mut config)?;
@@ -518,6 +521,7 @@ fn run_launcher(_arguments: &[String]) -> Result<(), Box<dyn std::error::Error>>
     let interactive = !env_flag("SECONDEGO_NONINTERACTIVE")
         && io::stdin().is_terminal()
         && io::stdout().is_terminal();
+    profiles::load_active_into_environment()?;
     let mut config = launch_config_from_environment();
     if interactive && env::var("SECONDEGO_PROFILE").is_err() {
         select_profile(&mut config)?;
