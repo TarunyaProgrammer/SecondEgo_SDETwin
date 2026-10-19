@@ -8,7 +8,10 @@ use std::thread;
 use std::time::Duration;
 
 use secondego_core::ActionProposal;
-use secondego_model::{ConfiguredProvider, ProviderKind, ScriptedProvider, configured_model};
+use secondego_model::{
+    ConfiguredProvider, ModelProvider, ProviderContext, ProviderKind, ScriptedProvider,
+    configured_model,
+};
 use secondego_runtime::discovery::{DiscoveryLens, DiscoveryRequest, discover};
 use secondego_runtime::{
     CancellationToken, RuntimeError, RustEngine, collect_garbage, resolve_repository,
@@ -318,11 +321,34 @@ fn run_provider_command(arguments: &[String]) -> Result<(), Box<dyn std::error::
             println!("Select a provider with SECONDEGO_PROVIDER and optionally override SECONDEGO_MODEL.");
             Ok(())
         }
-        "help" => {
-            println!("Usage: secondego provider list");
+        "test" => {
+            let provider = ProviderKind::from_environment()?;
+            let model = configured_model()?;
+            let started = std::time::Instant::now();
+            let configured = ConfiguredProvider::from_environment()?.with_model(model.clone())?;
+            configured.generate(
+                "Return a submit_plan JSON object with empty arguments and rationale 'connection test'.",
+                &ProviderContext {
+                    run_id: "provider-test".into(),
+                    phase: "PLAN".into(),
+                },
+            )?;
+            println!(
+                "Provider connection verified: {} / {} ({} ms)",
+                provider.name(),
+                model,
+                started.elapsed().as_millis()
+            );
             Ok(())
         }
-        command => Err(format!("unknown provider command '{command}'; use 'provider list'").into()),
+        "help" => {
+            println!("Usage: secondego provider list | secondego provider test");
+            Ok(())
+        }
+        command => Err(
+            format!("unknown provider command '{command}'; use 'provider list' or 'provider test'")
+                .into(),
+        ),
     }
 }
 

@@ -54,9 +54,10 @@ existing Groq adapter. The CLI/Makefile recognize named credentials, preserve
 not yet the complete terminal profile system, but the Electron shell now has a
 profile manager backed by Electron `safeStorage`: only encrypted blobs and
 non-secret metadata are written to the app data directory, and only the active
-profile is decrypted into the gateway child environment. The remaining work is
-to give the terminal the same credential-store contract and add authenticated
-gateway settings/test endpoints.
+profile is decrypted into the gateway child environment. The terminal now has
+the same safe connection probe (`provider test`) as the desktop. The remaining
+work is to give the terminal persistent keychain profile commands and add a
+versioned authenticated gateway profile contract.
 
 ## 2. Target architecture
 
