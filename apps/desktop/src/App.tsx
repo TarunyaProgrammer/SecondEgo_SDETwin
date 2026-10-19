@@ -430,6 +430,20 @@ function App() {
     }
   }
 
+  async function deleteProvider(profile: ProviderProfile) {
+    if (!window.secondEgoWindow?.deleteProviderProfile || !window.confirm(`Remove ${profile.provider} / ${profile.profile}? The stored key will be deleted from the credential vault.`)) return;
+    setProviderBusy(true);
+    try {
+      const snapshot = await window.secondEgoWindow.deleteProviderProfile({ provider: profile.provider, profile: profile.profile });
+      setProviderProfiles(snapshot);
+      setProviderMessage(`${profile.provider} / ${profile.profile} was removed.`);
+    } catch (reason) {
+      setProviderMessage(reason instanceof Error ? reason.message : "Could not remove provider profile.");
+    } finally {
+      setProviderBusy(false);
+    }
+  }
+
   async function testProvider() {
     setProviderBusy(true);
     setProviderTestStatus("Testing active profile…");
@@ -542,7 +556,7 @@ function App() {
             </div>
             <button className="settings-switch provider-save" type="button" onClick={() => void saveProvider()} disabled={providerBusy}><i aria-hidden="true" />{providerBusy ? "Saving…" : "Save encrypted profile"}</button>
             <button className="settings-switch provider-test" type="button" onClick={() => void testProvider()} disabled={providerBusy || !providerProfiles.active}><i aria-hidden="true" />Test active connection</button>
-            {providerProfiles.entries.length > 0 && <div className="provider-profile-list">{providerProfiles.entries.map((profile) => <button type="button" key={profile.id} className={`provider-profile-row ${providerProfiles.active === profile.id ? "is-active" : ""}`} onClick={() => void activateProvider(profile)}><span><b>{profile.provider}</b><small>{profile.profile}{profile.model ? ` · ${profile.model}` : ""}</small></span><i>{providerProfiles.active === profile.id ? "active" : "use"}</i></button>)}</div>}
+            {providerProfiles.entries.length > 0 && <div className="provider-profile-list">{providerProfiles.entries.map((profile) => <div className={`provider-profile-row ${providerProfiles.active === profile.id ? "is-active" : ""}`} key={profile.id}><button type="button" className="provider-profile-activate" onClick={() => void activateProvider(profile)} disabled={providerBusy}><span><b>{profile.provider}</b><small>{profile.profile}{profile.model ? ` · ${profile.model}` : ""}</small></span><i>{providerProfiles.active === profile.id ? "active" : "use"}</i></button><button type="button" className="provider-profile-delete" onClick={() => void deleteProvider(profile)} disabled={providerBusy} aria-label={`Remove ${profile.provider} ${profile.profile}`}>×</button></div>)}</div>}
             {providerMessage && <p className="provider-message" role="status">{providerMessage}</p>}
             {providerTestStatus && <p className="provider-test-message" role="status">{providerTestStatus}</p>}
           </section>

@@ -169,12 +169,15 @@ body.notch-mode #root { height: 100vh; }
 .provider-test { width: 100%; justify-content: center; color: var(--muted); }
 .provider-test:disabled { cursor: wait; opacity: .65; }
 .provider-profile-list { display: grid; gap: 5px; margin-top: 10px; }
-.provider-profile-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; border: 1px solid var(--line-soft); border-radius: 7px; padding: 7px 8px; color: var(--muted); background: rgba(255, 255, 255, .025); text-align: left; }
+.provider-profile-row { display: flex; align-items: stretch; gap: 4px; width: 100%; border: 1px solid var(--line-soft); border-radius: 7px; color: var(--muted); background: rgba(255, 255, 255, .025); }
 .provider-profile-row:hover, .provider-profile-row.is-active { border-color: rgba(104, 230, 224, .45); background: rgba(104, 230, 224, .07); }
-.provider-profile-row span { display: grid; gap: 3px; min-width: 0; }
-.provider-profile-row b { color: var(--ink); font: 700 9px var(--sans); text-transform: capitalize; }
-.provider-profile-row small { overflow: hidden; color: var(--quiet); font: 8px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
-.provider-profile-row i { color: var(--cyan); font: 700 8px var(--mono); font-style: normal; text-transform: uppercase; }
+.provider-profile-activate { display: flex; min-width: 0; flex: 1; align-items: center; justify-content: space-between; gap: 8px; border: 0; padding: 7px 4px 7px 8px; color: inherit; background: transparent; text-align: left; }
+.provider-profile-activate span { display: grid; gap: 3px; min-width: 0; }
+.provider-profile-activate b { color: var(--ink); font: 700 9px var(--sans); text-transform: capitalize; }
+.provider-profile-activate small { overflow: hidden; color: var(--quiet); font: 8px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.provider-profile-activate i { color: var(--cyan); font: 700 8px var(--mono); font-style: normal; text-transform: uppercase; }
+.provider-profile-delete { display: grid; width: 24px; place-items: center; border: 0; border-left: 1px solid var(--line-soft); border-radius: 0 7px 7px 0; color: var(--quiet); background: transparent; font-size: 14px; }
+.provider-profile-delete:hover { color: var(--danger); background: rgba(255, 113, 135, .1); }
 .provider-message { color: var(--cyan) !important; }
 .provider-test-message { color: var(--success) !important; }
 .gesture-service-status.active { color: var(--success); }
