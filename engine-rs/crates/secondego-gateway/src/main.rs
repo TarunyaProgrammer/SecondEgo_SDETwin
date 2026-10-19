@@ -8,22 +8,30 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use secondego_core::EngineEvent;
-use secondego_model::{ConfiguredProvider, ModelProvider, ProviderContext, configured_model};
+use secondego_core::{EngineEvent, ExecutionState};
+use secondego_model::{
+    ConfiguredProvider, ModelProvider, ProviderContext, ProviderKind, configured_model,
+};
 use secondego_runtime::discovery::{DiscoveryLens, DiscoveryRequest, discover_with_observer};
 use secondego_runtime::{
     CancellationToken, RunReport, RuntimeError, RustEngine, collect_garbage,
     resolve_repository_with_cancellation, validate_repository_source,
     voice::{VoiceService, VoiceStatusHandle},
 };
+use secondego_storage::{RunMetadata, SQLiteRunStore};
 use uuid::Uuid;
 
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
+const API_VERSION: u32 = 1;
+
+type RunStore = Arc<Mutex<SQLiteRunStore>>;
 
 #[derive(Clone)]
 struct RunRecord {
     repository: String,
     issue: String,
+    profile_id: Option<String>,
+    provider: String,
     model: String,
     status: String,
     events: Vec<EngineEvent>,
@@ -49,6 +57,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ui_root = env::var_os("SECONDEGO_UI_DIST")
         .map(PathBuf::from)
         .filter(|path| path.is_dir());
+    let store = open_state_store()?;
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     let runs: Arc<Mutex<HashMap<Uuid, RunRecord>>> = Arc::new(Mutex::new(HashMap::new()));
     // Voice is presentation-only, but its background worker must be shared by
@@ -60,11 +69,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let runs = runs.clone();
         let ui_root = ui_root.clone();
         let voice = voice.clone();
+        let store = store.clone();
         thread::spawn(move || {
-            let _ = handle(stream, &token, &runs, ui_root.as_deref(), &voice);
+            let _ = handle(stream, &token, &runs, ui_root.as_deref(), &voice, &store);
         });
     }
     Ok(())
+}
+
+fn open_state_store() -> Result<RunStore, Box<dyn std::error::Error>> {
+    let store = match env::var_os("SECONDEGO_STATE_DB") {
+        Some(path) => {
+            let path = PathBuf::from(path);
+            if let Some(parent) = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                fs::create_dir_all(parent)?;
+            }
+            SQLiteRunStore::open(path)?
+        }
+        None => SQLiteRunStore::open_memory()?,
+    };
+    Ok(Arc::new(Mutex::new(store)))
 }
 
 fn handle(
@@ -73,6 +100,7 @@ fn handle(
     runs: &Arc<Mutex<HashMap<Uuid, RunRecord>>>,
     ui_root: Option<&Path>,
     voice: &Arc<VoiceService>,
+    store: &RunStore,
 ) -> std::io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     let request = read_request(&mut stream)?;
@@ -100,22 +128,67 @@ fn handle(
         ("GET", "/api/health") => respond(
             &mut stream,
             200,
-            serde_json::json!({"ok":true,"api_version":1,"engine":"rust"}),
+            serde_json::json!({"ok":true,"api_version":API_VERSION,"engine":"rust"}),
         ),
-        ("POST", "/api/providers/test") => test_provider(&mut stream),
-        ("POST", "/api/runs") => create_run(&mut stream, request.body, runs, voice),
+        ("POST", "/api/providers/test") => test_provider(&mut stream, request.body),
+        ("POST", "/api/runs") => create_run(&mut stream, request.body, runs, voice, store),
         ("POST", path) if path.starts_with("/api/runs/") && path.ends_with("/cancel") => {
             cancel_run(&mut stream, path, runs)
         }
-        ("GET", path) if path.starts_with("/api/runs/") => get_run(&mut stream, path, runs),
+        ("GET", path) if path.starts_with("/api/runs/") => get_run(&mut stream, path, runs, store),
         _ => respond(&mut stream, 404, serde_json::json!({"error":"not found"})),
     }
 }
 
-fn test_provider(stream: &mut TcpStream) -> std::io::Result<()> {
+fn test_provider(stream: &mut TcpStream, body: Vec<u8>) -> std::io::Result<()> {
+    let request: ProviderTestRequest = if body.is_empty() {
+        ProviderTestRequest::default()
+    } else {
+        match serde_json::from_slice(&body) {
+            Ok(value) => value,
+            Err(_) => return respond(stream, 400, serde_json::json!({"error":"invalid request"})),
+        }
+    };
+    if let Some(profile_id) = request.profile_id.as_deref() {
+        if !valid_profile_id(profile_id) {
+            return respond(
+                stream,
+                400,
+                serde_json::json!({"error":"invalid profile id"}),
+            );
+        }
+        if env::var("SECONDEGO_PROFILE_ID").ok().as_deref() != Some(profile_id) {
+            return respond(
+                stream,
+                409,
+                serde_json::json!({"error":"profile is not the active local profile"}),
+            );
+        }
+    }
     let started = std::time::Instant::now();
+    let active_provider = match ProviderKind::from_environment() {
+        Ok(provider) => provider,
+        Err(error) => {
+            return respond(
+                stream,
+                500,
+                serde_json::json!({"api_version":API_VERSION,"ok":false,"error":error.to_string()}),
+            );
+        }
+    };
+    let requested_model = request.model.clone();
     let result = ConfiguredProvider::from_environment()
-        .and_then(|provider| provider.with_model(configured_model()?))
+        .and_then(|provider| {
+            if let Some(requested_provider) = request.provider.as_deref()
+                && !requested_provider.eq_ignore_ascii_case(active_provider.name())
+            {
+                return Err(secondego_model::ProviderError::UnsupportedProvider(
+                    requested_provider.to_owned(),
+                ));
+            }
+            let model = requested_model.clone().unwrap_or(configured_model()?);
+            provider.with_model(model)
+        })
         .and_then(|provider| {
             provider.generate(
                 "Return a submit_plan JSON object with empty arguments and rationale 'connection test'.",
@@ -129,12 +202,19 @@ fn test_provider(stream: &mut TcpStream) -> std::io::Result<()> {
         Ok(_) => respond(
             stream,
             200,
-            serde_json::json!({"ok":true,"latency_ms":started.elapsed().as_millis()}),
+            serde_json::json!({
+                "api_version": API_VERSION,
+                "ok": true,
+                "latency_ms": started.elapsed().as_millis(),
+                "profile_id": request.profile_id.or_else(|| env::var("SECONDEGO_PROFILE_ID").ok()),
+                "provider": active_provider.name(),
+                "model": requested_model.unwrap_or_else(|| configured_model().unwrap_or_else(|_| "unknown".into())),
+            }),
         ),
         Err(error) => respond(
             stream,
             502,
-            serde_json::json!({"ok":false,"error":error.to_string()}),
+            serde_json::json!({"api_version":API_VERSION,"ok":false,"error":error.to_string()}),
         ),
     }
 }
@@ -172,6 +252,7 @@ fn create_run(
     body: Vec<u8>,
     runs: &Arc<Mutex<HashMap<Uuid, RunRecord>>>,
     voice: &VoiceService,
+    store: &RunStore,
 ) -> std::io::Result<()> {
     let request: StartRequest = match serde_json::from_slice(&body) {
         Ok(value) => value,
@@ -184,6 +265,24 @@ fn create_run(
         return respond(stream, 400, serde_json::json!({"error":error.to_string()}));
     }
     let is_discovery = request.mode.as_deref() == Some("discover");
+    if let Some(profile_id) = request.profile_id.as_deref()
+        && !valid_profile_id(profile_id)
+    {
+        return respond(
+            stream,
+            400,
+            serde_json::json!({"error":"profile_id contains unsupported characters"}),
+        );
+    }
+    if let Some(profile_id) = request.profile_id.as_deref()
+        && env::var("SECONDEGO_PROFILE_ID").ok().as_deref() != Some(profile_id)
+    {
+        return respond(
+            stream,
+            409,
+            serde_json::json!({"error":"profile is not the active local profile"}),
+        );
+    }
     let model = match request.model.filter(|model| !model.trim().is_empty()) {
         Some(model) => model,
         None if is_discovery => "deterministic-discovery".into(),
@@ -194,6 +293,17 @@ fn create_run(
             }
         },
     };
+    let profile_id = request
+        .profile_id
+        .clone()
+        .or_else(|| env::var("SECONDEGO_PROFILE_ID").ok());
+    let provider = if is_discovery {
+        "discovery".to_owned()
+    } else {
+        secondego_model::ProviderKind::from_environment()
+            .map(|provider| provider.name().to_owned())
+            .unwrap_or_else(|_| "unknown".into())
+    };
     let id = Uuid::new_v4();
     let cancellation = CancellationToken::default();
     let voice_status = voice.status_handle();
@@ -202,6 +312,8 @@ fn create_run(
         RunRecord {
             repository: request.repository.clone(),
             issue: request.issue.clone(),
+            profile_id: profile_id.clone(),
+            provider: provider.clone(),
             model: model.clone(),
             status: "QUEUED".into(),
             events: Vec::new(),
@@ -215,12 +327,15 @@ fn create_run(
     let record_repository = request.repository.clone();
     let record_issue = request.issue.clone();
     let record_model = model.clone();
+    let record_profile_id = profile_id.clone();
+    let record_provider = provider.clone();
     let record_mode = request.mode.clone().unwrap_or_else(|| "task".into());
     let discovery_lenses = request.lenses.clone();
     let discovery_max_findings = request.max_findings.unwrap_or(20);
     let event_runs = runs.clone();
     let run_cancellation = cancellation.clone();
     let run_voice = voice.clone();
+    let run_store = store.clone();
     thread::spawn(move || {
         let resolved =
             match resolve_repository_with_cancellation(&record_repository, Some(&run_cancellation))
@@ -281,9 +396,15 @@ fn create_run(
                 Ok(report) => RunRecord {
                     repository: resolved.root.to_string_lossy().into_owned(),
                     issue: record_issue,
+                    profile_id: record_profile_id,
+                    provider: record_provider,
                     model: record_model,
                     status: "COMPLETE".into(),
-                    events: if events.is_empty() { report.events.clone() } else { events },
+                    events: if events.is_empty() {
+                        report.events.clone()
+                    } else {
+                        events
+                    },
                     report: serde_json::to_value(report).ok(),
                     error: None,
                     cancellation: run_cancellation.clone(),
@@ -292,6 +413,8 @@ fn create_run(
                 Err(error) => RunRecord {
                     repository: record_repository,
                     issue: record_issue,
+                    profile_id: record_profile_id,
+                    provider: record_provider,
                     model: record_model,
                     status: "FAILED".into(),
                     events,
@@ -355,13 +478,30 @@ fn create_run(
                         .clone()
                         .unwrap_or_else(|| "verification failed; attempt diff was discarded".into())
                 });
+                let payload = result_payload(&report);
+                persist_snapshot(
+                    &run_store,
+                    &report.state,
+                    &report.events,
+                    &RunMetadata {
+                        profile_id: record_profile_id.clone(),
+                        workspace_id: Some(resolved.root.to_string_lossy().into_owned()),
+                        provider: Some(record_provider.clone()),
+                        model: Some(record_model.clone()),
+                        engine_version: Some(env!("CARGO_PKG_VERSION").into()),
+                    },
+                    Some(&payload),
+                    error.as_deref(),
+                );
                 RunRecord {
                     repository: resolved.root.to_string_lossy().into_owned(),
                     issue: record_issue.clone(),
+                    profile_id: record_profile_id.clone(),
+                    provider: record_provider.clone(),
                     model: record_model.clone(),
                     status: if verified { "COMPLETE" } else { "FAILED" }.into(),
                     events,
-                    report: Some(result_payload(&report)),
+                    report: Some(payload),
                     error,
                     cancellation: run_cancellation.clone(),
                     voice: voice_status.clone(),
@@ -372,6 +512,8 @@ fn create_run(
                 RunRecord {
                     repository: record_repository,
                     issue: record_issue,
+                    profile_id: record_profile_id,
+                    provider: record_provider,
                     model: record_model,
                     status: if cancelled { "CANCELLED" } else { "FAILED" }.into(),
                     events,
@@ -389,22 +531,33 @@ fn create_run(
     respond(
         stream,
         202,
-        serde_json::json!({"request_id":id,"status":"QUEUED"}),
+        serde_json::json!({"api_version":API_VERSION,"request_id":id,"status":"QUEUED"}),
     )
+}
+
+fn persist_snapshot(
+    store: &RunStore,
+    state: &ExecutionState,
+    events: &[EngineEvent],
+    metadata: &RunMetadata,
+    result: Option<&serde_json::Value>,
+    error: Option<&str>,
+) {
+    if let Ok(store) = store.lock() {
+        let _ = store.save_snapshot(state, events, metadata, result, error);
+    }
 }
 
 fn get_run(
     stream: &mut TcpStream,
     path: &str,
     runs: &Arc<Mutex<HashMap<Uuid, RunRecord>>>,
+    store: &RunStore,
 ) -> std::io::Result<()> {
     let route_path = path.split('?').next().unwrap_or(path);
     let parts: Vec<_> = route_path.trim_start_matches('/').split('/').collect();
     let Ok(id) = parts.get(2).unwrap_or(&"").parse::<Uuid>() else {
         return respond(stream, 400, serde_json::json!({"error":"invalid run id"}));
-    };
-    let Some(record) = runs.lock().unwrap().get(&id).cloned() else {
-        return respond(stream, 404, serde_json::json!({"error":"run not found"}));
     };
     let offset = path
         .split_once('?')
@@ -415,12 +568,46 @@ fn get_run(
                 .and_then(|value| value.parse::<usize>().ok())
         })
         .unwrap_or(0);
-    let events: Vec<EngineEvent> = record.events.iter().skip(offset).cloned().collect();
-    let result = record.report.clone();
+    if let Some(record) = runs.lock().unwrap().get(&id).cloned() {
+        let events: Vec<EngineEvent> = record.events.iter().skip(offset).cloned().collect();
+        return respond(
+            stream,
+            200,
+            serde_json::json!({"api_version":API_VERSION,"request_id":id,"repository":record.repository,"issue":record.issue,"profile_id":record.profile_id,"provider":record.provider,"model":record.model,"status":record.status,"events":events,"result":record.report,"error":record.error,"voice":record.voice.snapshot(id)}),
+        );
+    }
+    let stored = store
+        .lock()
+        .ok()
+        .and_then(|store| store.load(&id.to_string()).ok())
+        .flatten();
+    let Some(stored) = stored else {
+        return respond(stream, 404, serde_json::json!({"error":"run not found"}));
+    };
+    let status =
+        serde_json::to_value(stored.state.status).unwrap_or_else(|_| serde_json::json!("FAILED"));
+    let repository = stored
+        .metadata
+        .workspace_id
+        .clone()
+        .unwrap_or_else(|| stored.state.workspace.clone());
     respond(
         stream,
         200,
-        serde_json::json!({"request_id":id,"repository":record.repository,"issue":record.issue,"model":record.model,"status":record.status,"events":events,"result":result,"error":record.error,"voice":record.voice.snapshot(id)}),
+        serde_json::json!({
+            "api_version": API_VERSION,
+            "request_id": id,
+            "repository": repository,
+            "issue": stored.state.task,
+            "profile_id": stored.metadata.profile_id,
+            "provider": stored.metadata.provider,
+            "model": stored.metadata.model,
+            "status": status,
+            "events": stored.events.into_iter().skip(offset).collect::<Vec<_>>(),
+            "result": stored.result,
+            "error": stored.error,
+            "voice": serde_json::Value::Null,
+        }),
     )
 }
 
@@ -464,10 +651,26 @@ fn cancel_run(
 struct StartRequest {
     repository: String,
     issue: String,
+    profile_id: Option<String>,
     model: Option<String>,
     mode: Option<String>,
     lenses: Option<Vec<String>>,
     max_findings: Option<usize>,
+}
+
+#[derive(Default, serde::Deserialize)]
+struct ProviderTestRequest {
+    profile_id: Option<String>,
+    provider: Option<String>,
+    model: Option<String>,
+}
+
+fn valid_profile_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 192
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-' | ':')
+        })
 }
 
 fn validate_start_request(request: &StartRequest) -> Result<(), &'static str> {
@@ -608,7 +811,9 @@ fn normalized_diff(patch: &str) -> Vec<serde_json::Value> {
             continue;
         }
         let Some(hunk_index) = hunk else { continue };
-        let Some(kind) = line.as_bytes().first().copied() else { continue };
+        let Some(kind) = line.as_bytes().first().copied() else {
+            continue;
+        };
         let (kind, content) = match kind {
             b'+' if !line.starts_with("+++") => ("add", &line[1..]),
             b'-' if !line.starts_with("---") => ("delete", &line[1..]),

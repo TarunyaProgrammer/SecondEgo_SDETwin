@@ -324,13 +324,14 @@ function App() {
           repository,
           issue: mode === "discover" ? "Discover repository issues" : issue,
           mode,
+          profile_id: mode === "discover" ? undefined : providerProfiles.active,
           lenses: mode === "discover" ? selectedLenses : undefined,
           max_findings: 20,
         }),
       });
       const payload = (await response.json()) as { request_id?: string; status?: string; error?: string };
       if (!response.ok || !payload.request_id) throw new Error(payload.error || "Could not start the run.");
-      setRun({ request_id: payload.request_id, repository, issue: mode === "discover" ? "Discover repository issues" : issue, model: "", mode, status: payload.status || "QUEUED", events: [], result: null, error: null });
+      setRun({ api_version: 1, request_id: payload.request_id, repository, issue: mode === "discover" ? "Discover repository issues" : issue, profile_id: providerProfiles.active, model: "", mode, status: payload.status || "QUEUED", events: [], result: null, error: null });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not start the run.");
       setBusy(false);
@@ -364,14 +365,14 @@ function App() {
     setProviderBusy(true);
     setProviderMessage("");
     try {
-      await window.secondEgoWindow.saveProviderProfile({
+      const saved = await window.secondEgoWindow.saveProviderProfile({
         provider: providerChoice,
         profile: profileName.trim() || "default",
         model: profileModel.trim() || undefined,
         apiKey,
       });
       if (providerKeyRef.current) providerKeyRef.current.value = "";
-      const snapshot = await window.secondEgoWindow.listProviderProfiles?.();
+      const snapshot = await window.secondEgoWindow.setActiveProviderProfile?.({ provider: saved.provider, profile: saved.profile });
       if (snapshot) setProviderProfiles(snapshot);
       setProviderMessage("Saved securely and selected for the next run.");
     } catch (reason) {
@@ -402,10 +403,10 @@ function App() {
     setProviderBusy(true);
     setProviderTestStatus("Testing active profile…");
     try {
-      const response = await fetch(`${api}/api/providers/test`, { method: "POST", headers: { "X-SecondEgo-Token": token } });
-      const payload = (await response.json()) as { ok?: boolean; latency_ms?: number; error?: string };
+      const response = await fetch(`${api}/api/providers/test`, { method: "POST", headers: { "Content-Type": "application/json", "X-SecondEgo-Token": token }, body: JSON.stringify({ profile_id: providerProfiles.active, provider: providerChoice, model: profileModel.trim() || undefined }) });
+      const payload = (await response.json()) as { ok?: boolean; latency_ms?: number; provider?: string; model?: string; error?: string };
       if (!response.ok || !payload.ok) throw new Error(payload.error || "Provider test failed.");
-      setProviderTestStatus(`Connection verified${typeof payload.latency_ms === "number" ? ` · ${payload.latency_ms} ms` : ""}.`);
+      setProviderTestStatus(`Connection verified${payload.provider ? ` · ${payload.provider}` : ""}${payload.model ? ` / ${payload.model}` : ""}${typeof payload.latency_ms === "number" ? ` · ${payload.latency_ms} ms` : ""}.`);
     } catch (reason) {
       setProviderTestStatus(reason instanceof Error ? reason.message : "Provider test failed.");
     } finally {

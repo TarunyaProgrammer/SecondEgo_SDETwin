@@ -272,6 +272,7 @@ pub fn load_active_into_environment() -> Result<bool, ProfileError> {
         return Ok(false);
     }
     unsafe {
+        env::set_var("SECONDEGO_PROFILE_ID", profile_id(kind, &entry.profile));
         env::set_var("SECONDEGO_PROVIDER", kind.name());
         if let Some(model) = entry.model.as_deref().filter(|model| !model.is_empty()) {
             env::set_var("SECONDEGO_MODEL", model);

@@ -94,9 +94,10 @@ fn main() {
         .first()
         .is_some_and(|argument| argument == "provider" || argument == "providers")
     {
-        if arguments.get(1).is_some_and(|argument| {
-            matches!(argument.as_str(), "add" | "use" | "remove")
-        }) {
+        if arguments
+            .get(1)
+            .is_some_and(|argument| matches!(argument.as_str(), "add" | "use" | "remove"))
+        {
             if let Err(error) = profiles::run_command(&arguments[1..]) {
                 eprintln!("SecondEgo provider profile command failed: {error}");
                 std::process::exit(2);
@@ -282,7 +283,9 @@ fn print_help() {
     println!("  secondego --interactive                 Run the verified task-fixing harness");
     println!("  secondego --workspace PATH --task TEXT   Run a non-interactive task");
     println!("  secondego discover --repo PATH           Scan a repository without modifying it");
-    println!("  secondego provider list                  Show supported providers and safe key status");
+    println!(
+        "  secondego provider list                  Show supported providers and safe key status"
+    );
     println!("  secondego help                           Show this command guide");
     println!();
     println!("DISCOVERY SHOWCASE");
@@ -950,7 +953,8 @@ fn model_api_key_present(credentials: &RuntimeCredentials) -> bool {
         ProviderKind::OpenRouter => credentials.openrouter_api_key.as_ref(),
         ProviderKind::Groq => credentials.groq_api_key.as_ref(),
     };
-    value.or(credentials.ai_api_key.as_ref())
+    value
+        .or(credentials.ai_api_key.as_ref())
         .is_some_and(|key| !key.trim().is_empty())
 }
 
@@ -1028,7 +1032,14 @@ fn run_scripted(
         engine = engine.with_event_sink(print_live_event);
     }
     let report = engine.run(task, &workspace)?;
-    emit_report(report, events, state_db, interactive, Some(&voice), &workspace)
+    emit_report(
+        report,
+        events,
+        state_db,
+        interactive,
+        Some(&voice),
+        &workspace,
+    )
 }
 
 fn run_configured(
@@ -1047,7 +1058,14 @@ fn run_configured(
         engine = engine.with_event_sink(print_live_event);
     }
     let report = engine.run(task, &workspace)?;
-    emit_report(report, events, state_db, interactive, Some(&voice), &workspace)
+    emit_report(
+        report,
+        events,
+        state_db,
+        interactive,
+        Some(&voice),
+        &workspace,
+    )
 }
 
 fn emit_report(
@@ -1064,7 +1082,20 @@ fn emit_report(
         }
     }
     if let Some(path) = state_db {
-        secondego_storage::SQLiteRunStore::open(path)?.save(&report.state, &report.events)?;
+        let metadata = secondego_storage::RunMetadata {
+            profile_id: env::var("SECONDEGO_PROFILE_ID").ok(),
+            workspace_id: Some(workspace.to_string_lossy().into_owned()),
+            provider: ProviderKind::from_environment()
+                .ok()
+                .map(|provider| provider.name().into()),
+            model: configured_model().ok(),
+            engine_version: Some(env!("CARGO_PKG_VERSION").into()),
+        };
+        secondego_storage::SQLiteRunStore::open(path)?.save_with_metadata(
+            &report.state,
+            &report.events,
+            &metadata,
+        )?;
     }
     let patch_path = if let Some(ref patch) = report.patch {
         if !patch.is_empty() {
@@ -1605,7 +1636,10 @@ fn print_result_card(
         println!("  {}", paint(PEACH, "Target Repository Location:"));
         println!("  {} file://{}", paint(MUTED, "•"), workspace.display());
         if report.diff_transferred {
-            println!("  {} Inspect diff in target repo directly:", paint(MUTED, "→"));
+            println!(
+                "  {} Inspect diff in target repo directly:",
+                paint(MUTED, "→")
+            );
             println!("    git -C \"{}\" diff", workspace.display());
         }
     }
@@ -1642,7 +1676,10 @@ fn print_error_card(error: &dyn std::error::Error, workspace: &Path) {
         "{}",
         paint(
             color,
-            &format!("│  status     {:<58}│", "isolated worktree discarded cleanly")
+            &format!(
+                "│  status     {:<58}│",
+                "isolated worktree discarded cleanly"
+            )
         )
     );
     let error_str = error.to_string();

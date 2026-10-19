@@ -38,12 +38,12 @@ The current source of truth is in `engine-rs/crates/secondego-runtime`. The Pyth
 ### Current production gaps
 
 1. The provider registry and five required adapters exist, but Gemini/OpenAI/Anthropic/OpenRouter/DeepSeek need live cross-platform contract tests against current provider accounts and model availability.
-2. Credentials support multiple named profiles in the desktop and macOS/Linux terminal paths. Windows terminal support, vault migration UX, rotation, and a versioned gateway profile contract remain.
-3. The desktop gateway is an observer API, not yet the complete versioned product API. Replay metadata, workspace ownership, and durable profile/workspace operations remain.
+2. Credentials support multiple named profiles in the desktop and macOS/Linux terminal paths. Windows terminal support, vault migration UX, and rotation remain.
+3. The gateway now has a versioned, authenticated metadata contract for profile/provider/model identity, but it is still an observer API. Replay metadata, workspace ownership, and durable profile/workspace operations remain.
 4. The Electron shell has provider setup and diff review foundations, but still needs release-grade update UX, recovery flows, accessibility hardening, and a fuller workspace information architecture.
 5. Packaging has an unsigned DMG candidate pipeline. Signed/notarized artifacts, checksums, update channels, and a supported installer contract remain gated on release credentials and CI validation.
 6. The terminal path now has documented native profiles and safe probes, but still needs a stable machine-readable command schema, richer TUI, shell completion, and cross-platform smoke tests.
-7. SQLite stores useful evidence but is not yet a migration-managed replay database with configuration snapshots, provider/model metadata, workspace ownership, and retention policies.
+7. The gateway now persists terminal task snapshots through migration-managed SQLite with provider/profile/workspace metadata. Workspace ownership, replay retention, active-run recovery, and multi-user tenancy remain.
 
 ### Increment delivered in this repository
 
@@ -54,9 +54,11 @@ existing Groq adapter. The CLI/Makefile recognize named credentials, preserve
 Electron shell has a profile manager backed by the OS credential vault, and the
 terminal has native profile commands backed by macOS Keychain or Linux Secret
 Service. Both surfaces share non-secret profile metadata and the same safe
-connection probe (`provider test`). The remaining work is to add a versioned
-authenticated gateway profile contract, finish Windows Credential Manager
-support, and replace the current environment injection with a short-lived
+connection probe (`provider test`). The gateway now carries a versioned,
+authenticated profile/provider/model metadata contract without accepting or
+returning secrets, and terminal snapshots now use versioned SQLite migrations.
+The remaining work is to finish Windows Credential Manager support and replace
+the current environment injection with a short-lived
 credential handle or in-process provider session where possible.
 
 ## 2. Target architecture

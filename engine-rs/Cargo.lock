@@ -1001,6 +1001,7 @@ dependencies = [
  "secondego-core",
  "secondego-model",
  "secondego-runtime",
+ "secondego-storage",
  "secondego-verification",
  "serde",
  "serde_json",

@@ -412,6 +412,7 @@ function startGateway() {
     PYTHONPATH: [path.join(repoRoot, "src"), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
     SECONDEGO_UI_TOKEN: token,
     SECONDEGO_GATEWAY_PORT: String(gatewayPort),
+    SECONDEGO_STATE_DB: path.join(app.getPath("userData"), "runs.sqlite"),
   };
   // Never pass unrelated provider keys into the gateway. A selected profile is
   // the only credential source for the desktop process; environment variables

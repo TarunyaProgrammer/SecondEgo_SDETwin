@@ -72,9 +72,12 @@ export type DiscoveryFinding = {
 };
 
 export type RunView = {
+  api_version?: number;
   request_id: string;
   repository: string;
   issue: string;
+  profile_id?: string | null;
+  provider?: string;
   model: string;
   mode?: "task" | "discover";
   status: string;

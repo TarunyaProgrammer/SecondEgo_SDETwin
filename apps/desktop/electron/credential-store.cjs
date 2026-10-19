@@ -205,6 +205,7 @@ function activeEnvironment() {
   if (!entry || !hasCredential(entry.provider, entry.profile)) return {};
   const key = readCredential(entry.provider, entry.profile);
   return {
+    SECONDEGO_PROFILE_ID: profiles.active,
     SECONDEGO_PROVIDER: entry.provider,
     ...(entry.model ? { SECONDEGO_MODEL: entry.model } : {}),
     [KEY_ENV[entry.provider]]: key,

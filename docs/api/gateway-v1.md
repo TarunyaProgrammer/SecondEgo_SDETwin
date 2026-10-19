@@ -5,6 +5,12 @@ not a public service: it binds to `127.0.0.1`, requires the per-launch
 `X-SecondEgo-Token` header, and must not be exposed through a proxy or LAN
 listener without a separate authentication design.
 
+The desktop sets `SECONDEGO_STATE_DB` to an app-data SQLite file. Active runs
+are held in memory for low-latency polling, while terminal task snapshots,
+events, normalized results, and redacted profile/provider/model metadata are
+written through migration-managed storage. If the gateway restarts, completed
+runs remain readable; cancellation of an active run is inherently process-local.
+
 ## Common rules
 
 - `Content-Type: application/json` is required for request bodies.
@@ -14,6 +20,9 @@ listener without a separate authentication design.
   prompts, and keys are not returned.
 - Engine events use `schema_version: 1`.
 - Diff payloads use `format: "git-unified-v1"` and are bounded by the gateway.
+- Responses that cross the desktop boundary include `api_version: 1`.
+- Profile identity is metadata only. `profile_id`, provider, and model may be
+  echoed in run/test responses; API keys never enter this contract.
 
 ## Health
 
@@ -31,13 +40,18 @@ X-SecondEgo-Token: <launch token>
 ```http
 POST /api/providers/test
 X-SecondEgo-Token: <launch token>
+Content-Type: application/json
+
+{"profile_id":"openai:work","provider":"openai","model":"gpt-5-mini"}
 ```
 
-The body is empty. The gateway sends a fixed structured-output probe through
-the selected provider and returns only safe status data:
+The body may be empty for compatibility. When supplied, the profile id is
+validated as metadata and the provider/model must match the active local
+configuration. The gateway sends a fixed structured-output probe through the
+selected provider and returns only safe status data:
 
 ```json
-{"ok":true,"latency_ms":842}
+{"api_version":1,"ok":true,"latency_ms":842,"profile_id":"openai:work","provider":"openai","model":"gpt-5-mini"}
 ```
 
 Failures return `502` with a bounded classified error string. This endpoint is
@@ -56,7 +70,7 @@ Content-Type: application/json
 The response is asynchronous:
 
 ```json
-{"request_id":"<uuid>","status":"QUEUED"}
+{"api_version":1,"request_id":"<uuid>","status":"QUEUED"}
 ```
 
 `mode: "discover"` starts a read-only repository scan. Discovery accepts
@@ -69,12 +83,13 @@ GET /api/runs/<uuid>?offset=0
 X-SecondEgo-Token: <launch token>
 ```
 
-The response includes the next event slice, current status, safe error data,
-and a result after termination. A completed result contains normalized diff
-data:
+The response includes the next event slice, profile/provider/model metadata,
+current status, safe error data, and a result after termination. A completed
+result contains normalized diff data:
 
 ```json
 {
+  "api_version":1,
   "changed_paths":["src/pagination.py"],
   "diff_transferred":true,
   "diff":{
@@ -106,6 +121,13 @@ X-SecondEgo-Token: <launch token>
 
 Cancellation is cooperative. The terminal result must be `CANCELLED` or a
 safe terminal failure; partial worktree changes are not transferred.
+
+## Persistence and migrations
+
+The storage crate maintains a `schema_migrations` ledger. Versions currently
+cover the legacy run/event tables, provider/profile/workspace metadata, and
+terminal result/error snapshots. Older databases are upgraded in place without
+rewriting existing event payloads.
 
 ## Next version boundary
 
