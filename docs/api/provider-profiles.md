@@ -70,6 +70,10 @@ provider, model, duration, or a classified failure. It does not print the key,
 request body, response body, or raw provider error text.
 
 `provider models` performs authenticated model discovery for the active profile.
+The catalog prefers provider capability metadata and removes known embedding,
+image, audio, moderation, and reranking-only entries. A custom model override
+is still allowed because provider catalogs can lag newly released ids; `Test
+connection` remains the authoritative validation step.
 `provider list --json`, `provider models --json`, and `provider test --json` emit
 schema-versioned, machine-readable output for CI and shell integrations. They
 contain provider ids, model ids, profile ids, and safe status values only.

@@ -1165,6 +1165,9 @@ fn parse_model_catalog(
         {
             continue;
         }
+        if !is_likely_text_generation_model(provider, value, id) {
+            continue;
+        }
         let display_name = value
             .get("displayName")
             .or_else(|| value.get("display_name"))
@@ -1182,6 +1185,37 @@ fn parse_model_catalog(
         return Err(ProviderError::InvalidResponse);
     }
     Ok(models)
+}
+
+fn is_likely_text_generation_model(
+    provider: ProviderKind,
+    value: &Value,
+    id: &str,
+) -> bool {
+    if provider == ProviderKind::OpenRouter {
+        if let Some(modalities) = value
+            .pointer("/architecture/output_modalities")
+            .and_then(Value::as_array)
+        {
+            return modalities.iter().any(|modality| modality.as_str() == Some("text"));
+        }
+    }
+    let normalized = id.to_ascii_lowercase();
+    ![
+        "embedding",
+        "moderation",
+        "dall-e",
+        "image",
+        "text-to-speech",
+        "tts",
+        "whisper",
+        "transcrib",
+        "rerank",
+        "video",
+        "veo-",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
 }
 
 fn post_json_with_headers(
@@ -1850,6 +1884,31 @@ mod tests {
         let models = parse_model_catalog(ProviderKind::Gemini, &payload).unwrap();
         assert_eq!(models[0].id, "gemini-3.8-flash");
         assert_eq!(models[0].display_name.as_deref(), Some("Gemini 3.8 Flash"));
+    }
+
+    #[test]
+    fn model_catalog_filters_non_generation_openai_compatible_models() {
+        let payload = serde_json::json!({
+            "data": [
+                {"id": "text-embedding-3-small"},
+                {"id": "gpt-5-mini"},
+                {"id": "gpt-image-1"}
+            ]
+        });
+        let models = parse_model_catalog(ProviderKind::OpenAI, &payload).unwrap();
+        assert_eq!(models.iter().map(|model| model.id.as_str()).collect::<Vec<_>>(), ["gpt-5-mini"]);
+    }
+
+    #[test]
+    fn model_catalog_uses_openrouter_output_modalities_when_present() {
+        let payload = serde_json::json!({
+            "data": [
+                {"id": "vendor/image-model", "architecture": {"output_modalities": ["image"]}},
+                {"id": "vendor/text-model", "architecture": {"output_modalities": ["text"]}}
+            ]
+        });
+        let models = parse_model_catalog(ProviderKind::OpenRouter, &payload).unwrap();
+        assert_eq!(models.iter().map(|model| model.id.as_str()).collect::<Vec<_>>(), ["vendor/text-model"]);
     }
 
     #[test]
