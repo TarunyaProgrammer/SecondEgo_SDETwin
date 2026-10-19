@@ -16,6 +16,13 @@ use serde_json::Value;
 const DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com";
 const DEEPSEEK_DEFAULT_MODEL: &str = "deepseek-flash";
 const GEMINI_DEFAULT_MODEL: &str = "gemini-3.8-flash";
+const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+const OPENAI_DEFAULT_MODEL: &str = "gpt-5-mini";
+const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com/v1";
+const ANTHROPIC_DEFAULT_MODEL: &str = "claude-sonnet-4-6";
+const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
+const OPENROUTER_DEFAULT_MODEL: &str = "openai/gpt-5-mini";
+const ANTHROPIC_API_VERSION: &str = "2023-06-01";
 const GROQ_BASE_URL: &str = "https://api.groq.com/openai/v1";
 const GROQ_DEFAULT_MODEL: &str = "qwen/qwen3.8-27b";
 const GROQ_MAX_COMPLETION_TOKENS: u32 = 4_096;
@@ -67,7 +74,7 @@ impl std::fmt::Display for ProviderError {
             ),
             Self::UnsupportedProvider(provider) => write!(
                 formatter,
-                "unsupported model provider: {provider}; use deepseek, gemini, or groq"
+                "unsupported model provider: {provider}; use deepseek, gemini, openai, anthropic, openrouter, or groq"
             ),
             Self::Authentication { provider, status } => write!(
                 formatter,
@@ -152,6 +159,9 @@ impl ProviderError {
 pub enum ProviderKind {
     DeepSeek,
     Gemini,
+    OpenAI,
+    Anthropic,
+    OpenRouter,
     Groq,
 }
 
@@ -165,8 +175,18 @@ impl ProviderKind {
                 let model = model.trim().to_ascii_lowercase();
                 if model.starts_with("gemini-") {
                     "gemini".into()
+                } else if model.starts_with("claude-") || model.starts_with("anthropic/") {
+                    "anthropic".into()
                 } else if is_known_groq_model(&model) {
                     "groq".into()
+                } else if model.contains('/') {
+                    "openrouter".into()
+                } else if model.starts_with("gpt-")
+                    || model.starts_with("o1")
+                    || model.starts_with("o3")
+                    || model.starts_with("o4")
+                {
+                    "openai".into()
                 } else {
                     "deepseek".into()
                 }
@@ -174,6 +194,9 @@ impl ProviderKind {
         match value.trim().to_ascii_lowercase().as_str() {
             "" | "deepseek" => Ok(Self::DeepSeek),
             "gemini" => Ok(Self::Gemini),
+            "openai" => Ok(Self::OpenAI),
+            "anthropic" => Ok(Self::Anthropic),
+            "openrouter" => Ok(Self::OpenRouter),
             "groq" => Ok(Self::Groq),
             unsupported => Err(ProviderError::UnsupportedProvider(unsupported.into())),
         }
@@ -183,6 +206,9 @@ impl ProviderKind {
         match self {
             Self::DeepSeek => DEEPSEEK_DEFAULT_MODEL,
             Self::Gemini => GEMINI_DEFAULT_MODEL,
+            Self::OpenAI => OPENAI_DEFAULT_MODEL,
+            Self::Anthropic => ANTHROPIC_DEFAULT_MODEL,
+            Self::OpenRouter => OPENROUTER_DEFAULT_MODEL,
             Self::Groq => GROQ_DEFAULT_MODEL,
         }
     }
@@ -191,8 +217,33 @@ impl ProviderKind {
         match self {
             Self::DeepSeek => "deepseek",
             Self::Gemini => "gemini",
+            Self::OpenAI => "openai",
+            Self::Anthropic => "anthropic",
+            Self::OpenRouter => "openrouter",
             Self::Groq => "groq",
         }
+    }
+
+    pub const fn credential_env_name(self) -> &'static str {
+        match self {
+            Self::DeepSeek => "DEEPSEEK_API_KEY",
+            Self::Gemini => "GEMINI_API_KEY",
+            Self::OpenAI => "OPENAI_API_KEY",
+            Self::Anthropic => "ANTHROPIC_API_KEY",
+            Self::OpenRouter => "OPENROUTER_API_KEY",
+            Self::Groq => "GROQ_API_KEY",
+        }
+    }
+
+    pub const fn all() -> [Self; 6] {
+        [
+            Self::DeepSeek,
+            Self::Gemini,
+            Self::OpenAI,
+            Self::Anthropic,
+            Self::OpenRouter,
+            Self::Groq,
+        ]
     }
 }
 
@@ -210,13 +261,49 @@ fn validate_model_for_provider(provider: ProviderKind, model: &str) -> Result<()
     let normalized = model.trim().to_ascii_lowercase();
     let mismatch = match provider {
         ProviderKind::DeepSeek => {
-            normalized.starts_with("gemini-") || is_known_groq_model(&normalized)
+            normalized.starts_with("gemini-")
+                || normalized.starts_with("claude-")
+                || normalized.starts_with("gpt-")
+                || normalized.starts_with("o1")
+                || normalized.starts_with("o3")
+                || normalized.starts_with("o4")
+                || is_known_groq_model(&normalized)
         }
         ProviderKind::Gemini => {
-            normalized.starts_with("deepseek-") || is_known_groq_model(&normalized)
+            normalized.starts_with("deepseek-")
+                || normalized.starts_with("claude-")
+                || normalized.starts_with("gpt-")
+                || normalized.starts_with("o1")
+                || normalized.starts_with("o3")
+                || normalized.starts_with("o4")
+                || is_known_groq_model(&normalized)
         }
+        ProviderKind::OpenAI => {
+            normalized.starts_with("deepseek-")
+                || normalized.starts_with("gemini-")
+                || normalized.starts_with("claude-")
+                || normalized.contains('/')
+                || is_known_groq_model(&normalized)
+        }
+        ProviderKind::Anthropic => {
+            normalized.starts_with("deepseek-")
+                || normalized.starts_with("gemini-")
+                || normalized.starts_with("gpt-")
+                || normalized.starts_with("o1")
+                || normalized.starts_with("o3")
+                || normalized.starts_with("o4")
+                || normalized.contains('/')
+                || is_known_groq_model(&normalized)
+        }
+        ProviderKind::OpenRouter => false,
         ProviderKind::Groq => {
-            normalized.starts_with("deepseek-") || normalized.starts_with("gemini-")
+            normalized.starts_with("deepseek-")
+                || normalized.starts_with("gemini-")
+                || normalized.starts_with("claude-")
+                || normalized.starts_with("gpt-")
+                || normalized.starts_with("o1")
+                || normalized.starts_with("o3")
+                || normalized.starts_with("o4")
         }
     };
     if mismatch {
@@ -358,7 +445,7 @@ impl ModelProvider for DeepSeekProvider {
         prompt: &str,
         _context: &ProviderContext,
     ) -> Result<ModelResponse, ProviderError> {
-        let key = resolve_api_key(&self.api_key, None, true)?;
+        let key = resolve_api_key(&self.api_key, Some("DEEPSEEK_API_KEY"), true)?;
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
         let response = post_json(
             "DeepSeek",
@@ -403,7 +490,7 @@ impl ModelProvider for GeminiProvider {
         prompt: &str,
         _context: &ProviderContext,
     ) -> Result<ModelResponse, ProviderError> {
-        let api_key = resolve_api_key(&self.api_key, None, true)?;
+        let api_key = resolve_api_key(&self.api_key, Some("GEMINI_API_KEY"), true)?;
         let url = gemini_endpoint(&self.model);
         let request = gemini_request(prompt);
         let client = Client::builder()
@@ -435,6 +522,162 @@ impl ModelProvider for GeminiProvider {
             proposal,
             gemini_usage(&payload),
             rate_limit,
+        ))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct OpenAIProvider {
+    pub model: String,
+    pub api_key: Option<String>,
+    pub base_url: String,
+    pub timeout: Duration,
+}
+
+impl Default for OpenAIProvider {
+    fn default() -> Self {
+        Self {
+            model: std::env::var("SECONDEGO_MODEL")
+                .ok()
+                .filter(|model| !model.trim().is_empty())
+                .unwrap_or_else(|| OPENAI_DEFAULT_MODEL.into()),
+            api_key: None,
+            base_url: std::env::var("SECONDEGO_OPENAI_BASE_URL")
+                .unwrap_or_else(|_| OPENAI_BASE_URL.into()),
+            timeout: Duration::from_secs(60),
+        }
+    }
+}
+
+impl ModelProvider for OpenAIProvider {
+    fn generate(
+        &self,
+        prompt: &str,
+        _context: &ProviderContext,
+    ) -> Result<ModelResponse, ProviderError> {
+        let key = resolve_api_key(&self.api_key, Some("OPENAI_API_KEY"), true)?;
+        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+        let response = post_json(
+            "OpenAI",
+            &url,
+            &key,
+            openai_request(&self.model, prompt),
+            self.timeout,
+            Some(&self.model),
+        )?;
+        let proposal = parse_openai_content(&response.payload).and_then(parse_action)?;
+        Ok(ModelResponse::new(
+            proposal,
+            openai_usage(&response.payload),
+            response.rate_limit,
+        ))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct OpenRouterProvider {
+    pub model: String,
+    pub api_key: Option<String>,
+    pub base_url: String,
+    pub timeout: Duration,
+}
+
+impl Default for OpenRouterProvider {
+    fn default() -> Self {
+        Self {
+            model: std::env::var("SECONDEGO_MODEL")
+                .ok()
+                .filter(|model| !model.trim().is_empty())
+                .unwrap_or_else(|| OPENROUTER_DEFAULT_MODEL.into()),
+            api_key: None,
+            base_url: std::env::var("SECONDEGO_OPENROUTER_BASE_URL")
+                .unwrap_or_else(|_| OPENROUTER_BASE_URL.into()),
+            timeout: Duration::from_secs(60),
+        }
+    }
+}
+
+impl ModelProvider for OpenRouterProvider {
+    fn generate(
+        &self,
+        prompt: &str,
+        _context: &ProviderContext,
+    ) -> Result<ModelResponse, ProviderError> {
+        let key = resolve_api_key(&self.api_key, Some("OPENROUTER_API_KEY"), true)?;
+        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+        let response = post_json_with_headers(
+            "OpenRouter",
+            &url,
+            &key,
+            openai_request(&self.model, prompt),
+            self.timeout,
+            Some(&self.model),
+            openrouter_headers(),
+        )?;
+        let proposal = parse_openai_content(&response.payload).and_then(parse_action)?;
+        Ok(ModelResponse::new(
+            proposal,
+            openai_usage(&response.payload),
+            response.rate_limit,
+        ))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AnthropicProvider {
+    pub model: String,
+    pub api_key: Option<String>,
+    pub base_url: String,
+    pub timeout: Duration,
+}
+
+impl Default for AnthropicProvider {
+    fn default() -> Self {
+        Self {
+            model: std::env::var("SECONDEGO_MODEL")
+                .ok()
+                .filter(|model| !model.trim().is_empty())
+                .unwrap_or_else(|| ANTHROPIC_DEFAULT_MODEL.into()),
+            api_key: None,
+            base_url: std::env::var("SECONDEGO_ANTHROPIC_BASE_URL")
+                .unwrap_or_else(|_| ANTHROPIC_BASE_URL.into()),
+            timeout: Duration::from_secs(60),
+        }
+    }
+}
+
+impl ModelProvider for AnthropicProvider {
+    fn generate(
+        &self,
+        prompt: &str,
+        _context: &ProviderContext,
+    ) -> Result<ModelResponse, ProviderError> {
+        let key = resolve_api_key(&self.api_key, Some("ANTHROPIC_API_KEY"), true)?;
+        let url = format!("{}/messages", self.base_url.trim_end_matches('/'));
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-api-key",
+            reqwest::header::HeaderValue::from_str(&key)
+                .map_err(|_| ProviderError::MissingApiKey)?,
+        );
+        headers.insert(
+            "anthropic-version",
+            reqwest::header::HeaderValue::from_static(ANTHROPIC_API_VERSION),
+        );
+        let response = post_json_with_headers(
+            "Anthropic",
+            &url,
+            &key,
+            anthropic_request(&self.model, prompt),
+            self.timeout,
+            Some(&self.model),
+            headers,
+        )?;
+        let proposal = parse_action(&parse_anthropic_content(&response.payload)?)?;
+        Ok(ModelResponse::new(
+            proposal,
+            anthropic_usage(&response.payload),
+            response.rate_limit,
         ))
     }
 }
@@ -578,10 +821,30 @@ fn parse_gemini_content(payload: &Value) -> Result<String, ProviderError> {
     }
 }
 
+fn parse_anthropic_content(payload: &Value) -> Result<String, ProviderError> {
+    let blocks = payload
+        .get("content")
+        .and_then(Value::as_array)
+        .ok_or(ProviderError::InvalidResponse)?;
+    let text = blocks
+        .iter()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+        .filter_map(|block| block.get("text").and_then(Value::as_str))
+        .collect::<String>();
+    if text.trim().is_empty() {
+        Err(ProviderError::InvalidResponse)
+    } else {
+        Ok(text)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ConfiguredProvider {
     DeepSeek(DeepSeekProvider),
     Gemini(GeminiProvider),
+    OpenAI(OpenAIProvider),
+    Anthropic(AnthropicProvider),
+    OpenRouter(OpenRouterProvider),
     Groq(GroqProvider),
 }
 
@@ -602,6 +865,18 @@ impl ConfiguredProvider {
                 model,
                 ..GeminiProvider::default()
             }),
+            ProviderKind::OpenAI => Self::OpenAI(OpenAIProvider {
+                model,
+                ..OpenAIProvider::default()
+            }),
+            ProviderKind::Anthropic => Self::Anthropic(AnthropicProvider {
+                model,
+                ..AnthropicProvider::default()
+            }),
+            ProviderKind::OpenRouter => Self::OpenRouter(OpenRouterProvider {
+                model,
+                ..OpenRouterProvider::default()
+            }),
             ProviderKind::Groq => Self::Groq(GroqProvider {
                 model,
                 ..GroqProvider::default()
@@ -613,12 +888,18 @@ impl ConfiguredProvider {
         let kind = match &self {
             Self::DeepSeek(_) => ProviderKind::DeepSeek,
             Self::Gemini(_) => ProviderKind::Gemini,
+            Self::OpenAI(_) => ProviderKind::OpenAI,
+            Self::Anthropic(_) => ProviderKind::Anthropic,
+            Self::OpenRouter(_) => ProviderKind::OpenRouter,
             Self::Groq(_) => ProviderKind::Groq,
         };
         validate_model_for_provider(kind, &model)?;
         match &mut self {
             Self::DeepSeek(provider) => provider.model = model,
             Self::Gemini(provider) => provider.model = model,
+            Self::OpenAI(provider) => provider.model = model,
+            Self::Anthropic(provider) => provider.model = model,
+            Self::OpenRouter(provider) => provider.model = model,
             Self::Groq(provider) => provider.model = model,
         }
         Ok(self)
@@ -634,6 +915,9 @@ impl ModelProvider for ConfiguredProvider {
         match self {
             Self::DeepSeek(provider) => provider.generate(prompt, context),
             Self::Gemini(provider) => provider.generate(prompt, context),
+            Self::OpenAI(provider) => provider.generate(prompt, context),
+            Self::Anthropic(provider) => provider.generate(prompt, context),
+            Self::OpenRouter(provider) => provider.generate(prompt, context),
             Self::Groq(provider) => provider.generate(prompt, context),
         }
     }
@@ -642,6 +926,9 @@ impl ModelProvider for ConfiguredProvider {
         match self {
             Self::DeepSeek(provider) => provider.estimate_tokens(text),
             Self::Gemini(provider) => provider.estimate_tokens(text),
+            Self::OpenAI(provider) => provider.estimate_tokens(text),
+            Self::Anthropic(provider) => provider.estimate_tokens(text),
+            Self::OpenRouter(provider) => provider.estimate_tokens(text),
             Self::Groq(provider) => provider.estimate_tokens(text),
         }
     }
@@ -650,6 +937,9 @@ impl ModelProvider for ConfiguredProvider {
         match self {
             Self::DeepSeek(provider) => provider.planning_prompt_token_limit(),
             Self::Gemini(provider) => provider.planning_prompt_token_limit(),
+            Self::OpenAI(provider) => provider.planning_prompt_token_limit(),
+            Self::Anthropic(provider) => provider.planning_prompt_token_limit(),
+            Self::OpenRouter(provider) => provider.planning_prompt_token_limit(),
             Self::Groq(provider) => provider.planning_prompt_token_limit(),
         }
     }
@@ -682,17 +972,40 @@ fn post_json(
     provider: &str,
     url: &str,
     api_key: &str,
+    request: Value,
+    timeout: Duration,
+    model: Option<&str>,
+) -> Result<HttpJsonResponse, ProviderError> {
+    post_json_with_headers(
+        provider,
+        url,
+        api_key,
+        request,
+        timeout,
+        model,
+        HeaderMap::new(),
+    )
+}
+
+fn post_json_with_headers(
+    provider: &str,
+    url: &str,
+    api_key: &str,
     mut request: Value,
     timeout: Duration,
     model: Option<&str>,
+    headers: HeaderMap,
 ) -> Result<HttpJsonResponse, ProviderError> {
     let client = Client::builder()
         .timeout(timeout)
         .build()
         .map_err(|error| ProviderError::Transport(error.to_string()))?;
-    let response = client
-        .post(url)
-        .bearer_auth(api_key)
+    let use_header_auth = headers.contains_key("x-api-key");
+    let mut request_builder = client.post(url).headers(headers.clone());
+    if !use_header_auth {
+        request_builder = request_builder.bearer_auth(api_key);
+    }
+    let response = request_builder
         .json(&request)
         .send()
         .map_err(|error| ProviderError::Transport(error.to_string()))?;
@@ -706,11 +1019,11 @@ fn post_json(
             if let Some(format_val) = request.get_mut("response_format") {
                 if format_val.get("type").and_then(|v| v.as_str()) == Some("json_schema") {
                     *format_val = serde_json::json!({"type": "json_object"});
-                    if let Ok(retry_resp) = client
-                        .post(url)
-                        .bearer_auth(api_key)
-                        .json(&request)
-                        .send()
+                    let mut retry_builder = client.post(url).headers(headers.clone());
+                    if !use_header_auth {
+                        retry_builder = retry_builder.bearer_auth(api_key);
+                    }
+                    if let Ok(retry_resp) = retry_builder.json(&request).send()
                     {
                         let retry_status = retry_resp.status();
                         let retry_rate_limit = rate_limit_snapshot(retry_resp.headers());
@@ -790,6 +1103,14 @@ fn gemini_usage(payload: &Value) -> ModelUsage {
         payload.pointer("/usageMetadata/promptTokenCount"),
         payload.pointer("/usageMetadata/candidatesTokenCount"),
         payload.pointer("/usageMetadata/totalTokenCount"),
+    )
+}
+
+fn anthropic_usage(payload: &Value) -> ModelUsage {
+    usage_from_fields(
+        payload.pointer("/usage/input_tokens"),
+        payload.pointer("/usage/output_tokens"),
+        None,
     )
 }
 
@@ -925,6 +1246,44 @@ fn deepseek_request(model: &str, prompt: &str) -> Value {
         "temperature": 0.0,
         "max_tokens": 4096
     })
+}
+
+fn openai_request(model: &str, prompt: &str) -> Value {
+    serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "Return only one JSON object with action, arguments, and rationale. Do not use markdown."},
+            {"role": "user", "content": prompt}
+        ],
+        "response_format": {"type": "json_object"},
+        "temperature": 0.0,
+        "max_tokens": 4096
+    })
+}
+
+fn anthropic_request(model: &str, prompt: &str) -> Value {
+    serde_json::json!({
+        "model": model,
+        "system": "Return only one JSON object with action, arguments, and rationale. Do not use markdown.",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.0,
+        "max_tokens": 4096
+    })
+}
+
+fn openrouter_headers() -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    if let Some(referer) = non_empty_env("SECONDEGO_OPENROUTER_REFERER") {
+        if let Ok(value) = reqwest::header::HeaderValue::from_str(&referer) {
+            headers.insert("HTTP-Referer", value);
+        }
+    }
+    if let Some(title) = non_empty_env("SECONDEGO_OPENROUTER_TITLE") {
+        if let Ok(value) = reqwest::header::HeaderValue::from_str(&title) {
+            headers.insert("X-Title", value);
+        }
+    }
+    headers
 }
 
 fn groq_request(model: &str, prompt: &str, phase: &str) -> Value {
@@ -1093,7 +1452,7 @@ fn non_empty_env(name: &str) -> Option<String> {
 fn is_known_groq_model(model: &str) -> bool {
     model.starts_with("llama-")
         || model.starts_with("mixtral-")
-        || model.starts_with("openai/")
+        || model.starts_with("openai/gpt-oss-")
         || model.starts_with("qwen/")
         || model.starts_with("groq/")
         || model.starts_with("canopylabs/")
@@ -1205,6 +1564,16 @@ mod tests {
     }
 
     #[test]
+    fn first_class_provider_defaults_have_named_credentials() {
+        assert_eq!(ProviderKind::DeepSeek.credential_env_name(), "DEEPSEEK_API_KEY");
+        assert_eq!(ProviderKind::Gemini.credential_env_name(), "GEMINI_API_KEY");
+        assert_eq!(ProviderKind::OpenAI.credential_env_name(), "OPENAI_API_KEY");
+        assert_eq!(ProviderKind::Anthropic.credential_env_name(), "ANTHROPIC_API_KEY");
+        assert_eq!(ProviderKind::OpenRouter.credential_env_name(), "OPENROUTER_API_KEY");
+        assert_eq!(ProviderKind::OpenRouter.default_model(), "openai/gpt-5-mini");
+    }
+
+    #[test]
     fn deepseek_payload_requests_json_without_thinking() {
         let request = deepseek_request("deepseek-flash", "make a plan");
         assert_eq!(request["response_format"]["type"], "json_object");
@@ -1282,12 +1651,28 @@ mod tests {
     }
 
     #[test]
-    fn groq_strict_schema_requires_recovery_during_diagnosis() {
+    fn groq_diagnosis_uses_portable_json_without_losing_recovery_contract() {
         let request = groq_request("openai/gpt-oss-20b", "recover", "DIAGNOSE");
-        assert_eq!(
-            request["response_format"]["json_schema"]["schema"]["properties"]["action"]["enum"],
-            serde_json::json!(["submit_recovery"])
-        );
+        assert_eq!(request["response_format"]["type"], "json_object");
+        assert!(request["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("action=submit_recovery"));
+    }
+
+    #[test]
+    fn anthropic_payload_and_response_are_translated_to_the_common_contract() {
+        let request = anthropic_request("claude-sonnet-4-6", "make a plan");
+        assert_eq!(request["model"], "claude-sonnet-4-6");
+        assert_eq!(request["messages"][0]["role"], "user");
+        assert_eq!(request["max_tokens"], 4096);
+        let payload = serde_json::json!({
+            "content": [{"type": "text", "text": "{\"action\":\"submit_plan\",\"arguments\":{},\"rationale\":\"plan\"}"}],
+            "usage": {"input_tokens": 11, "output_tokens": 7}
+        });
+        let proposal = parse_action(&parse_anthropic_content(&payload).unwrap()).unwrap();
+        assert_eq!(proposal.action, "submit_plan");
+        assert_eq!(anthropic_usage(&payload).total_tokens, Some(18));
     }
 
     #[test]

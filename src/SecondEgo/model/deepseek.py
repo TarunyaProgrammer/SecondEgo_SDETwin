@@ -38,7 +38,9 @@ class DeepSeekProvider:
     def _generate_sync(self, prompt: str) -> ActionProposal:
         key = self._resolve_api_key()
         if not key:
-            raise ProviderConfigurationError("AI_API_KEY is required for DeepSeekProvider")
+            raise ProviderConfigurationError(
+                "DEEPSEEK_API_KEY (or legacy AI_API_KEY) is required for DeepSeekProvider"
+            )
         base_url = self.base_url or os.environ.get("SECONDEGO_DEEPSEEK_BASE_URL", DEFAULT_BASE_URL)
         endpoint = f"{base_url.rstrip('/')}/chat/completions"
         payload = {
@@ -73,4 +75,4 @@ class DeepSeekProvider:
         return parse_action(data)
 
     def _resolve_api_key(self) -> str | None:
-        return self.api_key or os.environ.get("AI_API_KEY")
+        return self.api_key or os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("AI_API_KEY")

@@ -298,8 +298,12 @@ struct LaunchConfig {
 #[derive(Default)]
 struct RuntimeCredentials {
     ai_api_key: Option<String>,
-    groq_api_key: Option<String>,
+    deepseek_api_key: Option<String>,
     gemini_api_key: Option<String>,
+    openai_api_key: Option<String>,
+    anthropic_api_key: Option<String>,
+    openrouter_api_key: Option<String>,
+    groq_api_key: Option<String>,
 }
 
 fn run_preflight(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
@@ -336,8 +340,12 @@ fn run_launcher(_arguments: &[String]) -> Result<(), Box<dyn std::error::Error>>
 
     let mut credentials = RuntimeCredentials {
         ai_api_key: non_empty_env("AI_API_KEY"),
-        groq_api_key: non_empty_env("GROQ_API_KEY"),
+        deepseek_api_key: non_empty_env("DEEPSEEK_API_KEY"),
         gemini_api_key: non_empty_env("GEMINI_API_KEY"),
+        openai_api_key: non_empty_env("OPENAI_API_KEY"),
+        anthropic_api_key: non_empty_env("ANTHROPIC_API_KEY"),
+        openrouter_api_key: non_empty_env("OPENROUTER_API_KEY"),
+        groq_api_key: non_empty_env("GROQ_API_KEY"),
     };
     let credentials_missing = !model_api_key_present(&credentials)
         || (config.voice_enabled && credentials.gemini_api_key.is_none());
@@ -557,19 +565,22 @@ fn collect_missing_credentials(
     config: &LaunchConfig,
     credentials: &mut RuntimeCredentials,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    match ProviderKind::from_environment() {
-        Ok(ProviderKind::Groq) if credentials.groq_api_key.is_none() => {
-            credentials.groq_api_key = Some(prompt_secret(
-                "GROQ_API_KEY is missing. Enter your Groq API key",
-            )?);
+    let provider = ProviderKind::from_environment().unwrap_or(ProviderKind::DeepSeek);
+    if !model_api_key_present(credentials) {
+        let key_name = provider.credential_env_name();
+        let prompt_text = format!(
+            "{key_name} is missing. Enter your {} API key",
+            provider.name()
+        );
+        let key = prompt_secret(&prompt_text)?;
+        match provider {
+            ProviderKind::DeepSeek => credentials.deepseek_api_key = Some(key),
+            ProviderKind::Gemini => credentials.gemini_api_key = Some(key),
+            ProviderKind::OpenAI => credentials.openai_api_key = Some(key),
+            ProviderKind::Anthropic => credentials.anthropic_api_key = Some(key),
+            ProviderKind::OpenRouter => credentials.openrouter_api_key = Some(key),
+            ProviderKind::Groq => credentials.groq_api_key = Some(key),
         }
-        Ok(ProviderKind::DeepSeek | ProviderKind::Gemini) | Err(_)
-            if credentials.ai_api_key.is_none() =>
-        {
-            credentials.ai_api_key =
-                Some(prompt_secret("AI_API_KEY is missing. Enter model API key")?);
-        }
-        _ => {}
     }
     if config.voice_enabled && credentials.gemini_api_key.is_none() {
         credentials.gemini_api_key = Some(prompt_secret(
@@ -674,11 +685,23 @@ fn apply_child_environment(
     if let Some(value) = &credentials.ai_api_key {
         command.env("AI_API_KEY", value);
     }
+    if let Some(value) = &credentials.deepseek_api_key {
+        command.env("DEEPSEEK_API_KEY", value);
+    }
     if let Some(value) = &credentials.groq_api_key {
         command.env("GROQ_API_KEY", value);
     }
     if let Some(value) = &credentials.gemini_api_key {
         command.env("GEMINI_API_KEY", value);
+    }
+    if let Some(value) = &credentials.openai_api_key {
+        command.env("OPENAI_API_KEY", value);
+    }
+    if let Some(value) = &credentials.anthropic_api_key {
+        command.env("ANTHROPIC_API_KEY", value);
+    }
+    if let Some(value) = &credentials.openrouter_api_key {
+        command.env("OPENROUTER_API_KEY", value);
     }
     command
         .env(
@@ -702,8 +725,12 @@ fn apply_child_environment(
 fn print_preflight(config: &LaunchConfig, setup_only: bool) {
     let credentials = RuntimeCredentials {
         ai_api_key: non_empty_env("AI_API_KEY"),
-        groq_api_key: non_empty_env("GROQ_API_KEY"),
+        deepseek_api_key: non_empty_env("DEEPSEEK_API_KEY"),
         gemini_api_key: non_empty_env("GEMINI_API_KEY"),
+        openai_api_key: non_empty_env("OPENAI_API_KEY"),
+        anthropic_api_key: non_empty_env("ANTHROPIC_API_KEY"),
+        openrouter_api_key: non_empty_env("OPENROUTER_API_KEY"),
+        groq_api_key: non_empty_env("GROQ_API_KEY"),
     };
     print_preflight_with_credentials(config, &credentials);
     if setup_only {
@@ -815,23 +842,23 @@ fn secret_status(present: bool) -> &'static str {
 }
 
 fn model_api_key_name() -> &'static str {
-    match ProviderKind::from_environment() {
-        Ok(ProviderKind::Groq) => "GROQ_API_KEY",
-        _ => "AI_API_KEY",
-    }
+    ProviderKind::from_environment()
+        .unwrap_or(ProviderKind::DeepSeek)
+        .credential_env_name()
 }
 
 fn model_api_key_present(credentials: &RuntimeCredentials) -> bool {
-    match ProviderKind::from_environment() {
-        Ok(ProviderKind::Groq) => credentials
-            .groq_api_key
-            .as_deref()
-            .is_some_and(|key| !key.trim().is_empty()),
-        _ => credentials
-            .ai_api_key
-            .as_deref()
-            .is_some_and(|key| !key.trim().is_empty()),
-    }
+    let provider = ProviderKind::from_environment().unwrap_or(ProviderKind::DeepSeek);
+    let value = match provider {
+        ProviderKind::DeepSeek => credentials.deepseek_api_key.as_ref(),
+        ProviderKind::Gemini => credentials.gemini_api_key.as_ref(),
+        ProviderKind::OpenAI => credentials.openai_api_key.as_ref(),
+        ProviderKind::Anthropic => credentials.anthropic_api_key.as_ref(),
+        ProviderKind::OpenRouter => credentials.openrouter_api_key.as_ref(),
+        ProviderKind::Groq => credentials.groq_api_key.as_ref(),
+    };
+    value.or(credentials.ai_api_key.as_ref())
+        .is_some_and(|key| !key.trim().is_empty())
 }
 
 fn non_empty_env(name: &str) -> Option<String> {

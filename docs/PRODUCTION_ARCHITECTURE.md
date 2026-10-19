@@ -45,6 +45,16 @@ The current source of truth is in `engine-rs/crates/secondego-runtime`. The Pyth
 6. The terminal path is functional but not a stable, documented product interface comparable to modern coding-agent CLIs.
 7. SQLite stores useful evidence but is not yet a migration-managed replay database with configuration snapshots and provider/model metadata.
 
+### Increment delivered in this repository
+
+The provider transport layer now has first-class Rust and Python compatibility
+adapters for DeepSeek, Gemini, OpenAI, Anthropic, and OpenRouter, plus the
+existing Groq adapter. The CLI/Makefile recognize named credentials, preserve
+`AI_API_KEY` only as a migration fallback, and never print key values. This is
+not yet the complete product profile system: OS keychain storage, authenticated
+gateway settings, multi-profile selection, and renderer isolation are still
+required before calling the desktop experience production-ready.
+
 ## 2. Target architecture
 
 ```text
@@ -287,4 +297,3 @@ The app is not production-ready when it merely launches. The minimum bar is:
 - failed, blocked, cancelled, and partial states are first-class in both terminal and desktop surfaces;
 - signed release artifacts install cleanly on supported platforms;
 - tests cover provider contracts, key redaction, path policy, diff rendering, cancellation, recovery, migrations, and packaging smoke checks.
-

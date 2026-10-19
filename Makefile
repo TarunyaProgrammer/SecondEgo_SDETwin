@@ -21,6 +21,14 @@ if [ -f ".env" ]; then \
 				if [ -z "$${AI_API_KEY:-}" ]; then AI_API_KEY=$${dotenv_line#AI_API_KEY=}; export AI_API_KEY; fi ;; \
 			GROQ_API_KEY=*) \
 				if [ -z "$${GROQ_API_KEY:-}" ]; then GROQ_API_KEY=$${dotenv_line#GROQ_API_KEY=}; export GROQ_API_KEY; fi ;; \
+			DEEPSEEK_API_KEY=*) \
+				if [ -z "$${DEEPSEEK_API_KEY:-}" ]; then DEEPSEEK_API_KEY=$${dotenv_line#DEEPSEEK_API_KEY=}; export DEEPSEEK_API_KEY; fi ;; \
+			OPENAI_API_KEY=*) \
+				if [ -z "$${OPENAI_API_KEY:-}" ]; then OPENAI_API_KEY=$${dotenv_line#OPENAI_API_KEY=}; export OPENAI_API_KEY; fi ;; \
+			ANTHROPIC_API_KEY=*) \
+				if [ -z "$${ANTHROPIC_API_KEY:-}" ]; then ANTHROPIC_API_KEY=$${dotenv_line#ANTHROPIC_API_KEY=}; export ANTHROPIC_API_KEY; fi ;; \
+			OPENROUTER_API_KEY=*) \
+				if [ -z "$${OPENROUTER_API_KEY:-}" ]; then OPENROUTER_API_KEY=$${dotenv_line#OPENROUTER_API_KEY=}; export OPENROUTER_API_KEY; fi ;; \
 			SECONDEGO_PROVIDER=*) \
 				if [ -z "$${SECONDEGO_PROVIDER:-}" ]; then SECONDEGO_PROVIDER=$${dotenv_line#SECONDEGO_PROVIDER=}; export SECONDEGO_PROVIDER; fi ;; \
 			SECONDEGO_MODEL=*) \
@@ -90,9 +98,10 @@ config:
 	@$(LOAD_LOCAL_ENV) \
 	provider="$${SECONDEGO_PROVIDER:-}"; \
 	model="$${SECONDEGO_MODEL:-}"; \
-	if [ -z "$$provider" ]; then case "$$model" in gemini-*) provider=gemini ;; llama-*|mixtral-*) provider=groq ;; *) provider=deepseek ;; esac; fi; \
-	if [ -z "$$model" ]; then case "$$provider" in gemini) model=gemini-3.8-flash ;; groq) model=qwen/qwen3.8-27b ;; *) model=deepseek-flash ;; esac; fi; \
-	case "$$provider" in groq) key_name=GROQ_API_KEY; key_value="$${GROQ_API_KEY:-}" ;; *) key_name=AI_API_KEY; key_value="$${AI_API_KEY:-}" ;; esac; \
+	if [ -z "$$provider" ]; then case "$$model" in gemini-*) provider=gemini ;; claude-*) provider=anthropic ;; gpt-*|o[134]*) provider=openai ;; */*) provider=openrouter ;; llama-*|mixtral-*|qwen/*|openai/gpt-oss-*) provider=groq ;; *) provider=deepseek ;; esac; fi; \
+	if [ -z "$$model" ]; then case "$$provider" in gemini) model=gemini-3.8-flash ;; openai) model=gpt-5-mini ;; anthropic) model=claude-sonnet-4-6 ;; openrouter) model=openai/gpt-5-mini ;; groq) model=qwen/qwen3.8-27b ;; *) model=deepseek-flash ;; esac; fi; \
+	case "$$provider" in deepseek) key_name=DEEPSEEK_API_KEY; key_value="$${DEEPSEEK_API_KEY:-}" ;; gemini) key_name=GEMINI_API_KEY; key_value="$${GEMINI_API_KEY:-}" ;; openai) key_name=OPENAI_API_KEY; key_value="$${OPENAI_API_KEY:-}" ;; anthropic) key_name=ANTHROPIC_API_KEY; key_value="$${ANTHROPIC_API_KEY:-}" ;; openrouter) key_name=OPENROUTER_API_KEY; key_value="$${OPENROUTER_API_KEY:-}" ;; groq) key_name=GROQ_API_KEY; key_value="$${GROQ_API_KEY:-}" ;; *) key_name=AI_API_KEY; key_value="$${AI_API_KEY:-}" ;; esac; \
+	if [ -z "$$key_value" ]; then key_value="$${AI_API_KEY:-}"; fi; \
 	if [ -n "$$key_value" ]; then key_status=present; else key_status=missing; fi; \
 	if [ "$${VOICE_ENABLED:-false}" = "true" ] || [ "$${VOICE_ENABLED:-false}" = "1" ]; then voice_status=enabled; else voice_status=disabled; fi; \
 	if [ -n "$${GEMINI_API_KEY:-}" ]; then voice_key_status=present; else voice_key_status=missing; fi; \
@@ -135,9 +144,9 @@ run-python:
 	@$(LOAD_LOCAL_ENV) \
 	$(MAKE) setup-python && \
 	case "$${SECONDEGO_PROVIDER:-deepseek}" in \
-		groq) test -n "$${GROQ_API_KEY:-}" || { echo "Error: GROQ_API_KEY must be exported or placed in the ignored local .env file before make run-python."; exit 2; } ;; \
-		*) test -n "$${AI_API_KEY:-}" || { echo "Error: AI_API_KEY must be exported or placed in the ignored local .env file before make run-python."; exit 2; } ;; \
-	esac; \
+		deepseek) key_name=DEEPSEEK_API_KEY; key_value="$${DEEPSEEK_API_KEY:-}" ;; gemini) key_name=GEMINI_API_KEY; key_value="$${GEMINI_API_KEY:-}" ;; openai) key_name=OPENAI_API_KEY; key_value="$${OPENAI_API_KEY:-}" ;; anthropic) key_name=ANTHROPIC_API_KEY; key_value="$${ANTHROPIC_API_KEY:-}" ;; openrouter) key_name=OPENROUTER_API_KEY; key_value="$${OPENROUTER_API_KEY:-}" ;; groq) key_name=GROQ_API_KEY; key_value="$${GROQ_API_KEY:-}" ;; *) key_name=AI_API_KEY; key_value="$${AI_API_KEY:-}" ;; esac; \
+	if [ -z "$$key_value" ]; then key_value="$${AI_API_KEY:-}"; fi; \
+	test -n "$$key_value" || { echo "Error: $$key_name (or legacy AI_API_KEY) must be exported or placed in the ignored local .env file before make run-python."; exit 2; }; \
 	SECONDEGO_UI_MODE="$(UI_MODE)" PATH="$(CURDIR)/$(VENV)/bin:$$PATH" $(VENV)/bin/secondego-tui
 
 help: rust-build

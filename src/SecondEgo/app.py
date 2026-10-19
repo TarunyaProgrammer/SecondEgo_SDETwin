@@ -6,6 +6,8 @@ from SecondEgo.config import ProviderKind, configured_provider
 from SecondEgo.model.deepseek import DeepSeekProvider
 from SecondEgo.model.gemini import GeminiProvider
 from SecondEgo.model.groq import GroqProvider
+from SecondEgo.model.openai_compatible import OpenAIProvider, OpenRouterProvider
+from SecondEgo.model.anthropic import AnthropicProvider
 from SecondEgo.model.planner import ModelPlanner
 from SecondEgo.orchestration.engine import HarnessEngine
 from SecondEgo.repository.scanner import RepositoryScanner
@@ -60,6 +62,9 @@ def build_model_planner(
     provider = {
         ProviderKind.DEEPSEEK: DeepSeekProvider,
         ProviderKind.GEMINI: GeminiProvider,
+        ProviderKind.OPENAI: OpenAIProvider,
+        ProviderKind.ANTHROPIC: AnthropicProvider,
+        ProviderKind.OPENROUTER: OpenRouterProvider,
         ProviderKind.GROQ: GroqProvider,
     }[selected_provider](model=model)
     return ModelPlanner(

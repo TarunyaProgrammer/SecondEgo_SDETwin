@@ -7,6 +7,9 @@ class ProviderKind(StrEnum):
 
     DEEPSEEK = "deepseek"
     GEMINI = "gemini"
+    OPENAI = "openai"
+    ANTHROPIC = "anthropic"
+    OPENROUTER = "openrouter"
     GROQ = "groq"
 
 
@@ -14,7 +17,19 @@ DEFAULT_PROVIDER = ProviderKind.DEEPSEEK
 DEFAULT_MODELS = {
     ProviderKind.DEEPSEEK: "deepseek-flash",
     ProviderKind.GEMINI: "gemini-3.8-flash",
+    ProviderKind.OPENAI: "gpt-5-mini",
+    ProviderKind.ANTHROPIC: "claude-sonnet-4-6",
+    ProviderKind.OPENROUTER: "openai/gpt-5-mini",
     ProviderKind.GROQ: "qwen/qwen3.8-27b",
+}
+
+PROVIDER_KEY_NAMES = {
+    ProviderKind.DEEPSEEK: "DEEPSEEK_API_KEY",
+    ProviderKind.GEMINI: "GEMINI_API_KEY",
+    ProviderKind.OPENAI: "OPENAI_API_KEY",
+    ProviderKind.ANTHROPIC: "ANTHROPIC_API_KEY",
+    ProviderKind.OPENROUTER: "OPENROUTER_API_KEY",
+    ProviderKind.GROQ: "GROQ_API_KEY",
 }
 # Compatibility for callers that read the default without selecting a provider.
 DEFAULT_MODEL = DEFAULT_MODELS[DEFAULT_PROVIDER]

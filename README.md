@@ -111,19 +111,40 @@ export SECONDEGO_PROVIDER=deepseek
 export SECONDEGO_MODEL="<PRESCRIBED_MODEL>"
 ```
 
-The evaluator path reads its credential from `AI_API_KEY`. When using the local
-Groq alternative, set `SECONDEGO_PROVIDER=groq` and provide `GROQ_API_KEY`
-instead. Credentials must not be committed, included in prompts, or written to
-run evidence.
+The evaluator path still accepts `AI_API_KEY` for compatibility. For local
+development, use a named provider key; named keys always win over the legacy
+alias and are never written to run evidence:
+
+| Provider | Selection | Credential | Default model |
+| --- | --- | --- | --- |
+| DeepSeek | `SECONDEGO_PROVIDER=deepseek` | `DEEPSEEK_API_KEY` | `deepseek-flash` |
+| Gemini | `SECONDEGO_PROVIDER=gemini` | `GEMINI_API_KEY` | `gemini-3.8-flash` |
+| OpenAI | `SECONDEGO_PROVIDER=openai` | `OPENAI_API_KEY` | `gpt-5-mini` |
+| Anthropic | `SECONDEGO_PROVIDER=anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` |
+| OpenRouter | `SECONDEGO_PROVIDER=openrouter` | `OPENROUTER_API_KEY` | `openai/gpt-5-mini` |
+
+OpenRouter model IDs are routed slugs and can be overridden with
+`SECONDEGO_MODEL`. Groq remains supported as an additional local profile using
+`GROQ_API_KEY`. Credentials must not be committed, included in prompts, or
+written to run evidence.
 
 For local Gemini development, an ignored `.env` may contain a Gemini key and
 matching selection. It is used only when the same variables are not already
 exported by the shell; the evaluator path remains DeepSeek by default:
 
 ```bash
-AI_API_KEY="<LOCAL_GEMINI_KEY>"
+GEMINI_API_KEY="<LOCAL_GEMINI_KEY>"
 SECONDEGO_PROVIDER=gemini
 SECONDEGO_MODEL=gemini-3.8-flash
+```
+
+For the other first-class providers, the equivalent setup is:
+
+```bash
+OPENAI_API_KEY="<YOUR_OPENAI_API_KEY>" SECONDEGO_PROVIDER=openai make run
+ANTHROPIC_API_KEY="<YOUR_ANTHROPIC_API_KEY>" SECONDEGO_PROVIDER=anthropic make run
+OPENROUTER_API_KEY="<YOUR_OPENROUTER_API_KEY>" \
+  SECONDEGO_PROVIDER=openrouter SECONDEGO_MODEL=openai/gpt-5-mini make run
 ```
 
 For local Groq development, use a Groq-specific key and the production model

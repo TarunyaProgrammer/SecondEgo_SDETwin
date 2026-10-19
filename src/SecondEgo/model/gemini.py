@@ -26,7 +26,9 @@ class GeminiProvider:
     def _generate_sync(self, prompt: str) -> ActionProposal:
         key = self._resolve_api_key()
         if not key:
-            raise ProviderConfigurationError("AI_API_KEY is required for GeminiProvider")
+            raise ProviderConfigurationError(
+                "GEMINI_API_KEY (or legacy AI_API_KEY) is required for GeminiProvider"
+            )
         try:
             from google import genai
         except ImportError as exc:
@@ -57,4 +59,4 @@ class GeminiProvider:
         return parse_action(data)
 
     def _resolve_api_key(self) -> str | None:
-        return self.api_key or os.environ.get("AI_API_KEY")
+        return self.api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("AI_API_KEY")

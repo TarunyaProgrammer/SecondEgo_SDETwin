@@ -21,6 +21,8 @@ from SecondEgo.tools.transaction import GitAttemptTransaction
 from SecondEgo.model.base import ActionProposal
 from SecondEgo.model.gemini import GeminiProvider, ProviderConfigurationError
 from SecondEgo.model.deepseek import DeepSeekProvider
+from SecondEgo.model.anthropic import AnthropicProvider
+from SecondEgo.model.openai_compatible import OpenAIProvider, OpenRouterProvider
 from SecondEgo.model.groq import (
     GroqProvider,
     _safe_error_code_from_payload,
@@ -983,6 +985,33 @@ def test_gemini_remains_an_explicit_opt_in(monkeypatch) -> None:
 
     assert configured_provider() is ProviderKind.GEMINI
     assert configured_model() == "gemini-3.8-flash"
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "key_name", "provider_type"),
+    [
+        (ProviderKind.OPENAI, "gpt-5-mini", "OPENAI_API_KEY", OpenAIProvider),
+        (ProviderKind.ANTHROPIC, "claude-sonnet-4-6", "ANTHROPIC_API_KEY", AnthropicProvider),
+        (ProviderKind.OPENROUTER, "openai/gpt-5-mini", "OPENROUTER_API_KEY", OpenRouterProvider),
+    ],
+)
+def test_first_class_provider_defaults_and_named_keys(
+    monkeypatch, provider, model, key_name, provider_type
+) -> None:
+    monkeypatch.setenv("SECONDEGO_PROVIDER", provider.value)
+    monkeypatch.delenv("SECONDEGO_MODEL", raising=False)
+    monkeypatch.setenv(key_name, "provider-key")
+
+    assert configured_provider() is provider
+    assert configured_model() == model
+    assert provider_type()._resolve_api_key() == "provider-key"
+
+
+def test_named_provider_key_wins_over_legacy_key(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "named-key")
+    monkeypatch.setenv("AI_API_KEY", "legacy-key")
+
+    assert OpenAIProvider()._resolve_api_key() == "named-key"
 
 
 def test_groq_uses_a_provider_specific_key(monkeypatch) -> None:
