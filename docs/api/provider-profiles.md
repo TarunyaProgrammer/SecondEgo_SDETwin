@@ -26,6 +26,7 @@ printf '%s\n' "$OPENAI_API_KEY" \
 secondego provider list
 secondego provider use openai --profile work
 secondego provider test
+secondego provider list --json
 ```
 
 On macOS, secrets are stored in Keychain. On Linux, secrets are stored in
@@ -59,3 +60,7 @@ child-process environment boundary.
 `provider test` performs a bounded authenticated request and reports only the
 provider, model, duration, or a classified failure. It does not print the key,
 request body, response body, or raw provider error text.
+
+`provider list --json` and `provider test --json` emit schema-versioned,
+machine-readable output for CI and shell integrations. They contain provider
+ids, models, profile ids, and safe status values only.

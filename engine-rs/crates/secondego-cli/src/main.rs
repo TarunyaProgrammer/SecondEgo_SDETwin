@@ -121,7 +121,8 @@ fn main() {
         }
         return;
     }
-    let interactive = arguments.iter().any(|argument| argument == "--interactive");
+    let json_output = arguments.iter().any(|argument| argument == "--json");
+    let interactive = arguments.iter().any(|argument| argument == "--interactive") && !json_output;
     let cancellation = CancellationToken::default();
     if interactive {
         install_cancel_handler();
@@ -219,6 +220,7 @@ fn main() {
             events,
             state_db,
             interactive,
+            json_output,
             cancellation,
         ),
         None => run_configured(
@@ -227,6 +229,7 @@ fn main() {
             events,
             state_db,
             interactive,
+            json_output,
             cancellation,
         ),
     };
@@ -282,10 +285,9 @@ fn print_help() {
     println!("  secondego preflight                    Show safe capability status");
     println!("  secondego --interactive                 Run the verified task-fixing harness");
     println!("  secondego --workspace PATH --task TEXT   Run a non-interactive task");
+    println!("  secondego --json --workspace PATH --task TEXT  Emit a stable JSON envelope");
     println!("  secondego discover --repo PATH           Scan a repository without modifying it");
-    println!(
-        "  secondego provider list                  Show supported providers and safe key status"
-    );
+    println!("  secondego provider list [--json]         Show providers and safe key status");
     println!("  secondego help                           Show this command guide");
     println!();
     println!("DISCOVERY SHOWCASE");
@@ -316,10 +318,11 @@ fn print_help() {
 }
 
 fn run_provider_command(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let json_output = arguments.iter().any(|argument| argument == "--json");
     match arguments.first().map(String::as_str).unwrap_or("list") {
         "list" | "status" => {
-            println!("SecondEgo providers — key values are never displayed");
             let selected = ProviderKind::from_environment().ok();
+            let mut statuses = Vec::new();
             for provider in ProviderKind::all() {
                 let named_present = non_empty_env(provider.credential_env_name()).is_some();
                 let legacy_present = non_empty_env("AI_API_KEY").is_some();
@@ -331,12 +334,36 @@ fn run_provider_command(arguments: &[String]) -> Result<(), Box<dyn std::error::
                     "MISSING"
                 };
                 let marker = (selected == Some(provider)).then_some('*').unwrap_or(' ');
+                statuses.push(serde_json::json!({
+                    "id": provider.name(),
+                    "selected": marker == '*',
+                    "status": status,
+                    "credential_env": provider.credential_env_name(),
+                    "default_model": provider.default_model(),
+                }));
+                if json_output {
+                    continue;
+                }
+                if statuses.len() == 1 {
+                    println!("SecondEgo providers — key values are never displayed");
+                }
                 println!(
                     "  {marker} {:<10} {:<24} model={}",
                     provider.name(),
                     status,
                     provider.default_model()
                 );
+            }
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "schema_version": 1,
+                        "selected_provider": selected.map(ProviderKind::name),
+                        "providers": statuses,
+                    }))?
+                );
+                return Ok(());
             }
             println!();
             println!("Select a provider with SECONDEGO_PROVIDER and optionally override SECONDEGO_MODEL.");
@@ -356,12 +383,26 @@ fn run_provider_command(arguments: &[String]) -> Result<(), Box<dyn std::error::
                     phase: "PLAN".into(),
                 },
             )?;
-            println!(
-                "Provider connection verified: {} / {} ({} ms)",
-                provider.name(),
-                model,
-                started.elapsed().as_millis()
-            );
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "schema_version": 1,
+                        "ok": true,
+                        "provider": provider.name(),
+                        "model": model,
+                        "profile_id": env::var("SECONDEGO_PROFILE_ID").ok(),
+                        "latency_ms": started.elapsed().as_millis(),
+                    }))?
+                );
+            } else {
+                println!(
+                    "Provider connection verified: {} / {} ({} ms)",
+                    provider.name(),
+                    model,
+                    started.elapsed().as_millis()
+                );
+            }
             Ok(())
         }
         "help" => {
@@ -1012,6 +1053,7 @@ fn run_scripted(
     events: bool,
     state_db: Option<String>,
     interactive: bool,
+    json_output: bool,
     cancellation: CancellationToken,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let value: serde_json::Value = serde_json::from_str(&fs::read_to_string(script)?)?;
@@ -1037,6 +1079,7 @@ fn run_scripted(
         events,
         state_db,
         interactive,
+        json_output,
         Some(&voice),
         &workspace,
     )
@@ -1048,6 +1091,7 @@ fn run_configured(
     events: bool,
     state_db: Option<String>,
     interactive: bool,
+    json_output: bool,
     cancellation: CancellationToken,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let voice = VoiceService::from_env();
@@ -1063,6 +1107,7 @@ fn run_configured(
         events,
         state_db,
         interactive,
+        json_output,
         Some(&voice),
         &workspace,
     )
@@ -1073,6 +1118,7 @@ fn emit_report(
     events: bool,
     state_db: Option<String>,
     interactive: bool,
+    json_output: bool,
     voice: Option<&VoiceService>,
     workspace: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -1113,7 +1159,18 @@ fn emit_report(
     } else {
         None
     };
-    if interactive {
+    let passed = report.verification_passed;
+    if json_output {
+        let envelope = serde_json::json!({
+            "schema_version": 1,
+            "run_id": report.state.run_id,
+            "provider": ProviderKind::from_environment().ok().map(|provider| provider.name()),
+            "model": configured_model().ok(),
+            "profile_id": env::var("SECONDEGO_PROFILE_ID").ok(),
+            "report": report,
+        });
+        println!("{}", serde_json::to_string_pretty(&envelope)?);
+    } else if interactive {
         print_result_card(&report, workspace, patch_path.as_deref());
         if let Some(voice) = voice {
             print_voice_summary(voice, report.state.run_id);
@@ -1121,7 +1178,7 @@ fn emit_report(
     } else {
         println!("{}", serde_json::to_string_pretty(&report)?);
     }
-    if report.verification_passed {
+    if passed {
         Ok(())
     } else {
         Err("verification failed".into())

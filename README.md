@@ -228,7 +228,12 @@ The Rust CLI exposes the same safe status without contacting a provider:
 ```bash
 cargo run --manifest-path engine-rs/Cargo.toml -p secondego-cli -- provider list
 cargo run --manifest-path engine-rs/Cargo.toml -p secondego-cli -- provider test
+cargo run --manifest-path engine-rs/Cargo.toml -p secondego-cli -- provider list --json
 ```
+
+For scripts, add `--json` to a task run to receive a schema-versioned envelope
+containing the run id, provider/profile metadata, and the normal redacted
+report. `--ui events` remains JSON Lines for live event consumers.
 
 ## Execution flow
 
