@@ -181,8 +181,24 @@ and makes one retry. It never sends immediate 429 retry bursts; an absent or
 longer delay produces a clear terminal failure instead.
 
 `make config` reports whether the selected provider's key is present without
-printing it. The interactive launcher also prompts for `GROQ_API_KEY` when it
-is missing, but never writes the key to the profile or run state.
+printing it. The interactive launcher prompts for the selected provider's
+named key when it is missing, but never writes the key to the profile or run
+state.
+
+### Desktop provider profiles
+
+Open the desktop companion's settings gear to save multiple named provider
+profiles. The key field is intentionally uncontrolled and is sent directly to
+Electron's main process; React state, the local gateway API, SQLite run state,
+logs, and telemetry never receive the secret. Electron encrypts the key with
+the operating system's `safeStorage` backend and starts the gateway with only
+the selected profile's named environment variable. If the operating system
+does not provide an encrypted backend, SecondEgo refuses to save the key.
+
+The terminal currently uses the same provider names and environment contract.
+Terminal-native keychain commands are the next migration step; until then use
+an exported variable or an ignored `.env` file and verify the resolved profile
+with `make config`.
 
 Run `make config` to display the resolved provider/model and whether a key is
 present. It never prints the key.

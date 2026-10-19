@@ -4,6 +4,13 @@ const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const net = require("node:net");
 const path = require("node:path");
+const {
+  activeEnvironment,
+  deleteProfile,
+  listProfiles,
+  saveProfile,
+  setActiveProfile,
+} = require("./credential-store.cjs");
 
 const devUrl = process.env.SECONDEGO_DESKTOP_URL;
 const gatewayPort = Number(process.env.SECONDEGO_GATEWAY_PORT || 8787);
@@ -15,6 +22,8 @@ const gesturePort = Number.isInteger(configuredGesturePort) && configuredGesture
   ? configuredGesturePort
   : 52381;
 let gatewayProcess;
+let gatewayToken;
+let restartingGateway = false;
 let mainWindow;
 let gestureProcess;
 let gestureSocket;
@@ -361,8 +370,25 @@ ipcMain.handle("secondego:gesture-enabled", (_event, enabled) => {
   return gestureEnabled ? startGestureService() : (stopGestureService(), gestureStatus);
 });
 
+ipcMain.handle("secondego:providers:list", () => listProfiles());
+ipcMain.handle("secondego:providers:save", (_event, profile) => {
+  const result = saveProfile(profile || {});
+  restartGateway();
+  return result;
+});
+ipcMain.handle("secondego:providers:activate", (_event, profile) => {
+  const result = setActiveProfile(profile || {});
+  restartGateway();
+  return result;
+});
+ipcMain.handle("secondego:providers:delete", (_event, profile) => {
+  const result = deleteProfile(profile || {});
+  restartGateway();
+  return result;
+});
+
 function startGateway() {
-  const token = randomBytes(24).toString("base64url");
+  const token = gatewayToken || (gatewayToken = randomBytes(24).toString("base64url"));
   const rustCandidates = [
     process.env.SECONDEGO_GATEWAY_BINARY,
     path.join(repoRoot, "engine-rs", "target", "release", "secondego-gateway"),
@@ -372,14 +398,25 @@ function startGateway() {
   const python = process.env.SECONDEGO_PYTHON || path.join(repoRoot, ".venv", "bin", "python");
   const command = rustGateway || python;
   const args = rustGateway ? [] : ["-m", "SecondEgo.desktop.gateway", "--host", "127.0.0.1", "--port", String(gatewayPort)];
+  const providerEnvironment = activeEnvironment();
+  const childEnvironment = {
+    ...process.env,
+    ...providerEnvironment,
+    PYTHONPATH: [path.join(repoRoot, "src"), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
+    SECONDEGO_UI_TOKEN: token,
+    SECONDEGO_GATEWAY_PORT: String(gatewayPort),
+  };
+  // Never pass unrelated provider keys into the gateway. A selected profile is
+  // the only credential source for the desktop process; environment variables
+  // remain a deliberate CLI/compatibility escape hatch when no profile exists.
+  if (Object.keys(providerEnvironment).length > 0) {
+    for (const name of ["AI_API_KEY", "DEEPSEEK_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "GROQ_API_KEY"]) {
+      if (name !== Object.keys(providerEnvironment).find((key) => key.endsWith("_API_KEY"))) delete childEnvironment[name];
+    }
+  }
   gatewayProcess = spawn(command, args, {
     cwd: repoRoot,
-    env: {
-      ...process.env,
-      PYTHONPATH: [path.join(repoRoot, "src"), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
-      SECONDEGO_UI_TOKEN: token,
-      SECONDEGO_GATEWAY_PORT: String(gatewayPort),
-    },
+    env: childEnvironment,
     stdio: ["ignore", "pipe", "pipe"],
   });
   let announced = false;
@@ -409,12 +446,22 @@ function startGateway() {
   // process finishes binding its loopback socket.
   setTimeout(announce, 250);
   gatewayProcess.on("exit", () => {
+    if (restartingGateway) return;
     if (portInUse) {
       console.log("Gateway is already running externally; keeping UI open.");
       return;
     }
     if (app.isReady() && mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
   });
+}
+
+function restartGateway() {
+  restartingGateway = true;
+  if (gatewayProcess) gatewayProcess.kill();
+  setTimeout(() => {
+    restartingGateway = false;
+    if (app.isReady()) startGateway();
+  }, 120);
 }
 
 app.whenReady().then(() => {

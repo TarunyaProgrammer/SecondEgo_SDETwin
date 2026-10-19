@@ -51,9 +51,12 @@ The provider transport layer now has first-class Rust and Python compatibility
 adapters for DeepSeek, Gemini, OpenAI, Anthropic, and OpenRouter, plus the
 existing Groq adapter. The CLI/Makefile recognize named credentials, preserve
 `AI_API_KEY` only as a migration fallback, and never print key values. This is
-not yet the complete product profile system: OS keychain storage, authenticated
-gateway settings, multi-profile selection, and renderer isolation are still
-required before calling the desktop experience production-ready.
+not yet the complete terminal profile system, but the Electron shell now has a
+profile manager backed by Electron `safeStorage`: only encrypted blobs and
+non-secret metadata are written to the app data directory, and only the active
+profile is decrypted into the gateway child environment. The remaining work is
+to give the terminal the same credential-store contract and add authenticated
+gateway settings/test endpoints.
 
 ## 2. Target architecture
 
@@ -261,6 +264,7 @@ Do not call the local profile model “multi-tenant”. A hosted service would a
 - `engine-rs/crates/secondego-cli/src/main.rs` — provider/profile subcommands and non-interactive key input.
 - `engine-rs/crates/secondego-storage/src/lib.rs` — profile metadata and migration-managed credential references.
 - `engine-rs/crates/secondego-gateway/src/main.rs` — authenticated provider/profile endpoints with no secret return path.
+- `apps/desktop/electron/credential-store.cjs` — encrypted OS-backed profile storage; never expose key material to the renderer.
 - `src/SecondEgo/config.py`, `src/SecondEgo/model/*` — compatibility registry and named-key resolution.
 - `Makefile` — replace the single-key dotenv loader with named provider keys while retaining a warned migration alias.
 

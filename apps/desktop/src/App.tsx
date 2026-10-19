@@ -3,7 +3,7 @@ import logoUrl from "./assets/secondego-logo.png";
 import { GestureIndicator } from "./components/GestureIndicator";
 import { phaseGroupFor, phaseGroups, VillageScene, workerStateFor, workers } from "./components/VillageScene";
 import { useGestureControl } from "./hooks/useGestureControl";
-import type { DiscoveryFinding, EngineEvent, GestureActionType, GestureEvent, RunView, VoiceSnapshot } from "./types";
+import type { DiscoveryFinding, EngineEvent, GestureActionType, GestureEvent, ProviderProfile, ProviderProfileSnapshot, RunView, VoiceSnapshot } from "./types";
 
 const defaultGateway =
   new URLSearchParams(window.location.search).get("gateway") ||
@@ -189,6 +189,13 @@ function App() {
   const [error, setError] = useState("");
   const [notchOpen, setNotchOpen] = useState(!notchMode);
   const [showSettings, setShowSettings] = useState(false);
+  const [providerProfiles, setProviderProfiles] = useState<ProviderProfileSnapshot>({ active: null, entries: [] });
+  const [providerChoice, setProviderChoice] = useState("deepseek");
+  const [profileName, setProfileName] = useState("default");
+  const [profileModel, setProfileModel] = useState("");
+  const [providerMessage, setProviderMessage] = useState("");
+  const [providerBusy, setProviderBusy] = useState(false);
+  const providerKeyRef = useRef<HTMLInputElement>(null);
   const offsetRef = useRef(0);
   const api = useMemo(() => gateway.replace(/\/$/, ""), [gateway]);
 
@@ -252,6 +259,19 @@ function App() {
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [notchMode]);
+
+  useEffect(() => {
+    if (!showSettings || !window.secondEgoWindow?.listProviderProfiles) return;
+    void window.secondEgoWindow.listProviderProfiles().then((snapshot) => {
+      setProviderProfiles(snapshot);
+      const active = snapshot.entries.find((entry) => entry.id === snapshot.active);
+      if (active) {
+        setProviderChoice(active.provider);
+        setProfileName(active.profile);
+        setProfileModel(active.model || "");
+      }
+    }).catch((reason) => setProviderMessage(reason instanceof Error ? reason.message : "Could not read provider profiles."));
+  }, [showSettings]);
 
   useEffect(() => {
     const requestId = run?.request_id;
@@ -334,6 +354,49 @@ function App() {
     }
   }
 
+  async function saveProvider() {
+    const apiKey = providerKeyRef.current?.value.trim() || "";
+    if (!apiKey || !window.secondEgoWindow?.saveProviderProfile) {
+      setProviderMessage("Enter a key; it will be encrypted by the OS credential vault.");
+      return;
+    }
+    setProviderBusy(true);
+    setProviderMessage("");
+    try {
+      await window.secondEgoWindow.saveProviderProfile({
+        provider: providerChoice,
+        profile: profileName.trim() || "default",
+        model: profileModel.trim() || undefined,
+        apiKey,
+      });
+      if (providerKeyRef.current) providerKeyRef.current.value = "";
+      const snapshot = await window.secondEgoWindow.listProviderProfiles?.();
+      if (snapshot) setProviderProfiles(snapshot);
+      setProviderMessage("Saved securely and selected for the next run.");
+    } catch (reason) {
+      setProviderMessage(reason instanceof Error ? reason.message : "Could not save provider profile.");
+    } finally {
+      setProviderBusy(false);
+    }
+  }
+
+  async function activateProvider(profile: ProviderProfile) {
+    if (!window.secondEgoWindow?.setActiveProviderProfile) return;
+    setProviderBusy(true);
+    try {
+      const snapshot = await window.secondEgoWindow.setActiveProviderProfile({ provider: profile.provider, profile: profile.profile });
+      setProviderProfiles(snapshot);
+      setProviderChoice(profile.provider);
+      setProfileName(profile.profile);
+      setProfileModel(profile.model || "");
+      setProviderMessage(`${profile.provider} / ${profile.profile} is active.`);
+    } catch (reason) {
+      setProviderMessage(reason instanceof Error ? reason.message : "Could not activate provider profile.");
+    } finally {
+      setProviderBusy(false);
+    }
+  }
+
   useEffect(() => {
     if (run?.mode === "discover" && (run.result?.findings?.length ?? 0) > 0) {
       setVillageTab("findings");
@@ -385,7 +448,7 @@ function App() {
     >
       <header className="app-header">
         <div className="brand"><img src={logoUrl} alt="SecondEgo" /><span><strong>SecondEgo</strong><small>local coding harness</small></span></div>
-        <div className="app-header-meta"><span className="workspace-badge"><i />local-first</span><div className={`status ${statusTone}`}><i />{run ? statusLabel : "ready"}</div></div>
+        <div className="app-header-meta"><span className="workspace-badge"><i />local-first</span><div className={`status ${statusTone}`}><i />{run ? statusLabel : "ready"}</div><button className="desktop-settings-trigger" type="button" onClick={() => setShowSettings((open) => !open)} aria-expanded={showSettings} aria-controls="notch-settings" aria-label="Open settings">⚙</button></div>
       </header>
 
       <section className="command-surface">
@@ -417,8 +480,21 @@ function App() {
             </button>
           </div>
         )}
-        {notchMode && notchOpen && showSettings && <aside className="notch-settings" id="notch-settings" role="dialog" aria-label="Companion settings">
+        {showSettings && (!notchMode || notchOpen) && <aside className="notch-settings" id="notch-settings" role="dialog" aria-label="Companion settings">
           <header><span>Companion settings</span><button type="button" onClick={() => setShowSettings(false)} aria-label="Close companion settings">×</button></header>
+          <section className="provider-settings">
+            <strong>Model provider</strong>
+            <p>Keys are encrypted with the operating system vault. They never enter the gateway API, SQLite, or React state.</p>
+            <div className="provider-form-grid">
+              <label><span>Provider</span><select value={providerChoice} onChange={(event) => setProviderChoice(event.target.value)} disabled={providerBusy}><option value="deepseek">DeepSeek</option><option value="gemini">Gemini</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="openrouter">OpenRouter</option><option value="groq">Groq</option></select></label>
+              <label><span>Profile</span><input value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="default" disabled={providerBusy} /></label>
+              <label><span>Model override</span><input value={profileModel} onChange={(event) => setProfileModel(event.target.value)} placeholder="provider default" disabled={providerBusy} /></label>
+              <label><span>API key</span><input ref={providerKeyRef} type="password" autoComplete="off" placeholder="paste once" disabled={providerBusy} /></label>
+            </div>
+            <button className="settings-switch provider-save" type="button" onClick={() => void saveProvider()} disabled={providerBusy}><i aria-hidden="true" />{providerBusy ? "Saving…" : "Save encrypted profile"}</button>
+            {providerProfiles.entries.length > 0 && <div className="provider-profile-list">{providerProfiles.entries.map((profile) => <button type="button" key={profile.id} className={`provider-profile-row ${providerProfiles.active === profile.id ? "is-active" : ""}`} onClick={() => void activateProvider(profile)}><span><b>{profile.provider}</b><small>{profile.profile}{profile.model ? ` · ${profile.model}` : ""}</small></span><i>{providerProfiles.active === profile.id ? "active" : "use"}</i></button>)}</div>}
+            {providerMessage && <p className="provider-message" role="status">{providerMessage}</p>}
+          </section>
           <section><strong>Camera gestures</strong><p>Optional local landmark tracking. Clicking the capsule always works without a camera.</p><button className={`settings-switch ${gestureControl.enabled ? "is-on" : ""}`} type="button" role="switch" aria-checked={gestureControl.enabled} onClick={gestureControl.toggleEnabled}><i aria-hidden="true" /><span>{gestureControl.serviceState === "unavailable" || gestureControl.serviceState === "error" ? "Retry" : gestureControl.enabled ? "On" : "Off"}</span></button><p className={`gesture-service-status ${gestureControl.serviceState}`}>{gestureControl.serviceMessage || (gestureControl.serviceState === "active" ? "Landmark tracker is live." : gestureControl.serviceState === "starting" ? "Starting local landmark tracker…" : gestureControl.serviceState === "disabled" ? "Camera tracking is off." : "Landmark tracker is unavailable.")}</p></section>
           <section><strong>Window controls</strong><p><b>Click the top capsule</b> opens or closes mission control. <b>Click outside</b> or press <b>Escape</b> to collapse it. Hover does not resize the window.</p></section>
           <section><strong>Gesture map</strong><div className="settings-gesture-map"><span><b>Thumbs up</b><small>Expand</small></span><span><b>Thumbs down</b><small>Collapse</small></span><span><b>Open palm</b><small>Expand fallback</small></span></div><p>Camera input never starts or cancels a run. Use the visible run controls for those actions.</p></section>

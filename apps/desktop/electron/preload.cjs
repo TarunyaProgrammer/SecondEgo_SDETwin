@@ -18,4 +18,8 @@ contextBridge.exposeInMainWorld("secondEgoWindow", {
     ipcRenderer.on("secondego:gesture-status", listener);
     return () => ipcRenderer.removeListener("secondego:gesture-status", listener);
   },
+  listProviderProfiles: () => ipcRenderer.invoke("secondego:providers:list"),
+  saveProviderProfile: (profile) => ipcRenderer.invoke("secondego:providers:save", profile),
+  setActiveProviderProfile: (profile) => ipcRenderer.invoke("secondego:providers:activate", profile),
+  deleteProviderProfile: (profile) => ipcRenderer.invoke("secondego:providers:delete", profile),
 });

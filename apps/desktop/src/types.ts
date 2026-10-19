@@ -95,6 +95,21 @@ export type GestureState = {
   serviceMessage: string | null;
 };
 
+export type ProviderProfile = {
+  id: string;
+  provider: string;
+  profile: string;
+  model: string | null;
+  keyPresent: boolean;
+  envName: string;
+  updatedAt: string;
+};
+
+export type ProviderProfileSnapshot = {
+  active: string | null;
+  entries: ProviderProfile[];
+};
+
 export type GestureServiceState = "disabled" | "starting" | "active" | "unavailable" | "error";
 
 export type GestureServiceStatus = {
@@ -120,6 +135,10 @@ declare global {
       setGestureEnabled?: (enabled: boolean) => Promise<GestureServiceStatus>;
       onGesture?: (callback: (event: LandmarkGestureSignal) => void) => () => void;
       onGestureStatus?: (callback: (status: GestureServiceStatus) => void) => () => void;
+      listProviderProfiles?: () => Promise<ProviderProfileSnapshot>;
+      saveProviderProfile?: (profile: { provider: string; profile: string; model?: string; apiKey: string }) => Promise<ProviderProfile>;
+      setActiveProviderProfile?: (profile: { provider: string; profile: string }) => Promise<ProviderProfileSnapshot>;
+      deleteProviderProfile?: (profile: { provider: string; profile: string }) => Promise<ProviderProfileSnapshot>;
     };
   }
 }
