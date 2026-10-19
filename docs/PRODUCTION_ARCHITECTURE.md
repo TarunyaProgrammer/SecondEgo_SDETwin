@@ -155,7 +155,7 @@ Desktop:
 Settings → Providers → Add provider → paste key → local validation → keychain write
 ```
 
-The raw key is accepted only at the boundary, sent to the OS keychain (`Keychain` on macOS, Credential Manager on Windows, Secret Service/libsecret on Linux), and replaced with a profile id. The engine receives a short-lived in-memory credential handle. SQLite stores provider id, model id, keychain reference, created/updated timestamps, and last validation status—never the secret.
+The raw key is accepted only at the boundary, sent to the OS keychain (`Keychain` on macOS, Credential Manager on Windows, Secret Service/libsecret on Linux), and replaced with a profile id. The current migration passes the selected key only to the local gateway environment; the target hardening boundary is a short-lived in-memory credential handle or in-process provider session. SQLite stores provider id, model id, keychain reference, created/updated timestamps, and last validation status—never the secret.
 
 The “Test connection” action must make a minimal provider request with a fixed non-user prompt, return a classified result, and redact all error text before showing or persisting it.
 
@@ -301,7 +301,7 @@ Do not call the local profile model “multi-tenant”. A hosted service would a
 The app is not production-ready when it merely launches. The minimum bar is:
 
 - all five required providers can be configured independently from terminal and UI;
-- keys never appear in renderer state, logs, SQLite, diffs, prompts, or subprocess environments;
+- keys never appear in renderer state, logs, SQLite, diffs, or prompts; the current migration boundary injects only the selected key into the short-lived local gateway environment, with credential handles/in-process sessions still required for the final hardening bar;
 - a clean install can run a provider preflight and a deterministic fixture without repository mutation;
 - every run can be resumed or explained from versioned events, safe config metadata, diff data, and verification evidence;
 - failed, blocked, cancelled, and partial states are first-class in both terminal and desktop surfaces;
