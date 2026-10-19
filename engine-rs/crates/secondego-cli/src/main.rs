@@ -87,6 +87,16 @@ fn main() {
     }
     if arguments
         .first()
+        .is_some_and(|argument| argument == "provider" || argument == "providers")
+    {
+        if let Err(error) = run_provider_command(&arguments[1..]) {
+            eprintln!("SecondEgo provider command failed: {error}");
+            std::process::exit(2);
+        }
+        return;
+    }
+    if arguments
+        .first()
         .is_some_and(|argument| argument == "launch")
     {
         let _terminal_foreground = take_terminal_foreground();
@@ -251,6 +261,7 @@ fn print_help() {
     println!("  secondego --interactive                 Run the verified task-fixing harness");
     println!("  secondego --workspace PATH --task TEXT   Run a non-interactive task");
     println!("  secondego discover --repo PATH           Scan a repository without modifying it");
+    println!("  secondego provider list                  Show supported providers and safe key status");
     println!("  secondego help                           Show this command guide");
     println!();
     println!("DISCOVERY SHOWCASE");
@@ -278,6 +289,41 @@ fn print_help() {
         "  4. Explain each finding through its path, line range, confidence, and verification plan."
     );
     println!("  5. Re-run and show the target Git diff is unchanged.");
+}
+
+fn run_provider_command(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    match arguments.first().map(String::as_str).unwrap_or("list") {
+        "list" | "status" => {
+            println!("SecondEgo providers — key values are never displayed");
+            let selected = ProviderKind::from_environment().ok();
+            for provider in ProviderKind::all() {
+                let named_present = non_empty_env(provider.credential_env_name()).is_some();
+                let legacy_present = non_empty_env("AI_API_KEY").is_some();
+                let status = if named_present {
+                    "READY"
+                } else if legacy_present {
+                    "READY via legacy AI_API_KEY"
+                } else {
+                    "MISSING"
+                };
+                let marker = (selected == Some(provider)).then_some('*').unwrap_or(' ');
+                println!(
+                    "  {marker} {:<10} {:<24} model={}",
+                    provider.name(),
+                    status,
+                    provider.default_model()
+                );
+            }
+            println!();
+            println!("Select a provider with SECONDEGO_PROVIDER and optionally override SECONDEGO_MODEL.");
+            Ok(())
+        }
+        "help" => {
+            println!("Usage: secondego provider list");
+            Ok(())
+        }
+        command => Err(format!("unknown provider command '{command}'; use 'provider list'").into()),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

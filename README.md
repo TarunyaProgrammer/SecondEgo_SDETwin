@@ -203,6 +203,12 @@ with `make config`.
 Run `make config` to display the resolved provider/model and whether a key is
 present. It never prints the key.
 
+The Rust CLI exposes the same safe status without contacting a provider:
+
+```bash
+cargo run --manifest-path engine-rs/Cargo.toml -p secondego-cli -- provider list
+```
+
 ## Execution flow
 
 The engine follows this bounded flow:
