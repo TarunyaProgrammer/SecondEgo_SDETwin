@@ -391,11 +391,38 @@ fn create_run(
             {
                 Ok(value) => value,
                 Err(error) => {
+                    let message = error.to_string();
+                    let cancelled = matches!(error, RuntimeError::Cancelled);
+                    let status = if cancelled {
+                        secondego_core::TerminalStatus::Cancelled
+                    } else {
+                        secondego_core::TerminalStatus::Failed
+                    };
+                    let state = fallback_state(
+                        id,
+                        record_issue.clone(),
+                        record_repository.clone(),
+                        status,
+                        message.clone(),
+                    );
+                    persist_snapshot(
+                        &run_store,
+                        &state,
+                        &[],
+                        &RunMetadata {
+                            profile_id: record_profile_id.clone(),
+                            workspace_id: Some(record_repository.clone()),
+                            provider: Some(record_provider.clone()),
+                            model: Some(record_model.clone()),
+                            engine_version: Some(env!("CARGO_PKG_VERSION").into()),
+                        },
+                        None,
+                        (!cancelled).then_some(message.as_str()),
+                    );
                     if let Ok(mut all_runs) = runs_for_thread.lock() {
                         if let Some(record) = all_runs.get_mut(&id) {
-                            let cancelled = matches!(error, RuntimeError::Cancelled);
                             record.status = if cancelled { "CANCELLED" } else { "FAILED" }.into();
-                            record.error = (!cancelled).then(|| error.to_string());
+                            record.error = (!cancelled).then_some(message);
                         }
                     }
                     return;
@@ -443,38 +470,79 @@ fn create_run(
                 .and_then(|all_runs| all_runs.get(&id).map(|record| record.events.clone()))
                 .unwrap_or_default();
             let record = match result {
-                Ok(report) => RunRecord {
-                    repository: resolved.root.to_string_lossy().into_owned(),
-                    issue: record_issue,
-                    profile_id: record_profile_id,
-                    provider: record_provider,
-                    model: record_model,
-                    status: "COMPLETE".into(),
-                    events: if events.is_empty() {
+                Ok(report) => {
+                    let result = serde_json::to_value(&report).ok();
+                    let report_events = if events.is_empty() {
                         report.events.clone()
                     } else {
                         events
-                    },
-                    report: serde_json::to_value(report).ok(),
-                    error: None,
-                    cancellation: run_cancellation.clone(),
-                    voice: voice_status.clone(),
-                    created_at,
-                },
-                Err(error) => RunRecord {
-                    repository: record_repository,
-                    issue: record_issue,
-                    profile_id: record_profile_id,
-                    provider: record_provider,
-                    model: record_model,
-                    status: "FAILED".into(),
-                    events,
-                    report: None,
-                    error: Some(error),
-                    cancellation: run_cancellation.clone(),
-                    voice: voice_status.clone(),
-                    created_at,
-                },
+                    };
+                    persist_snapshot(
+                        &run_store,
+                        &report.state,
+                        &report_events,
+                        &RunMetadata {
+                            profile_id: record_profile_id.clone(),
+                            workspace_id: Some(resolved.root.to_string_lossy().into_owned()),
+                            provider: Some(record_provider.clone()),
+                            model: Some(record_model.clone()),
+                            engine_version: Some(env!("CARGO_PKG_VERSION").into()),
+                        },
+                        result.as_ref(),
+                        None,
+                    );
+                    RunRecord {
+                        repository: resolved.root.to_string_lossy().into_owned(),
+                        issue: record_issue,
+                        profile_id: record_profile_id,
+                        provider: record_provider,
+                        model: record_model,
+                        status: "COMPLETE".into(),
+                        events: report_events,
+                        report: result,
+                        error: None,
+                        cancellation: run_cancellation.clone(),
+                        voice: voice_status.clone(),
+                        created_at,
+                    }
+                }
+                Err(error) => {
+                    let state = fallback_state(
+                        id,
+                        record_issue.clone(),
+                        resolved.root.to_string_lossy().into_owned(),
+                        secondego_core::TerminalStatus::Failed,
+                        error.clone(),
+                    );
+                    persist_snapshot(
+                        &run_store,
+                        &state,
+                        &events,
+                        &RunMetadata {
+                            profile_id: record_profile_id.clone(),
+                            workspace_id: Some(resolved.root.to_string_lossy().into_owned()),
+                            provider: Some(record_provider.clone()),
+                            model: Some(record_model.clone()),
+                            engine_version: Some(env!("CARGO_PKG_VERSION").into()),
+                        },
+                        None,
+                        Some(error.as_str()),
+                    );
+                    RunRecord {
+                        repository: record_repository,
+                        issue: record_issue,
+                        profile_id: record_profile_id,
+                        provider: record_provider,
+                        model: record_model,
+                        status: "FAILED".into(),
+                        events,
+                        report: None,
+                        error: Some(error),
+                        cancellation: run_cancellation.clone(),
+                        voice: voice_status.clone(),
+                        created_at,
+                    }
+                }
             };
             if let Ok(mut all_runs) = runs_for_thread.lock() {
                 all_runs.insert(id, record);
@@ -486,10 +554,37 @@ fn create_run(
         {
             Ok(provider) => provider,
             Err(error) => {
+                let message = error.to_string();
+                let events = runs_for_thread
+                    .lock()
+                    .ok()
+                    .and_then(|all_runs| all_runs.get(&id).map(|record| record.events.clone()))
+                    .unwrap_or_default();
+                let state = fallback_state(
+                    id,
+                    record_issue.clone(),
+                    resolved.root.to_string_lossy().into_owned(),
+                    secondego_core::TerminalStatus::Failed,
+                    message.clone(),
+                );
+                persist_snapshot(
+                    &run_store,
+                    &state,
+                    &events,
+                    &RunMetadata {
+                        profile_id: record_profile_id.clone(),
+                        workspace_id: Some(resolved.root.to_string_lossy().into_owned()),
+                        provider: Some(record_provider.clone()),
+                        model: Some(record_model.clone()),
+                        engine_version: Some(env!("CARGO_PKG_VERSION").into()),
+                    },
+                    None,
+                    Some(message.as_str()),
+                );
                 if let Ok(mut all_runs) = runs_for_thread.lock() {
                     if let Some(record) = all_runs.get_mut(&id) {
                         record.status = "FAILED".into();
-                        record.error = Some(error.to_string());
+                        record.error = Some(message);
                     }
                 }
                 return;
@@ -562,6 +657,33 @@ fn create_run(
             }
             Err(error) => {
                 let cancelled = matches!(error, RuntimeError::Cancelled);
+                let message = error.to_string();
+                let status = if cancelled {
+                    secondego_core::TerminalStatus::Cancelled
+                } else {
+                    secondego_core::TerminalStatus::Failed
+                };
+                let state = fallback_state(
+                    id,
+                    record_issue.clone(),
+                    record_repository.clone(),
+                    status,
+                    message.clone(),
+                );
+                persist_snapshot(
+                    &run_store,
+                    &state,
+                    &events,
+                    &RunMetadata {
+                        profile_id: record_profile_id.clone(),
+                        workspace_id: Some(record_repository.clone()),
+                        provider: Some(record_provider.clone()),
+                        model: Some(record_model.clone()),
+                        engine_version: Some(env!("CARGO_PKG_VERSION").into()),
+                    },
+                    None,
+                    (!cancelled).then_some(message.as_str()),
+                );
                 RunRecord {
                     repository: record_repository,
                     issue: record_issue,
@@ -571,7 +693,7 @@ fn create_run(
                     status: if cancelled { "CANCELLED" } else { "FAILED" }.into(),
                     events,
                     report: None,
-                    error: (!cancelled).then(|| error.to_string()),
+                    error: (!cancelled).then_some(message),
                     cancellation: run_cancellation.clone(),
                     voice: voice_status.clone(),
                     created_at,
@@ -605,6 +727,20 @@ fn prune_terminal_runs(runs: &mut HashMap<Uuid, RunRecord>) {
         };
         runs.remove(&id);
     }
+}
+
+fn fallback_state(
+    run_id: Uuid,
+    task: String,
+    workspace: String,
+    status: secondego_core::TerminalStatus,
+    reason: String,
+) -> ExecutionState {
+    let mut state = ExecutionState::new(task, workspace);
+    state.run_id = run_id;
+    state.status = status;
+    state.termination_reason = Some(reason);
+    state
 }
 
 fn persist_snapshot(
