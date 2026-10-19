@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
+use uuid::Uuid;
 
 const MAX_FINDINGS: usize = 40;
 const MAX_EXCERPT_BYTES: usize = 900;
@@ -124,6 +125,18 @@ pub fn discover(
 pub fn discover_with_observer<F>(
     workspace: impl AsRef<Path>,
     request: DiscoveryRequest,
+    observer: F,
+) -> Result<DiscoveryReport, String>
+where
+    F: FnMut(&EngineEvent),
+{
+    discover_with_observer_and_id(workspace, request, None, observer)
+}
+
+pub fn discover_with_observer_and_id<F>(
+    workspace: impl AsRef<Path>,
+    request: DiscoveryRequest,
+    run_id: Option<Uuid>,
     mut observer: F,
 ) -> Result<DiscoveryReport, String>
 where
@@ -147,6 +160,9 @@ where
         "discover repository issues",
         workspace.to_string_lossy(),
     ));
+    if let Some(run_id) = run_id {
+        machine.state.run_id = run_id;
+    }
     let mut events = Vec::new();
     let mut push_event = |event: EngineEvent| {
         observer(&event);
@@ -229,7 +245,10 @@ where
         &machine.state,
         "activity.started",
         "signals.rank",
-        &format!("Ranking and deduplicating {} candidate signals", before_dedup),
+        &format!(
+            "Ranking and deduplicating {} candidate signals",
+            before_dedup
+        ),
     ));
     deduplicate(&mut candidates);
     let after_dedup = candidates.len();
@@ -245,7 +264,10 @@ where
         &machine.state,
         "activity.completed",
         "signals.rank",
-        &format!("Selected top {} prioritized issue candidates", retained_findings),
+        &format!(
+            "Selected top {} prioritized issue candidates",
+            retained_findings
+        ),
     ));
     push_event(
         machine
@@ -304,7 +326,10 @@ fn collect_error_handling(
 ) {
     for path in &index.snapshot.files {
         let is_py = path.ends_with(".py");
-        let is_js = path.ends_with(".js") || path.ends_with(".ts") || path.ends_with(".tsx") || path.ends_with(".jsx");
+        let is_js = path.ends_with(".js")
+            || path.ends_with(".ts")
+            || path.ends_with(".tsx")
+            || path.ends_with(".jsx");
         if (!is_py && !is_js) || index.snapshot.test_files.contains(path) {
             continue;
         }
@@ -339,12 +364,23 @@ fn collect_error_handling(
                         vec!["Trace callers and determine whether the fallback preserves the function contract.".into()],
                     ));
                 }
-            } else if is_js && (trimmed.contains("catch (") || trimmed.contains("catch(") || trimmed.starts_with("catch {") || trimmed.starts_with("catch{")) {
+            } else if is_js
+                && (trimmed.contains("catch (")
+                    || trimmed.contains("catch(")
+                    || trimmed.starts_with("catch {")
+                    || trimmed.starts_with("catch{"))
+            {
                 let next = lines
                     .get(line_index + 1)
                     .map(|value| value.trim())
                     .unwrap_or_default();
-                if trimmed.contains("{}") || next == "{}" || next == "return;" || next == "return" || next == "/* ignore */" || next == "// ignore" {
+                if trimmed.contains("{}")
+                    || next == "{}"
+                    || next == "return;"
+                    || next == "return"
+                    || next == "/* ignore */"
+                    || next == "// ignore"
+                {
                     let line_number = line_index + 1;
                     findings.push(candidate(
                         format!("error-handling:{path}:{line_number}"),
@@ -366,7 +402,8 @@ fn collect_error_handling(
 }
 
 fn collect_test_gaps(root: &Path, index: &RepositoryIndex, findings: &mut Vec<IssueCandidate>) {
-    let mut test_sources: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut test_sources: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
     for link in &index.test_links {
         if !test_sources.contains_key(&link.test_path) {
             if let Ok(source) = fs::read_to_string(root.join(&link.test_path)) {
@@ -548,5 +585,23 @@ mod tests {
         .unwrap();
         assert_eq!(report.lenses, vec!["error_handling"]);
         assert!(report.findings.len() <= 1);
+    }
+
+    #[test]
+    fn discovery_can_use_a_gateway_request_id_for_durable_replay() {
+        let (directory, _) = fixture();
+        let run_id = Uuid::new_v4();
+        let report = discover_with_observer_and_id(
+            directory.path(),
+            DiscoveryRequest {
+                lenses: vec![DiscoveryLens::ErrorHandling],
+                max_findings: 1,
+            },
+            Some(run_id),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(report.state.run_id, run_id);
+        assert!(report.events.iter().all(|event| event.run_id == run_id));
     }
 }

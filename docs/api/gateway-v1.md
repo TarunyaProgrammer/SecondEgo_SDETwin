@@ -9,7 +9,8 @@ The desktop sets `SECONDEGO_STATE_DB` to an app-data SQLite file. Active runs
 are held in memory for low-latency polling, while terminal task snapshots,
 events, normalized results, and redacted profile/provider/model metadata are
 written through migration-managed storage. If the gateway restarts, completed
-runs remain readable; cancellation of an active run is inherently process-local.
+runs remain readable under the same `request_id` used by the desktop poller;
+cancellation of an active run is inherently process-local.
 
 ## Common rules
 

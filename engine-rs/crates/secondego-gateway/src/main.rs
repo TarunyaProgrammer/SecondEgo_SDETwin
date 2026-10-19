@@ -13,7 +13,9 @@ use secondego_core::{EngineEvent, ExecutionState};
 use secondego_model::{
     ConfiguredProvider, ModelProvider, ProviderContext, ProviderKind, configured_model,
 };
-use secondego_runtime::discovery::{DiscoveryLens, DiscoveryRequest, discover_with_observer};
+use secondego_runtime::discovery::{
+    DiscoveryLens, DiscoveryRequest, discover_with_observer_and_id,
+};
 use secondego_runtime::{
     CancellationToken, RunReport, RuntimeError, RustEngine, collect_garbage,
     resolve_repository_with_cancellation, validate_repository_source,
@@ -426,12 +428,13 @@ fn create_run(
                 .into_iter()
                 .filter_map(|value| DiscoveryLens::parse(&value))
                 .collect();
-            let result = discover_with_observer(
+            let result = discover_with_observer_and_id(
                 &resolved.root,
                 DiscoveryRequest {
                     lenses,
                     max_findings: discovery_max_findings,
                 },
+                Some(id),
                 event_sink,
             );
             let events = runs_for_thread
@@ -511,7 +514,7 @@ fn create_run(
             .with_event_sink(event_sink)
             .with_voice(run_voice.clone());
         engine = engine.with_cancellation(run_cancellation.clone());
-        let result = engine.run(request.issue, resolved.root.clone());
+        let result = engine.run_with_id(request.issue, resolved.root.clone(), id);
         let events = runs_for_thread
             .lock()
             .ok()

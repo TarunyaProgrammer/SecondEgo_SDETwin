@@ -20,6 +20,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
 
 pub mod discovery;
 pub mod voice;
@@ -444,11 +445,22 @@ impl<P: ModelProvider> RustEngine<P> {
         task: impl Into<String>,
         workspace: impl AsRef<Path>,
     ) -> Result<RunReport, RuntimeError> {
+        self.run_with_id(task, workspace, Uuid::new_v4())
+    }
+
+    pub fn run_with_id(
+        &mut self,
+        task: impl Into<String>,
+        workspace: impl AsRef<Path>,
+        run_id: Uuid,
+    ) -> Result<RunReport, RuntimeError> {
         let workspace = workspace
             .as_ref()
             .canonicalize()
             .map_err(|error| RuntimeError::Repository(error.to_string()))?;
-        let mut machine = StateMachine::new(ExecutionState::new(task, workspace.to_string_lossy()));
+        let mut state = ExecutionState::new(task, workspace.to_string_lossy());
+        state.run_id = run_id;
+        let mut machine = StateMachine::new(state);
         let mut events = Vec::new();
         let mut ledger = EvidenceLedger::default();
         let mut tools_used = Vec::new();
@@ -852,7 +864,9 @@ impl<P: ModelProvider> RustEngine<P> {
                 &machine.state,
                 "activity.started",
                 "recovery.apply",
-                &format!("Applying {strategy} (attempt {recovery_attempts}/{max_recovery_attempts})"),
+                &format!(
+                    "Applying {strategy} (attempt {recovery_attempts}/{max_recovery_attempts})"
+                ),
             );
             if let Err(error) = execute_actions(
                 &mut self.resources,
@@ -1459,9 +1473,7 @@ impl<P: ModelProvider> RustEngine<P> {
                             .max(MIN_RATE_LIMIT_WAIT);
                         let max_retries = max_rate_limit_retries();
                         let max_wait = max_rate_limit_wait();
-                        if rate_limit_attempt < max_retries
-                            && retry_delay <= max_wait
-                        {
+                        if rate_limit_attempt < max_retries && retry_delay <= max_wait {
                             if let Err(resource_error) = self.resources.record_retry() {
                                 let error = RuntimeError::Resource(resource_error.to_string());
                                 self.activity(
@@ -3388,13 +3400,14 @@ Run the existing Rust test suite before and after the change.";
             .iter()
             .position(|e| {
                 e.event_type == "activity.started"
-                    && e.payload
-                        .get("operation")
-                        .and_then(|v| v.as_str())
+                    && e.payload.get("operation").and_then(|v| v.as_str())
                         == Some("execute.actions")
             })
             .expect("execute.actions event must be present");
-        assert!(first_retry < first_execute, "repair must happen before execution");
+        assert!(
+            first_retry < first_execute,
+            "repair must happen before execution"
+        );
         assert_eq!(
             std::fs::read_to_string(root.path().join("value.py")).unwrap(),
             "VALUE = 2\n"
@@ -3407,8 +3420,7 @@ Run the existing Rust test suite before and after the change.";
         // validation (e.g., a worktree race).  The state machine must accept
         // Execute → Diagnose and produce a FAILED report rather than panicking.
         use secondego_core::Phase;
-        let mut machine =
-            StateMachine::new(ExecutionState::new("task", "/repo"));
+        let mut machine = StateMachine::new(ExecutionState::new("task", "/repo"));
         machine.move_to(Phase::Understand, "start").unwrap();
         machine.move_to(Phase::Explore, "scan").unwrap();
         machine.move_to(Phase::Plan, "plan").unwrap();
