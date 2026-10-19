@@ -16,6 +16,10 @@ runs remain readable; cancellation of an active run is inherently process-local.
 - `Content-Type: application/json` is required for request bodies.
 - `X-SecondEgo-Token` is required on every API route.
 - Request bodies are bounded; oversized tasks are rejected before execution.
+- The local gateway admits at most 64 simultaneous HTTP connections and 32
+  active runs. Excess connections receive `503`; excess run submissions receive
+  `429`. Terminal in-memory records are capped at 256 and older terminal
+  records are evicted after their durable snapshot is available in SQLite.
 - Provider errors are classified and sanitized. Raw provider response bodies,
   prompts, and keys are not returned.
 - Engine events use `schema_version: 1`.

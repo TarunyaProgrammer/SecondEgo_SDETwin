@@ -4,9 +4,10 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use secondego_core::{EngineEvent, ExecutionState};
 use secondego_model::{
@@ -22,6 +23,9 @@ use secondego_storage::{RunMetadata, SQLiteRunStore};
 use uuid::Uuid;
 
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
+const MAX_ACTIVE_CONNECTIONS: usize = 64;
+const MAX_ACTIVE_RUNS: usize = 32;
+const MAX_IN_MEMORY_RUNS: usize = 256;
 const API_VERSION: u32 = 1;
 
 type RunStore = Arc<Mutex<SQLiteRunStore>>;
@@ -39,6 +43,15 @@ struct RunRecord {
     error: Option<String>,
     cancellation: CancellationToken,
     voice: VoiceStatusHandle,
+    created_at: Instant,
+}
+
+struct ConnectionPermit(Arc<AtomicUsize>);
+
+impl Drop for ConnectionPermit {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -60,17 +73,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store = open_state_store()?;
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     let runs: Arc<Mutex<HashMap<Uuid, RunRecord>>> = Arc::new(Mutex::new(HashMap::new()));
+    let active_connections = Arc::new(AtomicUsize::new(0));
     // Voice is presentation-only, but its background worker must be shared by
     // the long-lived gateway rather than leaked once for every submitted run.
     let voice = Arc::new(VoiceService::from_env());
     eprintln!("SecondEgo Rust gateway listening on http://127.0.0.1:{port}");
     for stream in listener.incoming().flatten() {
+        let permit =
+            match active_connections.fetch_update(Ordering::AcqRel, Ordering::Relaxed, |count| {
+                (count < MAX_ACTIVE_CONNECTIONS).then_some(count + 1)
+            }) {
+                Ok(_) => ConnectionPermit(active_connections.clone()),
+                Err(_) => {
+                    let mut stream = stream;
+                    let _ = respond(
+                        &mut stream,
+                        503,
+                        serde_json::json!({"error":"gateway connection limit reached"}),
+                    );
+                    continue;
+                }
+            };
         let token = token.clone();
         let runs = runs.clone();
         let ui_root = ui_root.clone();
         let voice = voice.clone();
         let store = store.clone();
         thread::spawn(move || {
+            let _permit = permit;
             let _ = handle(stream, &token, &runs, ui_root.as_deref(), &voice, &store);
         });
     }
@@ -307,22 +337,39 @@ fn create_run(
     let id = Uuid::new_v4();
     let cancellation = CancellationToken::default();
     let voice_status = voice.status_handle();
-    runs.lock().unwrap().insert(
-        id,
-        RunRecord {
-            repository: request.repository.clone(),
-            issue: request.issue.clone(),
-            profile_id: profile_id.clone(),
-            provider: provider.clone(),
-            model: model.clone(),
-            status: "QUEUED".into(),
-            events: Vec::new(),
-            report: None,
-            error: None,
-            cancellation: cancellation.clone(),
-            voice: voice_status.clone(),
-        },
-    );
+    let created_at = Instant::now();
+    {
+        let mut all_runs = runs.lock().unwrap();
+        let active_count = all_runs
+            .values()
+            .filter(|record| !is_terminal_status(&record.status))
+            .count();
+        if active_count >= MAX_ACTIVE_RUNS {
+            return respond(
+                stream,
+                429,
+                serde_json::json!({"error":"active run limit reached","limit":MAX_ACTIVE_RUNS}),
+            );
+        }
+        prune_terminal_runs(&mut all_runs);
+        all_runs.insert(
+            id,
+            RunRecord {
+                repository: request.repository.clone(),
+                issue: request.issue.clone(),
+                profile_id: profile_id.clone(),
+                provider: provider.clone(),
+                model: model.clone(),
+                status: "QUEUED".into(),
+                events: Vec::new(),
+                report: None,
+                error: None,
+                cancellation: cancellation.clone(),
+                voice: voice_status.clone(),
+                created_at,
+            },
+        );
+    }
     let runs_for_thread = runs.clone();
     let record_repository = request.repository.clone();
     let record_issue = request.issue.clone();
@@ -409,6 +456,7 @@ fn create_run(
                     error: None,
                     cancellation: run_cancellation.clone(),
                     voice: voice_status.clone(),
+                    created_at,
                 },
                 Err(error) => RunRecord {
                     repository: record_repository,
@@ -422,6 +470,7 @@ fn create_run(
                     error: Some(error),
                     cancellation: run_cancellation.clone(),
                     voice: voice_status.clone(),
+                    created_at,
                 },
             };
             if let Ok(mut all_runs) = runs_for_thread.lock() {
@@ -505,6 +554,7 @@ fn create_run(
                     error,
                     cancellation: run_cancellation.clone(),
                     voice: voice_status.clone(),
+                    created_at,
                 }
             }
             Err(error) => {
@@ -521,6 +571,7 @@ fn create_run(
                     error: (!cancelled).then(|| error.to_string()),
                     cancellation: run_cancellation.clone(),
                     voice: voice_status.clone(),
+                    created_at,
                 }
             }
         };
@@ -533,6 +584,24 @@ fn create_run(
         202,
         serde_json::json!({"api_version":API_VERSION,"request_id":id,"status":"QUEUED"}),
     )
+}
+
+fn is_terminal_status(status: &str) -> bool {
+    matches!(status, "COMPLETE" | "FAILED" | "CANCELLED" | "BLOCKED")
+}
+
+fn prune_terminal_runs(runs: &mut HashMap<Uuid, RunRecord>) {
+    while runs.len() >= MAX_IN_MEMORY_RUNS {
+        let Some((id, _created_at)) = runs
+            .iter()
+            .filter(|(_, record)| is_terminal_status(&record.status))
+            .min_by_key(|(_, record)| record.created_at)
+            .map(|(id, record)| (*id, record.created_at))
+        else {
+            break;
+        };
+        runs.remove(&id);
+    }
 }
 
 fn persist_snapshot(
@@ -888,10 +957,12 @@ fn read_request(stream: &mut TcpStream) -> std::io::Result<Request> {
         .filter_map(|line| line.split_once(':'))
         .map(|(key, value)| (key.to_lowercase(), value.trim().to_owned()))
         .collect::<HashMap<_, _>>();
-    let body_length = headers
-        .get("content-length")
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(0);
+    let body_length = match headers.get("content-length") {
+        Some(value) => value.parse::<usize>().map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid content length")
+        })?,
+        None => 0,
+    };
     if header_end + body_length > MAX_REQUEST_BYTES {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -904,6 +975,12 @@ fn read_request(stream: &mut TcpStream) -> std::io::Result<Request> {
             break;
         }
         bytes.extend_from_slice(&chunk[..count]);
+    }
+    if bytes.len() < header_end + body_length {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "request body ended before content length",
+        ));
     }
     Ok(Request {
         method,
@@ -938,6 +1015,8 @@ fn respond_bytes(
         400 => "Bad Request",
         401 => "Unauthorized",
         404 => "Not Found",
+        429 => "Too Many Requests",
+        503 => "Service Unavailable",
         _ => "Error",
     };
     write!(
