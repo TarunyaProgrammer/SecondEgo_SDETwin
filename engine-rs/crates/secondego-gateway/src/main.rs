@@ -513,6 +513,21 @@ fn result_payload(report: &RunReport) -> serde_json::Value {
         patch.to_owned()
     };
     let changed_paths = report.changed_paths.clone();
+    let mut normalized_files = normalized_diff(&bounded_patch);
+    if normalized_files.is_empty() {
+        normalized_files = changed_paths
+            .iter()
+            .map(|path| {
+                serde_json::json!({
+                    "path": path,
+                    "status": "modified",
+                    "additions": 0,
+                    "deletions": 0,
+                    "hunks": [],
+                })
+            })
+            .collect();
+    }
     serde_json::json!({
         "run_id": report.state.run_id,
         "status": serde_json::to_value(report.state.status).unwrap_or_else(|_| serde_json::json!("FAILED")),
@@ -524,12 +539,108 @@ fn result_payload(report: &RunReport) -> serde_json::Value {
             "format": "git-unified-v1",
             "patch": bounded_patch,
             "truncated": diff_truncated,
-            "files": report.changed_paths,
+            "files": normalized_files,
         },
         "resource_usage": report.resource_usage,
         "verification": report.verification,
         "evidence": report.evidence,
     })
+}
+
+#[derive(Default)]
+struct NormalizedDiffFile {
+    path: String,
+    status: &'static str,
+    additions: usize,
+    deletions: usize,
+    hunks: Vec<serde_json::Value>,
+}
+
+fn normalized_diff(patch: &str) -> Vec<serde_json::Value> {
+    let mut files: Vec<NormalizedDiffFile> = Vec::new();
+    let mut current: Option<usize> = None;
+    let mut hunk: Option<usize> = None;
+    for line in patch.lines() {
+        if let Some(header) = line.strip_prefix("diff --git a/") {
+            if files.len() >= 512 {
+                break;
+            }
+            let path = header
+                .split_once(" b/")
+                .map(|(_, path)| path)
+                .unwrap_or(header)
+                .to_owned();
+            files.push(NormalizedDiffFile {
+                path,
+                status: "modified",
+                ..NormalizedDiffFile::default()
+            });
+            current = Some(files.len() - 1);
+            hunk = None;
+            continue;
+        }
+        let Some(file_index) = current else { continue };
+        if line.starts_with("new file mode") {
+            files[file_index].status = "added";
+            continue;
+        }
+        if line.starts_with("deleted file mode") {
+            files[file_index].status = "deleted";
+            continue;
+        }
+        if line.starts_with("rename from ") || line.starts_with("rename to ") {
+            files[file_index].status = "renamed";
+            continue;
+        }
+        if line.starts_with("Binary files ") {
+            files[file_index].status = "binary";
+            continue;
+        }
+        if line.starts_with("@@ ") {
+            if files[file_index].hunks.len() >= 512 {
+                hunk = None;
+                continue;
+            }
+            files[file_index]
+                .hunks
+                .push(serde_json::json!({"header": line, "lines": []}));
+            hunk = Some(files[file_index].hunks.len() - 1);
+            continue;
+        }
+        let Some(hunk_index) = hunk else { continue };
+        let Some(kind) = line.as_bytes().first().copied() else { continue };
+        let (kind, content) = match kind {
+            b'+' if !line.starts_with("+++") => ("add", &line[1..]),
+            b'-' if !line.starts_with("---") => ("delete", &line[1..]),
+            b' ' => ("context", &line[1..]),
+            _ => continue,
+        };
+        if let Some(lines) = files[file_index].hunks[hunk_index]
+            .get_mut("lines")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            if lines.len() < 20_000 {
+                lines.push(serde_json::json!({"kind": kind, "content": content}));
+            }
+        }
+        match kind {
+            "add" => files[file_index].additions += 1,
+            "delete" => files[file_index].deletions += 1,
+            _ => {}
+        }
+    }
+    files
+        .into_iter()
+        .map(|file| {
+            serde_json::json!({
+                "path": file.path,
+                "status": file.status,
+                "additions": file.additions,
+                "deletions": file.deletions,
+                "hunks": file.hunks,
+            })
+        })
+        .collect()
 }
 
 struct Request {
@@ -735,6 +846,19 @@ mod tests {
         assert_eq!(payload["diff_transferred"], true);
         assert!(payload.get("evidence").is_some());
         assert_eq!(payload["diff"]["format"], "git-unified-v1");
-        assert_eq!(payload["diff"]["files"][0], "src/example.py");
+        assert_eq!(payload["diff"]["files"][0]["path"], "src/example.py");
+    }
+
+    #[test]
+    fn normalized_diff_preserves_file_status_counts_and_hunks() {
+        let files = normalized_diff(
+            "diff --git a/src/example.py b/src/example.py\n--- a/src/example.py\n+++ b/src/example.py\n@@ -1 +1,2 @@\n-old()\n+new()\n+verified()\n",
+        );
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0]["status"], "modified");
+        assert_eq!(files[0]["additions"], 2);
+        assert_eq!(files[0]["deletions"], 1);
+        assert_eq!(files[0]["hunks"][0]["lines"][0]["kind"], "delete");
+        assert_eq!(files[0]["hunks"][0]["lines"][1]["content"], "new()");
     }
 }

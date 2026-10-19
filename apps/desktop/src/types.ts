@@ -35,7 +35,13 @@ export type RunResult = {
     format: string;
     patch: string;
     truncated: boolean;
-    files: string[];
+    files: Array<{
+      path: string;
+      status: "added" | "modified" | "deleted" | "renamed" | "binary";
+      additions: number;
+      deletions: number;
+      hunks: Array<{ header: string; lines: Array<{ kind: "add" | "delete" | "context"; content: string }> }>;
+    }>;
   };
   resource_usage: Record<string, number>;
   verification: Verification;
