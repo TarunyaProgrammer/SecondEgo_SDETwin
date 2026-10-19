@@ -213,11 +213,9 @@ fn native_command(
         ("secret-tool", arguments)
     };
     if cfg!(target_os = "macos") && action == "save" {
-        // macOS security requires -w to be the final argument for a
-        // non-interactive write. The key is never persisted in metadata/logs,
-        // but exists briefly in the child argv while Keychain stores it.
+        // With no value after -w, security prompts through stdin. This keeps
+        // the key out of the child process argument list.
         arguments.push("-w".into());
-        arguments.push(secret.unwrap_or_default().into());
     }
     let mut child = Command::new(command)
         .args(arguments)

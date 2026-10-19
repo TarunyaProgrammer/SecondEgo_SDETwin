@@ -119,10 +119,8 @@ function nativeCredential(provider, profile, action, secret = "") {
     return runMacHelper([action, KEYCHAIN_SERVICE, account], action === "save" ? `${secret}\n` : "");
   }
   if (nativeBackend() === "macos-keychain") {
-    // `security` only works non-interactively when the password is the final
-    // -w argument. The value is never persisted outside Keychain, but exists
-    // briefly in the child argv while the native command runs.
-    if (action === "save") runNative(["add-generic-password", "-U", "-a", account, "-s", KEYCHAIN_SERVICE, "-w", secret]);
+    // A bare -w reads the password from stdin. Never put the secret in argv.
+    if (action === "save") runNative(["add-generic-password", "-U", "-a", account, "-s", KEYCHAIN_SERVICE, "-w"], `${secret}\n`);
     if (action === "read") return runNative(["find-generic-password", "-a", account, "-s", KEYCHAIN_SERVICE, "-w"]);
     if (action === "delete") runNative(["delete-generic-password", "-a", account, "-s", KEYCHAIN_SERVICE]);
     return "";
@@ -133,7 +131,7 @@ function nativeCredential(provider, profile, action, secret = "") {
     if (action === "delete") runNative(["clear", "service", KEYCHAIN_SERVICE, "account", account]);
     return "";
   }
-  throw new Error("Native terminal profiles require macOS Keychain or Linux Secret Service.");
+  throw new Error("Native terminal profiles require macOS Keychain, Windows Credential Manager, or Linux Secret Service.");
 }
 
 function hasCredential(provider, profile) {

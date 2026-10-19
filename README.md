@@ -202,11 +202,9 @@ the selected profile's named environment variable. If the operating system
 does not provide an encrypted backend, SecondEgo refuses to save the key.
 
 The terminal uses the same provider names and environment contract. On macOS,
-terminal profiles use Keychain; on Linux they use Secret Service/libsecret. The
-profile metadata is shared with the desktop app, while the secret remains in
-the native credential vault. Windows terminal profiles currently require an
-environment variable or the desktop vault because the native Credential
-Manager adapter is not implemented yet.
+terminal profiles use Keychain; on Windows they use Credential Manager; and on
+Linux they use Secret Service/libsecret. The profile metadata is shared with
+the desktop app, while the secret remains in the native credential vault.
 
 ```bash
 # Read the key without putting it in shell history.
