@@ -56,14 +56,20 @@ React state. Electron sends it directly to the main process, which writes to
 the operating system vault. Only the selected profile is resolved for a local
 run.
 
+In the Rust desktop path, Electron's main process sends that key once to the
+authenticated loopback `POST /api/providers/session` endpoint. The renderer
+never receives it and the gateway response contains metadata only. The Python
+compatibility path and terminal continue to support the named-key environment
+contract during migration.
+
 ## Security boundary
 
 Keys are not written to SQLite, logs, diffs, telemetry, prompts, or profile
-metadata. The current local engine boundary injects the selected key into the
-short-lived engine/gateway process environment because the provider adapters
-consume the existing environment contract. The next hardening step is a
-credential-handle or in-process provider session so the key never crosses a
-child-process environment boundary.
+metadata. The desktop Rust gateway receives the selected key through an
+authenticated loopback session and retains it only in process memory. The
+terminal and Python compatibility path still use named environment variables
+as an explicit migration contract; unrelated provider variables are removed
+from a desktop Rust child process.
 
 ## Failure handling
 

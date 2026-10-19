@@ -222,7 +222,7 @@ function deleteProfile({ provider, profile }) {
   return listProfiles();
 }
 
-function activeEnvironment() {
+function activeCredentialSession() {
   const profiles = readProfiles();
   if (!profiles.active) return {};
   const entry = profiles.entries[profiles.active];
@@ -232,12 +232,21 @@ function activeEnvironment() {
     SECONDEGO_PROFILE_ID: profiles.active,
     SECONDEGO_PROVIDER: entry.provider,
     ...(entry.model ? { SECONDEGO_MODEL: entry.model } : {}),
-    [KEY_ENV[entry.provider]]: key,
+    envName: KEY_ENV[entry.provider],
+    apiKey: key,
   };
+}
+
+function activeEnvironment() {
+  const session = activeCredentialSession();
+  if (!session.SECONDEGO_PROFILE_ID) return {};
+  const { apiKey: _apiKey, envName: _envName, ...metadata } = session;
+  return metadata;
 }
 
 module.exports = {
   PROVIDERS,
+  activeCredentialSession,
   activeEnvironment,
   deleteProfile,
   listProfiles,

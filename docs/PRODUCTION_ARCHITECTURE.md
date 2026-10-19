@@ -39,7 +39,7 @@ The current source of truth is in `engine-rs/crates/secondego-runtime`. The Pyth
 
 1. The provider registry and five required adapters exist, but Gemini/OpenAI/Anthropic/OpenRouter/DeepSeek need live cross-platform contract tests against current provider accounts and model availability.
 2. Credentials support multiple named profiles in the desktop and macOS/Linux/Windows terminal paths. Vault migration UX and rotation remain.
-3. The gateway now has a versioned, authenticated metadata contract for profile/provider/model identity, but it is still an observer API. Replay metadata, workspace ownership, and durable profile/workspace operations remain.
+3. The gateway now has a versioned, authenticated profile/provider session and run contract. Replay metadata, workspace ownership, and durable profile/workspace operations remain.
 4. The Electron shell has provider setup and diff review foundations, but still needs release-grade update UX, recovery flows, accessibility hardening, and a fuller workspace information architecture.
 5. Packaging has an unsigned DMG candidate pipeline with SHA-256 checksums and a release manifest. Signed/notarized artifacts, update channels, and a supported installer contract remain gated on release credentials and CI validation.
 6. The terminal path now has documented native profiles and safe probes, but still needs a stable machine-readable command schema, richer TUI, shell completion, and cross-platform smoke tests.
@@ -57,8 +57,11 @@ Service. Both surfaces share non-secret profile metadata and the same safe
 connection probe (`provider test`). The gateway now carries a versioned,
 authenticated profile/provider/model metadata contract without accepting or
 returning secrets, and terminal snapshots now use versioned SQLite migrations.
-The remaining work is to replace the current environment injection with a short-lived
-credential handle or in-process provider session where possible.
+The Electron main process resolves the selected secret from the OS vault and sends it
+once over the authenticated loopback session endpoint. The Rust gateway keeps the
+active provider session in memory only; the renderer, SQLite, logs, and run events
+receive metadata, never the key. The Python compatibility gateway and terminal
+environment flow remain available for migration and headless use.
 
 ## 2. Target architecture
 
@@ -154,7 +157,7 @@ Desktop:
 Settings → Providers → Add provider → paste key → local validation → keychain write
 ```
 
-The raw key is accepted only at the boundary, sent to the OS keychain (`Keychain` on macOS, Credential Manager on Windows, Secret Service/libsecret on Linux), and replaced with a profile id. The current migration passes the selected key only to the local gateway environment; the target hardening boundary is a short-lived in-memory credential handle or in-process provider session. SQLite stores provider id, model id, keychain reference, created/updated timestamps, and last validation status—never the secret.
+The raw key is accepted only at the boundary, sent to the OS keychain (`Keychain` on macOS, Credential Manager on Windows, Secret Service/libsecret on Linux), and replaced with a profile id. Electron resolves the selected secret in the main process and sends it once over the authenticated loopback session endpoint; the Rust gateway keeps it in memory for the process lifetime and never returns it. SQLite stores provider id, model id, keychain reference, created/updated timestamps, and last validation status—never the secret.
 
 The “Test connection” action must make a minimal provider request with a fixed non-user prompt, return a classified result, and redact all error text before showing or persisting it.
 
@@ -301,7 +304,7 @@ Do not call the local profile model “multi-tenant”. A hosted service would a
 The app is not production-ready when it merely launches. The minimum bar is:
 
 - all five required providers can be configured independently from terminal and UI;
-- keys never appear in renderer state, logs, SQLite, diffs, or prompts; the current migration boundary injects only the selected key into the short-lived local gateway environment, with credential handles/in-process sessions still required for the final hardening bar;
+- keys never appear in renderer state, logs, SQLite, diffs, or prompts; desktop sessions send the selected key once over authenticated loopback and keep it only in main-process/gateway memory, while terminal/Python compatibility retains the explicit environment fallback;
 - a clean install can run a provider preflight and a deterministic fixture without repository mutation;
 - every run can be resumed or explained from versioned events, safe config metadata, diff data, and verification evidence;
 - failed, blocked, cancelled, and partial states are first-class in both terminal and desktop surfaces;

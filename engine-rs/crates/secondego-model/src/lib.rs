@@ -167,6 +167,18 @@ pub enum ProviderKind {
 }
 
 impl ProviderKind {
+    pub fn from_name(value: &str) -> Result<Self, ProviderError> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "" | "deepseek" => Ok(Self::DeepSeek),
+            "gemini" => Ok(Self::Gemini),
+            "openai" => Ok(Self::OpenAI),
+            "anthropic" => Ok(Self::Anthropic),
+            "openrouter" => Ok(Self::OpenRouter),
+            "groq" => Ok(Self::Groq),
+            unsupported => Err(ProviderError::UnsupportedProvider(unsupported.into())),
+        }
+    }
+
     pub fn from_environment() -> Result<Self, ProviderError> {
         let value = std::env::var("SECONDEGO_PROVIDER")
             .ok()
@@ -192,15 +204,7 @@ impl ProviderKind {
                     "deepseek".into()
                 }
             });
-        match value.trim().to_ascii_lowercase().as_str() {
-            "" | "deepseek" => Ok(Self::DeepSeek),
-            "gemini" => Ok(Self::Gemini),
-            "openai" => Ok(Self::OpenAI),
-            "anthropic" => Ok(Self::Anthropic),
-            "openrouter" => Ok(Self::OpenRouter),
-            "groq" => Ok(Self::Groq),
-            unsupported => Err(ProviderError::UnsupportedProvider(unsupported.into())),
-        }
+        Self::from_name(&value)
     }
 
     pub const fn default_model(self) -> &'static str {
@@ -265,6 +269,13 @@ pub fn available_models_for_provider(
     provider: ProviderKind,
 ) -> Result<Vec<ProviderModel>, ProviderError> {
     let key = resolve_api_key(&None, Some(provider.credential_env_name()), true)?;
+    available_models_for_provider_with_key(provider, &key)
+}
+
+pub fn available_models_for_provider_with_key(
+    provider: ProviderKind,
+    key: &str,
+) -> Result<Vec<ProviderModel>, ProviderError> {
     let (url, headers) = match provider {
         ProviderKind::DeepSeek => (
             format!(
@@ -931,6 +942,50 @@ pub enum ConfiguredProvider {
 }
 
 impl ConfiguredProvider {
+    pub fn from_provider_key(
+        kind: ProviderKind,
+        model: String,
+        api_key: String,
+    ) -> Result<Self, ProviderError> {
+        let api_key = api_key.trim().to_owned();
+        if api_key.is_empty() {
+            return Err(ProviderError::MissingApiKey);
+        }
+        validate_model_for_provider(kind, &model)?;
+        Ok(match kind {
+            ProviderKind::DeepSeek => Self::DeepSeek(DeepSeekProvider {
+                model,
+                api_key: Some(api_key),
+                ..DeepSeekProvider::default()
+            }),
+            ProviderKind::Gemini => Self::Gemini(GeminiProvider {
+                model,
+                api_key: Some(api_key),
+                ..GeminiProvider::default()
+            }),
+            ProviderKind::OpenAI => Self::OpenAI(OpenAIProvider {
+                model,
+                api_key: Some(api_key),
+                ..OpenAIProvider::default()
+            }),
+            ProviderKind::Anthropic => Self::Anthropic(AnthropicProvider {
+                model,
+                api_key: Some(api_key),
+                ..AnthropicProvider::default()
+            }),
+            ProviderKind::OpenRouter => Self::OpenRouter(OpenRouterProvider {
+                model,
+                api_key: Some(api_key),
+                ..OpenRouterProvider::default()
+            }),
+            ProviderKind::Groq => Self::Groq(GroqProvider {
+                model,
+                api_key: Some(api_key),
+                ..GroqProvider::default()
+            }),
+        })
+    }
+
     pub fn from_environment() -> Result<Self, ProviderError> {
         let kind = ProviderKind::from_environment()?;
         let model = std::env::var("SECONDEGO_MODEL")
@@ -2111,6 +2166,39 @@ mod tests {
         assert!(matches!(
             provider.with_model("gemini-3.8-flash".into()),
             Err(ProviderError::ModelProviderMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn configured_provider_accepts_explicit_keys_without_environment() {
+        for (provider, model) in [
+            (ProviderKind::DeepSeek, "deepseek-chat"),
+            (ProviderKind::Gemini, "gemini-3.8-flash"),
+            (ProviderKind::OpenAI, "gpt-5-mini"),
+            (ProviderKind::Anthropic, "claude-sonnet-4-6"),
+            (ProviderKind::OpenRouter, "openai/gpt-5-mini"),
+        ] {
+            assert!(
+                ConfiguredProvider::from_provider_key(
+                    provider,
+                    model.to_owned(),
+                    "test-key".to_owned(),
+                )
+                .is_ok(),
+                "explicit provider session should not depend on environment"
+            );
+        }
+    }
+
+    #[test]
+    fn configured_provider_rejects_blank_explicit_keys() {
+        assert!(matches!(
+            ConfiguredProvider::from_provider_key(
+                ProviderKind::OpenAI,
+                "gpt-5-mini".into(),
+                "  ".into(),
+            ),
+            Err(ProviderError::MissingApiKey)
         ));
     }
 

@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use secondego_core::{EngineEvent, ExecutionState};
 use secondego_model::{
     ConfiguredProvider, ModelProvider, ProviderContext, ProviderKind,
-    available_models_for_provider, configured_model,
+    available_models_for_provider, available_models_for_provider_with_key, configured_model,
 };
 use secondego_runtime::discovery::{
     DiscoveryLens, DiscoveryRequest, discover_with_observer_and_id,
@@ -32,6 +32,15 @@ const MAX_IN_MEMORY_RUNS: usize = 256;
 const API_VERSION: u32 = 1;
 
 type RunStore = Arc<Mutex<SQLiteRunStore>>;
+type CredentialSession = Arc<Mutex<Option<ProviderSession>>>;
+
+#[derive(Clone)]
+struct ProviderSession {
+    profile_id: String,
+    provider: ProviderKind,
+    model: String,
+    api_key: String,
+}
 
 #[derive(Clone)]
 struct RunRecord {
@@ -87,6 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store = open_state_store()?;
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     let runs: Arc<Mutex<HashMap<Uuid, RunRecord>>> = Arc::new(Mutex::new(HashMap::new()));
+    let credentials: CredentialSession = Arc::new(Mutex::new(None));
     let active_connections = Arc::new(AtomicUsize::new(0));
     // Voice is presentation-only, but its background worker must be shared by
     // the long-lived gateway rather than leaked once for every submitted run.
@@ -113,9 +123,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ui_root = ui_root.clone();
         let voice = voice.clone();
         let store = store.clone();
+        let credentials = credentials.clone();
         thread::spawn(move || {
             let _permit = permit;
-            let _ = handle(stream, &token, &runs, ui_root.as_deref(), &voice, &store);
+            let _ = handle(
+                stream,
+                &token,
+                &runs,
+                ui_root.as_deref(),
+                &voice,
+                &store,
+                &credentials,
+            );
         });
     }
     Ok(())
@@ -145,6 +164,7 @@ fn handle(
     ui_root: Option<&Path>,
     voice: &Arc<VoiceService>,
     store: &RunStore,
+    credentials: &CredentialSession,
 ) -> std::io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     let request = read_request(&mut stream)?;
@@ -174,9 +194,14 @@ fn handle(
             200,
             serde_json::json!({"ok":true,"api_version":API_VERSION,"engine":"rust"}),
         ),
-        ("POST", "/api/providers/test") => test_provider(&mut stream, request.body),
-        ("POST", "/api/providers/models") => list_provider_models(&mut stream, request.body),
-        ("POST", "/api/runs") => create_run(&mut stream, request.body, runs, voice, store),
+        ("POST", "/api/providers/session") => {
+            set_provider_session(&mut stream, request.body, credentials)
+        }
+        ("POST", "/api/providers/test") => test_provider(&mut stream, request.body, credentials),
+        ("POST", "/api/providers/models") => {
+            list_provider_models(&mut stream, request.body, credentials)
+        }
+        ("POST", "/api/runs") => create_run(&mut stream, request.body, runs, voice, store, credentials),
         ("POST", path) if path.starts_with("/api/runs/") && path.ends_with("/cancel") => {
             cancel_run(&mut stream, path, runs)
         }
@@ -185,7 +210,76 @@ fn handle(
     }
 }
 
-fn test_provider(stream: &mut TcpStream, body: Vec<u8>) -> std::io::Result<()> {
+fn set_provider_session(
+    stream: &mut TcpStream,
+    body: Vec<u8>,
+    credentials: &CredentialSession,
+) -> std::io::Result<()> {
+    let request: ProviderSessionRequest = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(_) => return respond(stream, 400, serde_json::json!({"error":"invalid request"})),
+    };
+    if !valid_profile_id(&request.profile_id) {
+        return respond(
+            stream,
+            400,
+            serde_json::json!({"error":"profile_id contains unsupported characters"}),
+        );
+    }
+    if request.api_key.trim().is_empty() || request.api_key.len() > 512 {
+        return respond(
+            stream,
+            400,
+            serde_json::json!({"error":"api_key must be between 1 and 512 bytes"}),
+        );
+    }
+    let provider = match ProviderKind::from_name(&request.provider) {
+        Ok(provider) => provider,
+        Err(error) => return respond(stream, 400, serde_json::json!({"error":error.to_string()})),
+    };
+    let model = request
+        .model
+        .filter(|model| !model.trim().is_empty())
+        .unwrap_or_else(|| provider.default_model().into());
+    if model.chars().count() > 256 {
+        return respond(stream, 400, serde_json::json!({"error":"model identifier exceeds field limits"}));
+    }
+    if let Err(error) = ConfiguredProvider::from_provider_key(
+        provider,
+        model.clone(),
+        request.api_key.clone(),
+    ) {
+        return respond(stream, 400, serde_json::json!({"error":error.to_string()}));
+    }
+    let session = ProviderSession {
+        profile_id: request.profile_id,
+        provider,
+        model,
+        api_key: request.api_key,
+    };
+    if let Ok(mut active) = credentials.lock() {
+        *active = Some(session.clone());
+    } else {
+        return respond(stream, 503, serde_json::json!({"error":"credential session unavailable"}));
+    }
+    respond(
+        stream,
+        200,
+        serde_json::json!({
+            "api_version": API_VERSION,
+            "ok": true,
+            "profile_id": session.profile_id,
+            "provider": session.provider.name(),
+            "model": session.model,
+        }),
+    )
+}
+
+fn test_provider(
+    stream: &mut TcpStream,
+    body: Vec<u8>,
+    credentials: &CredentialSession,
+) -> std::io::Result<()> {
     let request: ProviderTestRequest = if body.is_empty() {
         ProviderTestRequest::default()
     } else {
@@ -202,7 +296,9 @@ fn test_provider(stream: &mut TcpStream, body: Vec<u8>) -> std::io::Result<()> {
                 serde_json::json!({"error":"invalid profile id"}),
             );
         }
-        if env::var("SECONDEGO_PROFILE_ID").ok().as_deref() != Some(profile_id) {
+        if active_profile_id(credentials).as_deref() != Some(profile_id)
+            && env::var("SECONDEGO_PROFILE_ID").ok().as_deref() != Some(profile_id)
+        {
             return respond(
                 stream,
                 409,
@@ -211,7 +307,7 @@ fn test_provider(stream: &mut TcpStream, body: Vec<u8>) -> std::io::Result<()> {
         }
     }
     let started = std::time::Instant::now();
-    let active_provider = match ProviderKind::from_environment() {
+    let active_provider = match active_provider_kind(credentials) {
         Ok(provider) => provider,
         Err(error) => {
             return respond(
@@ -222,7 +318,7 @@ fn test_provider(stream: &mut TcpStream, body: Vec<u8>) -> std::io::Result<()> {
         }
     };
     let requested_model = request.model.clone();
-    let result = ConfiguredProvider::from_environment()
+    let result = configured_provider(credentials)
         .and_then(|provider| {
             if let Some(requested_provider) = request.provider.as_deref()
                 && !requested_provider.eq_ignore_ascii_case(active_provider.name())
@@ -231,7 +327,10 @@ fn test_provider(stream: &mut TcpStream, body: Vec<u8>) -> std::io::Result<()> {
                     requested_provider.to_owned(),
                 ));
             }
-            let model = requested_model.clone().unwrap_or(configured_model()?);
+            let model = requested_model
+                .clone()
+                .or_else(|| active_model(credentials))
+                .unwrap_or(configured_model()?);
             provider.with_model(model)
         })
         .and_then(|provider| {
@@ -251,9 +350,12 @@ fn test_provider(stream: &mut TcpStream, body: Vec<u8>) -> std::io::Result<()> {
                 "api_version": API_VERSION,
                 "ok": true,
                 "latency_ms": started.elapsed().as_millis(),
-                "profile_id": request.profile_id.or_else(|| env::var("SECONDEGO_PROFILE_ID").ok()),
+                "profile_id": request.profile_id.or_else(|| active_profile_id(credentials).or_else(|| env::var("SECONDEGO_PROFILE_ID").ok())),
                 "provider": active_provider.name(),
-                "model": requested_model.unwrap_or_else(|| configured_model().unwrap_or_else(|_| "unknown".into())),
+                "model": requested_model
+                    .or_else(|| active_model(credentials))
+                    .or_else(|| configured_model().ok())
+                    .unwrap_or_else(|| "unknown".into()),
             }),
         ),
         Err(error) => respond(
@@ -264,7 +366,11 @@ fn test_provider(stream: &mut TcpStream, body: Vec<u8>) -> std::io::Result<()> {
     }
 }
 
-fn list_provider_models(stream: &mut TcpStream, body: Vec<u8>) -> std::io::Result<()> {
+fn list_provider_models(
+    stream: &mut TcpStream,
+    body: Vec<u8>,
+    credentials: &CredentialSession,
+) -> std::io::Result<()> {
     let request: ProviderModelsRequest = if body.is_empty() {
         ProviderModelsRequest::default()
     } else {
@@ -281,7 +387,9 @@ fn list_provider_models(stream: &mut TcpStream, body: Vec<u8>) -> std::io::Resul
                 serde_json::json!({"error":"invalid profile id"}),
             );
         }
-        if env::var("SECONDEGO_PROFILE_ID").ok().as_deref() != Some(profile_id) {
+        if active_profile_id(credentials).as_deref() != Some(profile_id)
+            && env::var("SECONDEGO_PROFILE_ID").ok().as_deref() != Some(profile_id)
+        {
             return respond(
                 stream,
                 409,
@@ -289,7 +397,7 @@ fn list_provider_models(stream: &mut TcpStream, body: Vec<u8>) -> std::io::Resul
             );
         }
     }
-    let provider = match ProviderKind::from_environment() {
+    let provider = match active_provider_kind(credentials) {
         Ok(provider) => provider,
         Err(error) => {
             return respond(
@@ -309,7 +417,10 @@ fn list_provider_models(stream: &mut TcpStream, body: Vec<u8>) -> std::io::Resul
         );
     }
     let started = std::time::Instant::now();
-    match available_models_for_provider(provider) {
+    let models = active_api_key(credentials)
+        .map(|key| available_models_for_provider_with_key(provider, &key))
+        .unwrap_or_else(|| available_models_for_provider(provider));
+    match models {
         Ok(models) => respond(
             stream,
             200,
@@ -364,6 +475,7 @@ fn create_run(
     runs: &Arc<Mutex<HashMap<Uuid, RunRecord>>>,
     voice: &VoiceService,
     store: &RunStore,
+    credentials: &CredentialSession,
 ) -> std::io::Result<()> {
     let request: StartRequest = match serde_json::from_slice(&body) {
         Ok(value) => value,
@@ -386,6 +498,7 @@ fn create_run(
         );
     }
     if let Some(profile_id) = request.profile_id.as_deref()
+        && active_profile_id(credentials).as_deref() != Some(profile_id)
         && env::var("SECONDEGO_PROFILE_ID").ok().as_deref() != Some(profile_id)
     {
         return respond(
@@ -397,23 +510,30 @@ fn create_run(
     let model = match request.model.filter(|model| !model.trim().is_empty()) {
         Some(model) => model,
         None if is_discovery => "deterministic-discovery".into(),
-        None => match configured_model() {
-            Ok(model) => model,
-            Err(error) => {
-                return respond(stream, 500, serde_json::json!({"error": error.to_string()}));
+        None => match active_model(credentials).or_else(|| configured_model().ok()) {
+            Some(model) => model,
+            None => {
+                return respond(
+                    stream,
+                    500,
+                    serde_json::json!({"error":"no configured provider model"}),
+                );
             }
         },
     };
     let profile_id = request
         .profile_id
         .clone()
+        .or_else(|| active_profile_id(credentials))
         .or_else(|| env::var("SECONDEGO_PROFILE_ID").ok());
     let provider = if is_discovery {
         "discovery".to_owned()
     } else {
-        secondego_model::ProviderKind::from_environment()
+        active_provider_kind(credentials)
+            .ok()
             .map(|provider| provider.name().to_owned())
-            .unwrap_or_else(|_| "unknown".into())
+            .or_else(|| secondego_model::ProviderKind::from_environment().ok().map(|provider| provider.name().to_owned()))
+            .unwrap_or_else(|| "unknown".into())
     };
     let id = Uuid::new_v4();
     let cancellation = CancellationToken::default();
@@ -464,6 +584,7 @@ fn create_run(
     let run_cancellation = cancellation.clone();
     let run_voice = voice.clone();
     let run_store = store.clone();
+    let run_credentials = credentials.clone();
     thread::spawn(move || {
         let resolved =
             match resolve_repository_with_cancellation(&record_repository, Some(&run_cancellation))
@@ -628,7 +749,7 @@ fn create_run(
             }
             return;
         }
-        let provider = match ConfiguredProvider::from_environment()
+        let provider = match configured_provider(&run_credentials)
             .and_then(|provider| provider.with_model(model))
         {
             Ok(provider) => provider,
@@ -956,6 +1077,52 @@ struct ProviderTestRequest {
 struct ProviderModelsRequest {
     profile_id: Option<String>,
     provider: Option<String>,
+}
+
+#[derive(Default, serde::Deserialize)]
+struct ProviderSessionRequest {
+    profile_id: String,
+    provider: String,
+    model: Option<String>,
+    api_key: String,
+}
+
+fn session_snapshot(credentials: &CredentialSession) -> Option<ProviderSession> {
+    credentials.lock().ok().and_then(|session| session.clone())
+}
+
+fn active_profile_id(credentials: &CredentialSession) -> Option<String> {
+    session_snapshot(credentials).map(|session| session.profile_id)
+}
+
+fn active_provider_kind(
+    credentials: &CredentialSession,
+) -> Result<ProviderKind, secondego_model::ProviderError> {
+    match session_snapshot(credentials) {
+        Some(session) => Ok(session.provider),
+        None => ProviderKind::from_environment(),
+    }
+}
+
+fn active_model(credentials: &CredentialSession) -> Option<String> {
+    session_snapshot(credentials).map(|session| session.model)
+}
+
+fn active_api_key(credentials: &CredentialSession) -> Option<String> {
+    session_snapshot(credentials).map(|session| session.api_key)
+}
+
+fn configured_provider(
+    credentials: &CredentialSession,
+) -> Result<ConfiguredProvider, secondego_model::ProviderError> {
+    match session_snapshot(credentials) {
+        Some(session) => ConfiguredProvider::from_provider_key(
+            session.provider,
+            session.model,
+            session.api_key,
+        ),
+        None => ConfiguredProvider::from_environment(),
+    }
 }
 
 fn valid_profile_id(value: &str) -> bool {

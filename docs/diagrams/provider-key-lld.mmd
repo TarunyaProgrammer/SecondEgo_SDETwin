@@ -3,6 +3,8 @@ sequenceDiagram
   participant UI as Terminal/Desktop
   participant Profile as Profile service
   participant Keychain as OS keychain
+  participant Main as Electron main
+  participant Gateway as Rust gateway
   participant Registry as Provider registry
   participant Adapter as Provider adapter
   participant API as Model API
@@ -12,11 +14,14 @@ sequenceDiagram
   Profile->>Keychain: write(profile/provider, secret)
   Keychain-->>Profile: opaque credential reference
   Profile-->>UI: saved(profile id, provider id, status)
-  UI->>Registry: start run(profile, provider, model)
-  Registry->>Keychain: resolve credential reference
-  Keychain-->>Registry: in-memory secret
+  UI->>Main: start run(profile, provider, model)
+  Main->>Keychain: resolve credential reference
+  Keychain-->>Main: in-memory secret
+  Main->>Gateway: authenticated session(profile, provider, model, secret)
+  Gateway->>Registry: resolve in-memory provider session
   Registry->>Adapter: normalized request + secret
   Adapter->>API: provider-specific HTTPS call
   API-->>Adapter: response / rate-limit metadata
   Adapter-->>Registry: normalized proposal or classified error
-  Registry-->>UI: versioned events; never secret
+  Registry-->>Gateway: versioned events; never secret
+  Gateway-->>UI: versioned events; never secret

@@ -1,10 +1,12 @@
 const { app, BrowserWindow, ipcMain, screen } = require("electron");
 const { randomBytes } = require("node:crypto");
 const { spawn } = require("node:child_process");
+const { request: httpRequest } = require("node:http");
 const fs = require("node:fs");
 const net = require("node:net");
 const path = require("node:path");
 const {
+  activeCredentialSession,
   activeEnvironment,
   deleteProfile,
   listProfiles,
@@ -405,7 +407,14 @@ function startGateway() {
   const python = process.env.SECONDEGO_PYTHON || path.join(repoRoot, ".venv", "bin", "python");
   const command = rustGateway || python;
   const args = rustGateway ? [] : ["-m", "SecondEgo.desktop.gateway", "--host", "127.0.0.1", "--port", String(gatewayPort)];
-  const providerEnvironment = activeEnvironment();
+  const credentialSession = activeCredentialSession();
+  const providerEnvironment = { ...activeEnvironment() };
+  // The Python compatibility gateway still consumes the legacy environment
+  // contract. The Rust gateway receives the key over an authenticated,
+  // loopback-only session endpoint instead, keeping it out of child env/argv.
+  if (!rustGateway && credentialSession.apiKey && credentialSession.envName) {
+    providerEnvironment[credentialSession.envName] = credentialSession.apiKey;
+  }
   const childEnvironment = {
     ...process.env,
     ...providerEnvironment,
@@ -428,11 +437,49 @@ function startGateway() {
     stdio: ["ignore", "pipe", "pipe"],
   });
   let announced = false;
+  let announcing = false;
+  const sendProviderSession = () => {
+    if (!rustGateway || !credentialSession.apiKey) return Promise.resolve();
+    const payload = JSON.stringify({
+      profile_id: credentialSession.SECONDEGO_PROFILE_ID,
+      provider: credentialSession.SECONDEGO_PROVIDER,
+      model: credentialSession.SECONDEGO_MODEL || null,
+      api_key: credentialSession.apiKey,
+    });
+    return new Promise((resolve, reject) => {
+      const request = httpRequest({
+        host: "127.0.0.1",
+        port: gatewayPort,
+        path: "/api/providers/session",
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(payload),
+          "X-SecondEgo-Token": token,
+        },
+        timeout: 5000,
+      }, (response) => {
+        response.resume();
+        response.on("end", () => {
+          if (response.statusCode && response.statusCode >= 200 && response.statusCode < 300) resolve();
+          else reject(new Error("gateway rejected the provider session"));
+        });
+      });
+      request.on("timeout", () => request.destroy(new Error("gateway provider session timed out")));
+      request.on("error", reject);
+      request.end(payload);
+    });
+  };
   const announce = () => {
-    if (!announced) {
-      announced = true;
-      createWindow(token);
-    }
+    if (announced || announcing) return;
+    announcing = true;
+    sendProviderSession()
+      .catch((error) => console.error(`Could not load the provider session: ${error.message}`))
+      .finally(() => {
+        announcing = false;
+        announced = true;
+        createWindow(token);
+      });
   };
   let portInUse = false;
   gatewayProcess.stdout.on("data", (data) => {

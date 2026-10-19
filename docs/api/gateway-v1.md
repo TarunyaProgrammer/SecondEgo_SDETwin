@@ -33,6 +33,27 @@ Debug gateway builds retain `local-development-token` for local development.
 Release gateway binaries fail closed unless `SECONDEGO_UI_TOKEN` is supplied;
 the Electron shell generates and injects a per-launch token automatically.
 
+## Provider session
+
+```http
+POST /api/providers/session
+X-SecondEgo-Token: <launch token>
+Content-Type: application/json
+
+{"profile_id":"openai:work","provider":"openai","model":"gpt-5-mini","api_key":"<secret>"}
+```
+
+Electron's main process uses this endpoint after resolving the selected profile
+from the OS credential vault. The key is accepted only in memory, is not
+written to SQLite or events, and is never returned in the response. The session
+is process-local and is replaced when another profile is selected or the
+gateway restarts. The terminal and Python compatibility gateway use the
+named-key environment contract instead.
+
+```json
+{"api_version":1,"ok":true,"profile_id":"openai:work","provider":"openai","model":"gpt-5-mini"}
+```
+
 ## Health
 
 ```http
