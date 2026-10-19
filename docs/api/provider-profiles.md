@@ -7,7 +7,7 @@ Anthropic, and OpenRouter. Groq remains available as an optional provider.
 
 | Provider | Environment variable | Default model |
 | --- | --- | --- |
-| DeepSeek | `DEEPSEEK_API_KEY` | `deepseek-chat` |
+| DeepSeek | `DEEPSEEK_API_KEY` | `deepseek-flash` |
 | Gemini | `GEMINI_API_KEY` | `gemini-3.8-flash` |
 | OpenAI | `OPENAI_API_KEY` | `gpt-5-mini` |
 | Anthropic | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` |
