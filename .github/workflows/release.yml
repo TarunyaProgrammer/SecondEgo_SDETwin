@@ -41,6 +41,13 @@ jobs:
       - name: Install desktop dependencies
         working-directory: apps/desktop
         run: npm ci
+      - name: Build desktop renderer and stage release resources
+        working-directory: apps/desktop
+        run: |
+          npm run build
+          npm run prepare-release
+        env:
+          SECONDEGO_GATEWAY_SOURCE: ${{ github.workspace }}/engine-rs/target/${{ matrix.rust_target }}/release/secondego-gateway
       - name: Build unsigned DMG candidate
         working-directory: apps/desktop
         run: npx --yes electron-builder@25.1.8 --mac dmg --${{ matrix.arch }}
