@@ -957,7 +957,13 @@ fn resolve_api_key(
         return Ok(key);
     }
     if allow_generic_fallback {
-        return non_empty_env("AI_API_KEY").ok_or(ProviderError::MissingApiKey);
+        if let Some(key) = non_empty_env("AI_API_KEY") {
+            eprintln!(
+                "SecondEgo: AI_API_KEY is a deprecated compatibility alias; use {} instead",
+                provider_key_name.unwrap_or("the provider-specific API key")
+            );
+            return Ok(key);
+        }
     }
     Err(ProviderError::MissingApiKey)
 }

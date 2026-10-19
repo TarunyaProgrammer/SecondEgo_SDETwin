@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import warnings
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -18,7 +19,13 @@ DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 def _resolve_key(explicit: str | None, variable: str) -> str | None:
     """Prefer the provider-specific key, retaining AI_API_KEY migration support."""
-    return explicit or os.environ.get(variable) or os.environ.get("AI_API_KEY")
+    key = explicit or os.environ.get(variable)
+    if key:
+        return key
+    legacy = os.environ.get("AI_API_KEY")
+    if legacy:
+        warnings.warn(f"AI_API_KEY is deprecated; use {variable}", DeprecationWarning, stacklevel=2)
+    return legacy
 
 
 def _request_action(

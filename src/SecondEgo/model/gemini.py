@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import warnings
 from dataclasses import dataclass
 from typing import Any
 
@@ -59,4 +60,10 @@ class GeminiProvider:
         return parse_action(data)
 
     def _resolve_api_key(self) -> str | None:
-        return self.api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("AI_API_KEY")
+        key = self.api_key or os.environ.get("GEMINI_API_KEY")
+        if key:
+            return key
+        legacy = os.environ.get("AI_API_KEY")
+        if legacy:
+            warnings.warn("AI_API_KEY is deprecated; use GEMINI_API_KEY", DeprecationWarning, stacklevel=2)
+        return legacy
