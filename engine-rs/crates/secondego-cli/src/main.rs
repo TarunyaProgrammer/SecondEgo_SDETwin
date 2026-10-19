@@ -323,12 +323,19 @@ fn run_provider_command(arguments: &[String]) -> Result<(), Box<dyn std::error::
     match arguments.first().map(String::as_str).unwrap_or("list") {
         "list" | "status" => {
             let selected = ProviderKind::from_environment().ok();
+            let vault_status = profiles::provider_vault_status().unwrap_or_default();
             let mut statuses = Vec::new();
             for provider in ProviderKind::all() {
                 let named_present = non_empty_env(provider.credential_env_name()).is_some();
                 let legacy_present = non_empty_env("AI_API_KEY").is_some();
+                let vault_present = vault_status
+                    .iter()
+                    .find(|(item, _)| *item == provider)
+                    .is_some_and(|(_, ready)| *ready);
                 let status = if named_present {
                     "READY"
+                } else if vault_present {
+                    "READY via native vault"
                 } else if legacy_present {
                     "READY via legacy AI_API_KEY"
                 } else {
@@ -339,6 +346,15 @@ fn run_provider_command(arguments: &[String]) -> Result<(), Box<dyn std::error::
                     "id": provider.name(),
                     "selected": marker == '*',
                     "status": status,
+                    "credential_source": if named_present {
+                        "environment"
+                    } else if vault_present {
+                        "native_vault"
+                    } else if legacy_present {
+                        "legacy_environment"
+                    } else {
+                        "missing"
+                    },
                     "credential_env": provider.credential_env_name(),
                     "default_model": provider.default_model(),
                 }));

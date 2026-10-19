@@ -85,3 +85,5 @@ connection` remains the authoritative validation step.
 `provider list --json`, `provider models --json`, and `provider test --json` emit
 schema-versioned, machine-readable output for CI and shell integrations. They
 contain provider ids, model ids, profile ids, and safe status values only.
+`provider list` reports readiness from either an explicitly supplied environment
+key or a saved native-vault profile; it never prints the credential value.

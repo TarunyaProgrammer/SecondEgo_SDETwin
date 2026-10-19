@@ -291,6 +291,35 @@ pub fn load_active_into_environment() -> Result<bool, ProfileError> {
     Ok(true)
 }
 
+/// Return safe provider-level readiness from native profile metadata.
+///
+/// The vault value is read only long enough to determine whether it exists;
+/// this function never returns or prints the secret.
+pub fn provider_vault_status() -> Result<Vec<(ProviderKind, bool)>, ProfileError> {
+    let metadata = read_metadata()?;
+    let entries = metadata
+        .get("entries")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut statuses: Vec<(ProviderKind, bool)> = Vec::new();
+    for id in entries.keys() {
+        let Some(entry) = entry_from_metadata(&metadata, id) else {
+            continue;
+        };
+        let kind = provider(&entry.provider)?;
+        let ready = native_command(&entry, "read", None)
+            .map(|value| !value.is_empty())
+            .unwrap_or(false);
+        if let Some((_, existing_ready)) = statuses.iter_mut().find(|(item, _)| *item == kind) {
+            *existing_ready |= ready;
+        } else {
+            statuses.push((kind, ready));
+        }
+    }
+    Ok(statuses)
+}
+
 fn option_value(args: &[String], name: &str) -> Option<String> {
     args.windows(2)
         .find(|pair| pair[0] == name)
