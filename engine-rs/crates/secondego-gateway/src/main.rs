@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 
 use secondego_core::{EngineEvent, ExecutionState};
 use secondego_model::{
-    ConfiguredProvider, ModelProvider, ProviderContext, ProviderKind, configured_model,
+    ConfiguredProvider, ModelProvider, ProviderContext, ProviderKind,
+    available_models_for_provider, configured_model,
 };
 use secondego_runtime::discovery::{
     DiscoveryLens, DiscoveryRequest, discover_with_observer_and_id,
@@ -163,6 +164,7 @@ fn handle(
             serde_json::json!({"ok":true,"api_version":API_VERSION,"engine":"rust"}),
         ),
         ("POST", "/api/providers/test") => test_provider(&mut stream, request.body),
+        ("POST", "/api/providers/models") => list_provider_models(&mut stream, request.body),
         ("POST", "/api/runs") => create_run(&mut stream, request.body, runs, voice, store),
         ("POST", path) if path.starts_with("/api/runs/") && path.ends_with("/cancel") => {
             cancel_run(&mut stream, path, runs)
@@ -247,6 +249,72 @@ fn test_provider(stream: &mut TcpStream, body: Vec<u8>) -> std::io::Result<()> {
             stream,
             502,
             serde_json::json!({"api_version":API_VERSION,"ok":false,"error":error.to_string()}),
+        ),
+    }
+}
+
+fn list_provider_models(stream: &mut TcpStream, body: Vec<u8>) -> std::io::Result<()> {
+    let request: ProviderModelsRequest = if body.is_empty() {
+        ProviderModelsRequest::default()
+    } else {
+        match serde_json::from_slice(&body) {
+            Ok(value) => value,
+            Err(_) => return respond(stream, 400, serde_json::json!({"error":"invalid request"})),
+        }
+    };
+    if let Some(profile_id) = request.profile_id.as_deref() {
+        if !valid_profile_id(profile_id) {
+            return respond(
+                stream,
+                400,
+                serde_json::json!({"error":"invalid profile id"}),
+            );
+        }
+        if env::var("SECONDEGO_PROFILE_ID").ok().as_deref() != Some(profile_id) {
+            return respond(
+                stream,
+                409,
+                serde_json::json!({"error":"profile is not the active local profile"}),
+            );
+        }
+    }
+    let provider = match ProviderKind::from_environment() {
+        Ok(provider) => provider,
+        Err(error) => {
+            return respond(
+                stream,
+                500,
+                serde_json::json!({"api_version":API_VERSION,"ok":false,"error":error.to_string()}),
+            );
+        }
+    };
+    if let Some(requested_provider) = request.provider.as_deref()
+        && !requested_provider.eq_ignore_ascii_case(provider.name())
+    {
+        return respond(
+            stream,
+            409,
+            serde_json::json!({"error":"provider is not the active local provider"}),
+        );
+    }
+    let started = std::time::Instant::now();
+    match available_models_for_provider(provider) {
+        Ok(models) => respond(
+            stream,
+            200,
+            serde_json::json!({
+                "api_version": API_VERSION,
+                "ok": true,
+                "provider": provider.name(),
+                "default_model": provider.default_model(),
+                "latency_ms": started.elapsed().as_millis(),
+                "models": models,
+            }),
+        ),
+        Err(error) => respond(
+            stream,
+            502,
+            serde_json::json!({"api_version":API_VERSION,"ok":false,"provider":provider.name(),"error":error.to_string()}),
         ),
     }
 }
@@ -871,6 +939,12 @@ struct ProviderTestRequest {
     profile_id: Option<String>,
     provider: Option<String>,
     model: Option<String>,
+}
+
+#[derive(Default, serde::Deserialize)]
+struct ProviderModelsRequest {
+    profile_id: Option<String>,
+    provider: Option<String>,
 }
 
 fn valid_profile_id(value: &str) -> bool {

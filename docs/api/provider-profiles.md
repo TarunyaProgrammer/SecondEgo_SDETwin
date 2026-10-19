@@ -26,6 +26,7 @@ printf '%s\n' "$OPENAI_API_KEY" \
 secondego provider list
 secondego provider use openai --profile work
 secondego provider test
+secondego provider models
 secondego provider list --json
 ```
 
@@ -68,6 +69,7 @@ child-process environment boundary.
 provider, model, duration, or a classified failure. It does not print the key,
 request body, response body, or raw provider error text.
 
-`provider list --json` and `provider test --json` emit schema-versioned,
-machine-readable output for CI and shell integrations. They contain provider
-ids, models, profile ids, and safe status values only.
+`provider models` performs authenticated model discovery for the active profile.
+`provider list --json`, `provider models --json`, and `provider test --json` emit
+schema-versioned, machine-readable output for CI and shell integrations. They
+contain provider ids, model ids, profile ids, and safe status values only.

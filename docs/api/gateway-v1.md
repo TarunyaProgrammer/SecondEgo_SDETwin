@@ -62,6 +62,32 @@ selected provider and returns only safe status data:
 Failures return `502` with a bounded classified error string. This endpoint is
 not a generic prompt proxy.
 
+## Provider model discovery
+
+```http
+POST /api/providers/models
+X-SecondEgo-Token: <launch token>
+Content-Type: application/json
+
+{"profile_id":"openai:work","provider":"openai"}
+```
+
+The gateway uses the active profile's key to call the provider's authenticated
+model-list endpoint. It returns bounded, safe model ids and optional display
+names; keys, descriptions, pricing, and raw provider responses are not
+returned. The desktop model field uses this catalog as a datalist while still
+allowing an explicit custom model id.
+
+```json
+{
+  "api_version": 1,
+  "ok": true,
+  "provider": "openai",
+  "default_model": "gpt-5-mini",
+  "models": [{"id":"gpt-5-mini","display_name":null}]
+}
+```
+
 ## Start a run
 
 ```http

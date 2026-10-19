@@ -3,7 +3,7 @@ import logoUrl from "./assets/secondego-logo.png";
 import { GestureIndicator } from "./components/GestureIndicator";
 import { phaseGroupFor, phaseGroups, VillageScene, workerStateFor, workers } from "./components/VillageScene";
 import { useGestureControl } from "./hooks/useGestureControl";
-import type { DiscoveryFinding, EngineEvent, GestureActionType, GestureEvent, ProviderProfile, ProviderProfileSnapshot, RunResult, RunView, VoiceSnapshot } from "./types";
+import type { DiscoveryFinding, EngineEvent, GestureActionType, GestureEvent, ProviderModel, ProviderProfile, ProviderProfileSnapshot, RunResult, RunView, VoiceSnapshot } from "./types";
 
 const defaultGateway =
   new URLSearchParams(window.location.search).get("gateway") ||
@@ -227,6 +227,10 @@ function App() {
   const [providerMessage, setProviderMessage] = useState("");
   const [providerTestStatus, setProviderTestStatus] = useState("");
   const [providerBusy, setProviderBusy] = useState(false);
+  const [providerModels, setProviderModels] = useState<ProviderModel[]>([]);
+  const [providerDefaultModel, setProviderDefaultModel] = useState("");
+  const [providerModelsStatus, setProviderModelsStatus] = useState("");
+  const [providerModelsBusy, setProviderModelsBusy] = useState(false);
   const providerKeyRef = useRef<HTMLInputElement>(null);
   const offsetRef = useRef(0);
   const api = useMemo(() => gateway.replace(/\/$/, ""), [gateway]);
@@ -304,6 +308,41 @@ function App() {
       }
     }).catch((reason) => setProviderMessage(reason instanceof Error ? reason.message : "Could not read provider profiles."));
   }, [showSettings]);
+
+  async function loadProviderModels() {
+    const active = providerProfiles.entries.find((entry) => entry.id === providerProfiles.active);
+    if (!showSettings || !providerProfiles.active || !active || active.provider !== providerChoice) {
+      setProviderModels([]);
+      setProviderDefaultModel("");
+      setProviderModelsStatus(active && active.provider !== providerChoice ? "Save or activate this provider to discover its models." : "");
+      return;
+    }
+    setProviderModelsBusy(true);
+    setProviderModelsStatus("Refreshing provider models…");
+    try {
+      const response = await fetch(`${api}/api/providers/models`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-SecondEgo-Token": token },
+        body: JSON.stringify({ profile_id: providerProfiles.active, provider: providerChoice }),
+      });
+      const payload = (await response.json()) as { ok?: boolean; models?: ProviderModel[]; default_model?: string; error?: string };
+      if (!response.ok || !payload.ok) throw new Error(payload.error || "Could not discover provider models.");
+      setProviderModels(Array.isArray(payload.models) ? payload.models : []);
+      setProviderDefaultModel(payload.default_model || "");
+      setProviderModelsStatus(`${payload.models?.length || 0} live model${payload.models?.length === 1 ? "" : "s"} available for this key.`);
+    } catch (reason) {
+      setProviderModels([]);
+      setProviderModelsStatus(reason instanceof Error ? reason.message : "Could not discover provider models.");
+    } finally {
+      setProviderModelsBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (showSettings) void loadProviderModels();
+    // The active profile and provider choice define the authenticated catalog.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showSettings, providerProfiles.active, providerChoice, api, token]);
 
   useEffect(() => {
     const requestId = run?.request_id;
@@ -551,9 +590,11 @@ function App() {
             <div className="provider-form-grid">
               <label><span>Provider</span><select value={providerChoice} onChange={(event) => setProviderChoice(event.target.value)} disabled={providerBusy}><option value="deepseek">DeepSeek</option><option value="gemini">Gemini</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="openrouter">OpenRouter</option><option value="groq">Groq</option></select></label>
               <label><span>Profile</span><input value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="default" disabled={providerBusy} /></label>
-              <label><span>Model override</span><input value={profileModel} onChange={(event) => setProfileModel(event.target.value)} placeholder="provider default" disabled={providerBusy} /></label>
+              <label><span>Model override</span><input list="provider-model-options" value={profileModel} onChange={(event) => setProfileModel(event.target.value)} placeholder={providerDefaultModel ? `provider default · ${providerDefaultModel}` : "provider default"} disabled={providerBusy} /></label>
               <label><span>API key</span><input ref={providerKeyRef} type="password" autoComplete="off" placeholder="paste once" disabled={providerBusy} /></label>
             </div>
+            <datalist id="provider-model-options">{providerModels.map((model) => <option key={model.id} value={model.id} label={model.display_name || model.id} />)}</datalist>
+            <div className="provider-model-tools"><button type="button" className="provider-refresh" onClick={() => void loadProviderModels()} disabled={providerModelsBusy || providerBusy}>{providerModelsBusy ? "Refreshing…" : "Refresh live models"}</button><span>{providerModelsStatus}</span></div>
             <button className="settings-switch provider-save" type="button" onClick={() => void saveProvider()} disabled={providerBusy}><i aria-hidden="true" />{providerBusy ? "Saving…" : "Save encrypted profile"}</button>
             <button className="settings-switch provider-test" type="button" onClick={() => void testProvider()} disabled={providerBusy || !providerProfiles.active}><i aria-hidden="true" />Test active connection</button>
             {providerProfiles.entries.length > 0 && <div className="provider-profile-list">{providerProfiles.entries.map((profile) => <div className={`provider-profile-row ${providerProfiles.active === profile.id ? "is-active" : ""}`} key={profile.id}><button type="button" className="provider-profile-activate" onClick={() => void activateProvider(profile)} disabled={providerBusy}><span><b>{profile.provider}</b><small>{profile.profile}{profile.model ? ` · ${profile.model}` : ""}</small></span><i>{providerProfiles.active === profile.id ? "active" : "use"}</i></button><button type="button" className="provider-profile-delete" onClick={() => void deleteProvider(profile)} disabled={providerBusy} aria-label={`Remove ${profile.provider} ${profile.profile}`}>×</button></div>)}</div>}

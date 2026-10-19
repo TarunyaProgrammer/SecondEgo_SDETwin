@@ -10,7 +10,7 @@ use std::time::Duration;
 use secondego_core::ActionProposal;
 use secondego_model::{
     ConfiguredProvider, ModelProvider, ProviderContext, ProviderKind, ScriptedProvider,
-    configured_model,
+    available_models_for_provider, configured_model,
 };
 use secondego_runtime::discovery::{DiscoveryLens, DiscoveryRequest, discover};
 use secondego_runtime::{
@@ -288,6 +288,7 @@ fn print_help() {
     println!("  secondego --json --workspace PATH --task TEXT  Emit a stable JSON envelope");
     println!("  secondego discover --repo PATH           Scan a repository without modifying it");
     println!("  secondego provider list [--json]         Show providers and safe key status");
+    println!("  secondego provider models [--json]       Discover models for the active key");
     println!("  secondego help                           Show this command guide");
     println!();
     println!("DISCOVERY SHOWCASE");
@@ -405,13 +406,46 @@ fn run_provider_command(arguments: &[String]) -> Result<(), Box<dyn std::error::
             }
             Ok(())
         }
+        "models" => {
+            profiles::load_active_into_environment()?;
+            let provider = ProviderKind::from_environment()?;
+            let started = std::time::Instant::now();
+            let models = available_models_for_provider(provider)?;
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "schema_version": 1,
+                        "ok": true,
+                        "provider": provider.name(),
+                        "default_model": provider.default_model(),
+                        "profile_id": env::var("SECONDEGO_PROFILE_ID").ok(),
+                        "latency_ms": started.elapsed().as_millis(),
+                        "models": models,
+                    }))?
+                );
+            } else {
+                println!("Available {} models:", provider.name());
+                for model in models {
+                    println!(
+                        "  {}{}",
+                        model.id,
+                        model
+                            .display_name
+                            .map(|name| format!(" — {name}"))
+                            .unwrap_or_default()
+                    );
+                }
+            }
+            Ok(())
+        }
         "help" => {
-            println!("Usage: secondego provider list | test | add | use | remove");
+            println!("Usage: secondego provider list | models | test | add | use | remove");
             println!("Run 'secondego provider help' for profile command details.");
             Ok(())
         }
         command => Err(format!(
-            "unknown provider command '{command}'; use 'provider list', 'provider test', or 'provider help'"
+            "unknown provider command '{command}'; use 'provider list', 'provider models', 'provider test', or 'provider help'"
         )
         .into()),
     }

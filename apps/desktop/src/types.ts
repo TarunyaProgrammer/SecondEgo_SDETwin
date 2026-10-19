@@ -125,6 +125,11 @@ export type ProviderProfileSnapshot = {
   entries: ProviderProfile[];
 };
 
+export type ProviderModel = {
+  id: string;
+  display_name: string | null;
+};
+
 export type GestureServiceState = "disabled" | "starting" | "active" | "unavailable" | "error";
 
 export type GestureServiceStatus = {

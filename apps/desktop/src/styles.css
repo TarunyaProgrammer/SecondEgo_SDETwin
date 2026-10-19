@@ -168,6 +168,11 @@ body.notch-mode #root { height: 100vh; }
 .provider-save:disabled { cursor: wait; opacity: .65; }
 .provider-test { width: 100%; justify-content: center; color: var(--muted); }
 .provider-test:disabled { cursor: wait; opacity: .65; }
+.provider-model-tools { display: flex; align-items: flex-start; gap: 7px; margin-top: 7px; }
+.provider-refresh { flex: none; border: 1px solid var(--line); border-radius: 999px; padding: 4px 8px; color: var(--cyan); background: var(--surface-input); font: 700 8px var(--mono); }
+.provider-refresh:hover { border-color: rgba(104, 230, 224, .55); background: rgba(104, 230, 224, .08); }
+.provider-refresh:disabled { cursor: wait; opacity: .55; }
+.provider-model-tools span { min-width: 0; color: var(--quiet); font: 8px/1.35 var(--sans); }
 .provider-profile-list { display: grid; gap: 5px; margin-top: 10px; }
 .provider-profile-row { display: flex; align-items: stretch; gap: 4px; width: 100%; border: 1px solid var(--line-soft); border-radius: 7px; color: var(--muted); background: rgba(255, 255, 255, .025); }
 .provider-profile-row:hover, .provider-profile-row.is-active { border-color: rgba(104, 230, 224, .45); background: rgba(104, 230, 224, .07); }

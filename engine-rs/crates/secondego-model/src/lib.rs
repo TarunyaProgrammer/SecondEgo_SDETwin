@@ -27,6 +27,7 @@ const GROQ_BASE_URL: &str = "https://api.groq.com/openai/v1";
 const GROQ_DEFAULT_MODEL: &str = "qwen/qwen3.8-27b";
 const GROQ_MAX_COMPLETION_TOKENS: u32 = 4_096;
 const GROQ_PLANNING_PROMPT_TOKEN_LIMIT: u32 = 3_500;
+const MAX_DISCOVERED_MODELS: usize = 256;
 const GROQ_JSON_PLAN_RESPONSE_CONTRACT: &str = "Return exactly one JSON object with action=submit_plan, arguments, and rationale. The supplied repository evidence is the complete planning context. Submit the implementation and verification plan directly; do not request read_file or search_code. Do not use Markdown or provider tools.";
 const GROQ_JSON_RECOVERY_RESPONSE_CONTRACT: &str = "Return exactly one JSON object with action=submit_recovery, arguments, and rationale. Do not use Markdown or provider tools.";
 const GROQ_PLAN_ACTIONS: &[&str] = &["submit_plan"];
@@ -257,6 +258,79 @@ pub fn configured_model() -> Result<String, ProviderError> {
     Ok(model)
 }
 
+/// Discover text-generation model ids using the selected provider's
+/// authenticated model endpoint. Model availability is account- and
+/// time-dependent, so callers should prefer this over hard-coded model lists.
+pub fn available_models_for_provider(
+    provider: ProviderKind,
+) -> Result<Vec<ProviderModel>, ProviderError> {
+    let key = resolve_api_key(&None, Some(provider.credential_env_name()), true)?;
+    let (url, headers) = match provider {
+        ProviderKind::DeepSeek => (
+            format!(
+                "{}/models",
+                std::env::var("SECONDEGO_DEEPSEEK_BASE_URL")
+                    .unwrap_or_else(|_| DEEPSEEK_BASE_URL.into())
+                    .trim_end_matches('/')
+            ),
+            HeaderMap::new(),
+        ),
+        ProviderKind::Gemini => (
+            format!(
+                "{}/models",
+                std::env::var("SECONDEGO_GEMINI_BASE_URL")
+                    .unwrap_or_else(|_| "https://generativelanguage.googleapis.com/v1beta".into())
+                    .trim_end_matches('/')
+            ),
+            header_with_value("x-goog-api-key", &key)?,
+        ),
+        ProviderKind::OpenAI => (
+            format!(
+                "{}/models",
+                std::env::var("SECONDEGO_OPENAI_BASE_URL")
+                    .unwrap_or_else(|_| OPENAI_BASE_URL.into())
+                    .trim_end_matches('/')
+            ),
+            HeaderMap::new(),
+        ),
+        ProviderKind::Anthropic => (
+            format!(
+                "{}/models",
+                std::env::var("SECONDEGO_ANTHROPIC_BASE_URL")
+                    .unwrap_or_else(|_| ANTHROPIC_BASE_URL.into())
+                    .trim_end_matches('/')
+            ),
+            anthropic_headers(&key)?,
+        ),
+        ProviderKind::OpenRouter => (
+            format!(
+                "{}/models",
+                std::env::var("SECONDEGO_OPENROUTER_BASE_URL")
+                    .unwrap_or_else(|_| OPENROUTER_BASE_URL.into())
+                    .trim_end_matches('/')
+            ),
+            openrouter_headers(),
+        ),
+        ProviderKind::Groq => (
+            format!(
+                "{}/models",
+                std::env::var("SECONDEGO_GROQ_BASE_URL")
+                    .unwrap_or_else(|_| GROQ_BASE_URL.into())
+                    .trim_end_matches('/')
+            ),
+            HeaderMap::new(),
+        ),
+    };
+    let payload = get_json_with_headers(
+        provider.name(),
+        &url,
+        &key,
+        Duration::from_secs(15),
+        headers,
+    )?;
+    parse_model_catalog(provider, &payload)
+}
+
 fn validate_model_for_provider(provider: ProviderKind, model: &str) -> Result<(), ProviderError> {
     let normalized = model.trim().to_ascii_lowercase();
     let mismatch = match provider {
@@ -337,6 +411,15 @@ pub struct RateLimitSnapshot {
     pub remaining_tokens: Option<u64>,
     pub reset_after: Option<Duration>,
     pub retry_after: Option<Duration>,
+}
+
+/// A provider-owned model that is safe to expose to a model picker. This
+/// intentionally omits pricing, descriptions, and provider response bodies;
+/// callers only need a valid identifier and an optional display label.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderModel {
+    pub id: String,
+    pub display_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -468,6 +551,7 @@ impl ModelProvider for DeepSeekProvider {
 pub struct GeminiProvider {
     pub model: String,
     pub api_key: Option<String>,
+    pub base_url: String,
     pub timeout: Duration,
 }
 
@@ -479,6 +563,8 @@ impl Default for GeminiProvider {
                 .filter(|model| !model.trim().is_empty())
                 .unwrap_or_else(|| GEMINI_DEFAULT_MODEL.into()),
             api_key: None,
+            base_url: std::env::var("SECONDEGO_GEMINI_BASE_URL")
+                .unwrap_or_else(|_| "https://generativelanguage.googleapis.com/v1beta".into()),
             timeout: Duration::from_secs(60),
         }
     }
@@ -491,7 +577,11 @@ impl ModelProvider for GeminiProvider {
         _context: &ProviderContext,
     ) -> Result<ModelResponse, ProviderError> {
         let api_key = resolve_api_key(&self.api_key, Some("GEMINI_API_KEY"), true)?;
-        let url = gemini_endpoint(&self.model);
+        let url = format!(
+            "{}/models/{}:generateContent",
+            self.base_url.trim_end_matches('/'),
+            self.model
+        );
         let request = gemini_request(prompt);
         let client = Client::builder()
             .timeout(self.timeout)
@@ -654,16 +744,7 @@ impl ModelProvider for AnthropicProvider {
     ) -> Result<ModelResponse, ProviderError> {
         let key = resolve_api_key(&self.api_key, Some("ANTHROPIC_API_KEY"), true)?;
         let url = format!("{}/messages", self.base_url.trim_end_matches('/'));
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "x-api-key",
-            reqwest::header::HeaderValue::from_str(&key)
-                .map_err(|_| ProviderError::MissingApiKey)?,
-        );
-        headers.insert(
-            "anthropic-version",
-            reqwest::header::HeaderValue::from_static(ANTHROPIC_API_VERSION),
-        );
+        let headers = anthropic_headers(&key)?;
         let response = post_json_with_headers(
             "Anthropic",
             &url,
@@ -769,6 +850,7 @@ impl ModelProvider for GroqProvider {
     }
 }
 
+#[cfg(test)]
 fn gemini_endpoint(model: &str) -> String {
     format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent")
 }
@@ -991,6 +1073,115 @@ fn post_json(
         model,
         HeaderMap::new(),
     )
+}
+
+fn header_with_value(name: &str, value: &str) -> Result<HeaderMap, ProviderError> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        reqwest::header::HeaderName::from_bytes(name.as_bytes())
+            .map_err(|_| ProviderError::Transport("invalid provider header".into()))?,
+        reqwest::header::HeaderValue::from_str(value).map_err(|_| ProviderError::MissingApiKey)?,
+    );
+    Ok(headers)
+}
+
+fn anthropic_headers(api_key: &str) -> Result<HeaderMap, ProviderError> {
+    let mut headers = header_with_value("x-api-key", api_key)?;
+    headers.insert(
+        "anthropic-version",
+        reqwest::header::HeaderValue::from_static(ANTHROPIC_API_VERSION),
+    );
+    Ok(headers)
+}
+
+fn get_json_with_headers(
+    provider: &str,
+    url: &str,
+    api_key: &str,
+    timeout: Duration,
+    headers: HeaderMap,
+) -> Result<Value, ProviderError> {
+    let client = Client::builder()
+        .timeout(timeout)
+        .build()
+        .map_err(|error| ProviderError::Transport(error.to_string()))?;
+    let use_header_auth =
+        headers.contains_key("x-api-key") || headers.contains_key("x-goog-api-key");
+    let mut request = client.get(url).headers(headers);
+    if !use_header_auth {
+        request = request.bearer_auth(api_key);
+    }
+    let response = request
+        .send()
+        .map_err(|error| ProviderError::Transport(error.to_string()))?;
+    let status = response.status();
+    let rate_limit = rate_limit_snapshot(response.headers());
+    if !status.is_success() {
+        let code = response_error_code(response);
+        return Err(http_status_error(provider, status, None, code, rate_limit));
+    }
+    response.json().map_err(|_| ProviderError::InvalidResponse)
+}
+
+fn parse_model_catalog(
+    provider: ProviderKind,
+    payload: &Value,
+) -> Result<Vec<ProviderModel>, ProviderError> {
+    let values = if provider == ProviderKind::Gemini {
+        payload
+            .get("models")
+            .and_then(Value::as_array)
+            .ok_or(ProviderError::InvalidResponse)?
+    } else {
+        payload
+            .get("data")
+            .and_then(Value::as_array)
+            .ok_or(ProviderError::InvalidResponse)?
+    };
+    let mut models = Vec::new();
+    for value in values.iter().take(MAX_DISCOVERED_MODELS) {
+        let raw_id = if provider == ProviderKind::Gemini {
+            value.get("name").and_then(Value::as_str)
+        } else {
+            value.get("id").and_then(Value::as_str)
+        };
+        let Some(raw_id) = raw_id else { continue };
+        let id = raw_id.strip_prefix("models/").unwrap_or(raw_id).trim();
+        if id.is_empty()
+            || id.len() > 256
+            || models.iter().any(|model: &ProviderModel| model.id == id)
+        {
+            continue;
+        }
+        if provider == ProviderKind::Gemini
+            && !value
+                .get("supportedGenerationMethods")
+                .and_then(Value::as_array)
+                .is_some_and(|methods| {
+                    methods
+                        .iter()
+                        .any(|method| method.as_str() == Some("generateContent"))
+                })
+        {
+            continue;
+        }
+        let display_name = value
+            .get("displayName")
+            .or_else(|| value.get("display_name"))
+            .or_else(|| value.get("name"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty() && name.len() <= 256)
+            .map(str::to_owned);
+        models.push(ProviderModel {
+            id: id.to_owned(),
+            display_name,
+        });
+    }
+    if models.is_empty() {
+        return Err(ProviderError::InvalidResponse);
+    }
+    Ok(models)
 }
 
 fn post_json_with_headers(
@@ -1627,6 +1818,38 @@ mod tests {
             parse_gemini_content(&payload).unwrap(),
             r#"{"action":"submit_plan","arguments":{},"rationale":"plan"}"#
         );
+    }
+
+    #[test]
+    fn model_catalog_parses_openai_compatible_ids_without_provider_text() {
+        let payload = serde_json::json!({
+            "data": [
+                {"id": "gpt-5-mini", "owned_by": "openai"},
+                {"id": "gpt-5-mini", "owned_by": "openai"},
+                {"id": ""}
+            ]
+        });
+        let models = parse_model_catalog(ProviderKind::OpenAI, &payload).unwrap();
+        assert_eq!(
+            models,
+            vec![ProviderModel {
+                id: "gpt-5-mini".into(),
+                display_name: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn model_catalog_parses_only_gemini_generation_models() {
+        let payload = serde_json::json!({
+            "models": [
+                {"name": "models/gemini-3.8-flash", "displayName": "Gemini 3.8 Flash", "supportedGenerationMethods": ["generateContent"]},
+                {"name": "models/text-embedding-001", "displayName": "Embedding", "supportedGenerationMethods": ["embedContent"]}
+            ]
+        });
+        let models = parse_model_catalog(ProviderKind::Gemini, &payload).unwrap();
+        assert_eq!(models[0].id, "gemini-3.8-flash");
+        assert_eq!(models[0].display_name.as_deref(), Some("Gemini 3.8 Flash"));
     }
 
     #[test]

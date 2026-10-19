@@ -214,6 +214,7 @@ printf '%s\n' "$OPENAI_API_KEY" | secondego provider add openai --key-stdin --pr
 secondego provider list
 secondego provider use openai --profile work
 secondego provider test
+secondego provider models
 ```
 
 For automation, use an exported provider-specific variable or an ignored `.env`
