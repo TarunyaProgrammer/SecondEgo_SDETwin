@@ -14,7 +14,8 @@ const {
 
 const devUrl = process.env.SECONDEGO_DESKTOP_URL;
 const gatewayPort = Number(process.env.SECONDEGO_GATEWAY_PORT || 8787);
-const repoRoot = path.join(__dirname, "..", "..", "..");
+const sourceRoot = path.join(__dirname, "..", "..", "..");
+const repoRoot = app.isPackaged ? process.resourcesPath : sourceRoot;
 const allowedGestureNames = new Set(["open_palm", "pinch"]);
 const allowedGestureStates = new Set(["disabled", "starting", "active", "unavailable", "error"]);
 const configuredGesturePort = Number(process.env.SECONDEGO_GESTURE_PORT || 52381);
@@ -391,10 +392,16 @@ function startGateway() {
   const token = gatewayToken || (gatewayToken = randomBytes(24).toString("base64url"));
   const rustCandidates = [
     process.env.SECONDEGO_GATEWAY_BINARY,
+    app.isPackaged ? path.join(process.resourcesPath, "secondego-gateway") : null,
     path.join(repoRoot, "engine-rs", "target", "release", "secondego-gateway"),
     path.join(repoRoot, "engine-rs", "target", "debug", "secondego-gateway"),
-  ].filter(Boolean);
+  ].filter((candidate) => candidate && fs.existsSync(candidate));
   const rustGateway = rustCandidates.find((candidate) => fs.existsSync(candidate));
+  if (!rustGateway && app.isPackaged) {
+    console.error("SecondEgo release is missing its Rust gateway resource.");
+    app.quit();
+    return;
+  }
   const python = process.env.SECONDEGO_PYTHON || path.join(repoRoot, ".venv", "bin", "python");
   const command = rustGateway || python;
   const args = rustGateway ? [] : ["-m", "SecondEgo.desktop.gateway", "--host", "127.0.0.1", "--port", String(gatewayPort)];

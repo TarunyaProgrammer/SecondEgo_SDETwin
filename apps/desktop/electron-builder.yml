@@ -1,0 +1,44 @@
+appId: com.secondego.desktop
+productName: SecondEgo
+copyright: Copyright © 2026 SecondEgo contributors
+asar: true
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**/*
+  - electron/**/*
+  - package.json
+extraResources:
+  - from: resources/secondego-gateway
+    to: secondego-gateway
+    filter:
+      - '**/*'
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+  hardenedRuntime: true
+  gatekeeperAssess: false
+dmg:
+  title: SecondEgo
+  artifactName: SecondEgo-${version}-${arch}.dmg
+  backgroundColor: '#0b0f14'
+  window:
+    width: 720
+    height: 460
+  contents:
+    - x: 180
+      y: 230
+      type: file
+    - x: 540
+      y: 230
+      type: link
+      path: /Applications
+publish:
+  provider: github
+  owner: TarunyaProgrammer
+  repo: SecondEgo_SDETwin

@@ -3,12 +3,15 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "electron": "node electron/launch.cjs",
-    "desktop": "npm run build && npm run electron"
+    "desktop": "npm run build && npm run electron",
+    "prepare-release": "node scripts/prepare-release.cjs",
+    "dist:mac": "npm run build && npm run prepare-release && npx --yes electron-builder@25.1.8 --mac dmg"
   },
   "dependencies": {
     "react": "^18.3.1",

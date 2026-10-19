@@ -1,0 +1,59 @@
+name: Release SecondEgo
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    strategy:
+      matrix:
+        include:
+          - runner: macos-14
+            rust_target: aarch64-apple-darwin
+            arch: arm64
+          - runner: macos-13
+            rust_target: x86_64-apple-darwin
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+      - name: Build Rust gateway
+        working-directory: engine-rs
+        run: cargo build --release --locked -p secondego-gateway --target ${{ matrix.rust_target }}
+      - name: Stage gateway for Electron
+        shell: bash
+        run: |
+          mkdir -p apps/desktop/resources
+          cp "engine-rs/target/${{ matrix.rust_target }}/release/secondego-gateway" apps/desktop/resources/secondego-gateway
+          chmod 755 apps/desktop/resources/secondego-gateway
+      - name: Install desktop dependencies
+        working-directory: apps/desktop
+        run: npm ci
+      - name: Build signed-artifact candidate
+        working-directory: apps/desktop
+        run: npx --yes electron-builder@25.1.8 --mac dmg --${{ matrix.arch }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: secondego-macos-${{ matrix.arch }}
+          path: apps/desktop/release/*.dmg
+      - name: Publish release assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: apps/desktop/release/*.dmg

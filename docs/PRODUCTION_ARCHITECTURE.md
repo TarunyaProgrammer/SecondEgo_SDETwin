@@ -287,7 +287,10 @@ Do not call the local profile model “multi-tenant”. A hosted service would a
 ### Phase 4 — packaging and operations
 
 - `apps/desktop/package.json` — Electron Builder configuration and release scripts.
-- `.github/workflows/release.yml` — matrix builds, signing, notarization, checksums.
+- `apps/desktop/electron-builder.yml` — DMG layout, app identity, architecture targets, and staged gateway resource.
+- `apps/desktop/scripts/prepare-release.cjs` — copies the release Rust gateway into the packaged resource set.
+- `.github/workflows/release.yml` — arm64/x64 macOS artifact matrix and GitHub release publication.
+- Release signing, notarization, checksums, and update metadata remain gated on release certificates and publishing secrets; the workflow currently produces unsigned artifact candidates.
 - `apps/desktop/native/Info.plist` — bundle identifiers, permissions, update metadata.
 - `README.md`, `SECURITY.md`, `CONTRIBUTING.md` — install, support, incident, and release policy.
 
