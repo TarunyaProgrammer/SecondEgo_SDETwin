@@ -41,19 +41,28 @@ jobs:
       - name: Install desktop dependencies
         working-directory: apps/desktop
         run: npm ci
-      - name: Build signed-artifact candidate
+      - name: Build unsigned DMG candidate
         working-directory: apps/desktop
         run: npx --yes electron-builder@25.1.8 --mac dmg --${{ matrix.arch }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Generate checksums and release manifest
+        working-directory: apps/desktop
+        run: npm run release-manifest
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: secondego-macos-${{ matrix.arch }}
-          path: apps/desktop/release/*.dmg
+          path: |
+            apps/desktop/release/*.dmg
+            apps/desktop/release/SHA256SUMS.txt
+            apps/desktop/release/release-manifest.json
       - name: Publish release assets
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: apps/desktop/release/*.dmg
+          files: |
+            apps/desktop/release/*.dmg
+            apps/desktop/release/SHA256SUMS.txt
+            apps/desktop/release/release-manifest.json

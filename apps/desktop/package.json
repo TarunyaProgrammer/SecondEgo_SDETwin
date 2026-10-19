@@ -11,6 +11,7 @@
     "electron": "node electron/launch.cjs",
     "desktop": "npm run build && npm run electron",
     "prepare-release": "node scripts/prepare-release.cjs",
+    "release-manifest": "node scripts/write-release-manifest.cjs",
     "dist:mac": "npm run build && npm run prepare-release && npx --yes electron-builder@25.1.8 --mac dmg"
   },
   "dependencies": {

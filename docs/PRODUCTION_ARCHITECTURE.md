@@ -41,7 +41,7 @@ The current source of truth is in `engine-rs/crates/secondego-runtime`. The Pyth
 2. Credentials support multiple named profiles in the desktop and macOS/Linux terminal paths. Windows terminal support, vault migration UX, and rotation remain.
 3. The gateway now has a versioned, authenticated metadata contract for profile/provider/model identity, but it is still an observer API. Replay metadata, workspace ownership, and durable profile/workspace operations remain.
 4. The Electron shell has provider setup and diff review foundations, but still needs release-grade update UX, recovery flows, accessibility hardening, and a fuller workspace information architecture.
-5. Packaging has an unsigned DMG candidate pipeline. Signed/notarized artifacts, checksums, update channels, and a supported installer contract remain gated on release credentials and CI validation.
+5. Packaging has an unsigned DMG candidate pipeline with SHA-256 checksums and a release manifest. Signed/notarized artifacts, update channels, and a supported installer contract remain gated on release credentials and CI validation.
 6. The terminal path now has documented native profiles and safe probes, but still needs a stable machine-readable command schema, richer TUI, shell completion, and cross-platform smoke tests.
 7. The gateway now persists terminal task snapshots through migration-managed SQLite with provider/profile/workspace metadata. Workspace ownership, replay retention, active-run recovery, and multi-user tenancy remain.
 
@@ -292,7 +292,7 @@ Do not call the local profile model “multi-tenant”. A hosted service would a
 - `apps/desktop/electron-builder.yml` — DMG layout, app identity, architecture targets, and staged gateway resource.
 - `apps/desktop/scripts/prepare-release.cjs` — copies the release Rust gateway into the packaged resource set.
 - `.github/workflows/release.yml` — arm64/x64 macOS artifact matrix and GitHub release publication.
-- Release signing, notarization, checksums, and update metadata remain gated on release certificates and publishing secrets; the workflow currently produces unsigned artifact candidates.
+- Release signing, notarization, and update metadata remain gated on release certificates and publishing secrets; the workflow currently produces unsigned artifact candidates plus verifiable checksum/manifest metadata.
 - `apps/desktop/native/Info.plist` — bundle identifiers, permissions, update metadata.
 - `README.md`, `SECURITY.md`, `CONTRIBUTING.md` — install, support, incident, and release policy.
 

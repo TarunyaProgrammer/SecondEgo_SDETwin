@@ -29,4 +29,4 @@ To regenerate the 1200×630 Open Graph preview image asset:
 npm run generate:og
 ```
 
-The architecture copy is based on the current project context and evaluation materials. The recovery panel is an architecture walkthrough, not a customer case study. The footer signup field is intentionally a status message; it does not submit email addresses anywhere.
+The architecture copy is based on the current project context and evaluation materials. The recovery panel is an architecture walkthrough, not a customer case study. The footer signup field is intentionally a status message; it does not submit email addresses anywhere. Release downloads currently come from GitHub Releases with a DMG, `SHA256SUMS.txt`, and `release-manifest.json`; signing and notarization remain release-infrastructure work.
