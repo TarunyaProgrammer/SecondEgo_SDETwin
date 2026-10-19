@@ -5,6 +5,8 @@ const path = require("node:path");
 const releaseDirectory = path.join(__dirname, "..", "release");
 const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
 const version = process.env.RELEASE_VERSION || process.env.GITHUB_REF_NAME || packageJson.version;
+const signed = process.env.RELEASE_SIGNED === "true";
+const notarized = process.env.RELEASE_NOTARIZED === "true";
 const artifacts = fs.readdirSync(releaseDirectory)
   .filter((name) => name.endsWith(".dmg"))
   .sort()
@@ -22,9 +24,9 @@ const manifest = {
   product: "SecondEgo",
   version,
   platform: "macOS",
-  signed: false,
-  notarized: false,
-  update_channel: "manual-github-release",
+  signed,
+  notarized,
+  update_channel: signed ? "manual-github-release-signed" : "manual-github-release-candidate",
   artifacts,
 };
 
