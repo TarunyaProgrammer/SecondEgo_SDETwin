@@ -194,6 +194,7 @@ function App() {
   const [profileName, setProfileName] = useState("default");
   const [profileModel, setProfileModel] = useState("");
   const [providerMessage, setProviderMessage] = useState("");
+  const [providerTestStatus, setProviderTestStatus] = useState("");
   const [providerBusy, setProviderBusy] = useState(false);
   const providerKeyRef = useRef<HTMLInputElement>(null);
   const offsetRef = useRef(0);
@@ -397,6 +398,21 @@ function App() {
     }
   }
 
+  async function testProvider() {
+    setProviderBusy(true);
+    setProviderTestStatus("Testing active profile…");
+    try {
+      const response = await fetch(`${api}/api/providers/test`, { method: "POST", headers: { "X-SecondEgo-Token": token } });
+      const payload = (await response.json()) as { ok?: boolean; latency_ms?: number; error?: string };
+      if (!response.ok || !payload.ok) throw new Error(payload.error || "Provider test failed.");
+      setProviderTestStatus(`Connection verified${typeof payload.latency_ms === "number" ? ` · ${payload.latency_ms} ms` : ""}.`);
+    } catch (reason) {
+      setProviderTestStatus(reason instanceof Error ? reason.message : "Provider test failed.");
+    } finally {
+      setProviderBusy(false);
+    }
+  }
+
   useEffect(() => {
     if (run?.mode === "discover" && (run.result?.findings?.length ?? 0) > 0) {
       setVillageTab("findings");
@@ -493,8 +509,10 @@ function App() {
               <label><span>API key</span><input ref={providerKeyRef} type="password" autoComplete="off" placeholder="paste once" disabled={providerBusy} /></label>
             </div>
             <button className="settings-switch provider-save" type="button" onClick={() => void saveProvider()} disabled={providerBusy}><i aria-hidden="true" />{providerBusy ? "Saving…" : "Save encrypted profile"}</button>
+            <button className="settings-switch provider-test" type="button" onClick={() => void testProvider()} disabled={providerBusy || !providerProfiles.active}><i aria-hidden="true" />Test active connection</button>
             {providerProfiles.entries.length > 0 && <div className="provider-profile-list">{providerProfiles.entries.map((profile) => <button type="button" key={profile.id} className={`provider-profile-row ${providerProfiles.active === profile.id ? "is-active" : ""}`} onClick={() => void activateProvider(profile)}><span><b>{profile.provider}</b><small>{profile.profile}{profile.model ? ` · ${profile.model}` : ""}</small></span><i>{providerProfiles.active === profile.id ? "active" : "use"}</i></button>)}</div>}
             {providerMessage && <p className="provider-message" role="status">{providerMessage}</p>}
+            {providerTestStatus && <p className="provider-test-message" role="status">{providerTestStatus}</p>}
           </section>
           <section><strong>Camera gestures</strong><p>Optional local landmark tracking. Clicking the capsule always works without a camera.</p><button className={`settings-switch ${gestureControl.enabled ? "is-on" : ""}`} type="button" role="switch" aria-checked={gestureControl.enabled} onClick={gestureControl.toggleEnabled}><i aria-hidden="true" /><span>{gestureControl.serviceState === "unavailable" || gestureControl.serviceState === "error" ? "Retry" : gestureControl.enabled ? "On" : "Off"}</span></button><p className={`gesture-service-status ${gestureControl.serviceState}`}>{gestureControl.serviceMessage || (gestureControl.serviceState === "active" ? "Landmark tracker is live." : gestureControl.serviceState === "starting" ? "Starting local landmark tracker…" : gestureControl.serviceState === "disabled" ? "Camera tracking is off." : "Landmark tracker is unavailable.")}</p></section>
           <section><strong>Window controls</strong><p><b>Click the top capsule</b> opens or closes mission control. <b>Click outside</b> or press <b>Escape</b> to collapse it. Hover does not resize the window.</p></section>

@@ -9,7 +9,7 @@ use std::thread;
 use std::time::Duration;
 
 use secondego_core::EngineEvent;
-use secondego_model::{ConfiguredProvider, configured_model};
+use secondego_model::{ConfiguredProvider, ModelProvider, ProviderContext, configured_model};
 use secondego_runtime::discovery::{DiscoveryLens, DiscoveryRequest, discover_with_observer};
 use secondego_runtime::{
     CancellationToken, RunReport, RuntimeError, RustEngine, collect_garbage,
@@ -102,12 +102,40 @@ fn handle(
             200,
             serde_json::json!({"ok":true,"api_version":1,"engine":"rust"}),
         ),
+        ("POST", "/api/providers/test") => test_provider(&mut stream),
         ("POST", "/api/runs") => create_run(&mut stream, request.body, runs, voice),
         ("POST", path) if path.starts_with("/api/runs/") && path.ends_with("/cancel") => {
             cancel_run(&mut stream, path, runs)
         }
         ("GET", path) if path.starts_with("/api/runs/") => get_run(&mut stream, path, runs),
         _ => respond(&mut stream, 404, serde_json::json!({"error":"not found"})),
+    }
+}
+
+fn test_provider(stream: &mut TcpStream) -> std::io::Result<()> {
+    let started = std::time::Instant::now();
+    let result = ConfiguredProvider::from_environment()
+        .and_then(|provider| provider.with_model(configured_model()?))
+        .and_then(|provider| {
+            provider.generate(
+                "Return a submit_plan JSON object with empty arguments and rationale 'connection test'.",
+                &ProviderContext {
+                    run_id: "provider-test".into(),
+                    phase: "PLAN".into(),
+                },
+            )
+        });
+    match result {
+        Ok(_) => respond(
+            stream,
+            200,
+            serde_json::json!({"ok":true,"latency_ms":started.elapsed().as_millis()}),
+        ),
+        Err(error) => respond(
+            stream,
+            502,
+            serde_json::json!({"ok":false,"error":error.to_string()}),
+        ),
     }
 }
 
