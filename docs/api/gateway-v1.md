@@ -29,6 +29,10 @@ cancellation of an active run is inherently process-local.
 - Profile identity is metadata only. `profile_id`, provider, and model may be
   echoed in run/test responses; API keys never enter this contract.
 
+Debug gateway builds retain `local-development-token` for local development.
+Release gateway binaries fail closed unless `SECONDEGO_UI_TOKEN` is supplied;
+the Electron shell generates and injects a per-launch token automatically.
+
 ## Health
 
 ```http

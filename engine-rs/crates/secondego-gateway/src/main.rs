@@ -65,7 +65,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             gc.deleted
         );
     }
-    let token = env::var("SECONDEGO_UI_TOKEN").unwrap_or_else(|_| "local-development-token".into());
+    let token = match env::var("SECONDEGO_UI_TOKEN")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    {
+        Some(token) => token,
+        None if cfg!(debug_assertions) => "local-development-token".into(),
+        None => {
+            return Err(
+                "SECONDEGO_UI_TOKEN is required when running the release gateway".into(),
+            );
+        }
+    };
     let port = env::var("SECONDEGO_GATEWAY_PORT")
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
