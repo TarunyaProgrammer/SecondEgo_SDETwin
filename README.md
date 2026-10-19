@@ -8,6 +8,15 @@ The evaluation-critical path is headless. The Electron/React interface is an
 optional observer of engine events; it is not the source of truth for planning,
 tool execution, permissions, or verification.
 
+## Production architecture plan
+
+The production transition is documented in
+[docs/PRODUCTION_ARCHITECTURE.md](docs/PRODUCTION_ARCHITECTURE.md), including the
+provider/key contract for DeepSeek, Gemini, OpenAI, Anthropic, and OpenRouter,
+the HLD/LLD diagrams, desktop and terminal boundaries, diff/event contracts,
+packaging, and the migration order. The public product site lives in [web/](web/)
+and is intentionally aimed at end users rather than only evaluators.
+
 ## Organizer quick start
 
 From the repository root, the standard evaluation flow is:

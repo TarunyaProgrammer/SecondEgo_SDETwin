@@ -18,11 +18,11 @@ export const SITE_URL = (
 export const siteConfig = {
   productName: "SecondEgo",
   siteName: "SecondEgo",
-  tagline: "Verified change, built in the open",
-  defaultTitle: "SecondEgo — Verified Code Changes You Can Defend | Local AI Coding Harness",
+  tagline: "Your second self ships with evidence",
+  defaultTitle: "SecondEgo — Your second self ships with evidence",
   titleTemplate: "%s | SecondEgo",
   defaultDescription:
-    "SecondEgo is an open-source, local-first AI coding-agent harness that turns software issues into isolated, verified diffs with bounded model planning, transactional worktree isolation, and deterministic test evidence.",
+    "SecondEgo is a local coding agent that turns software issues into bounded, verified diffs with provider-neutral model access, isolated worktrees, and evidence-backed completion.",
   keywords: [
     "AI coding agent",
     "coding agent harness",

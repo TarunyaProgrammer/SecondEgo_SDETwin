@@ -1,0 +1,22 @@
+sequenceDiagram
+  participant User
+  participant UI as Terminal/Desktop
+  participant Profile as Profile service
+  participant Keychain as OS keychain
+  participant Registry as Provider registry
+  participant Adapter as Provider adapter
+  participant API as Model API
+
+  User->>UI: Add provider + secret
+  UI->>Profile: validate provider id and key format
+  Profile->>Keychain: write(profile/provider, secret)
+  Keychain-->>Profile: opaque credential reference
+  Profile-->>UI: saved(profile id, provider id, status)
+  UI->>Registry: start run(profile, provider, model)
+  Registry->>Keychain: resolve credential reference
+  Keychain-->>Registry: in-memory secret
+  Registry->>Adapter: normalized request + secret
+  Adapter->>API: provider-specific HTTPS call
+  API-->>Adapter: response / rate-limit metadata
+  Adapter-->>Registry: normalized proposal or classified error
+  Registry-->>UI: versioned events; never secret

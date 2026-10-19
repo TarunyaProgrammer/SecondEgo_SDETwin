@@ -1,6 +1,6 @@
-# SecondEgo marketing site
+# SecondEgo product site
 
-Static paper-and-ink marketing page built with Vite, React, TypeScript, Tailwind CSS, and Framer Motion. The page uses scroll-driven tone changes, a replayable proof console, interactive lifecycle tabs, and open-source project evidence.
+Static product and documentation site built with Vite, React, TypeScript, and Framer Motion. The page is organized around activation: provider profiles, terminal/desktop installation paths, HLD/LLD architecture, security boundaries, and links to the source documentation.
 
 ## Run locally
 
@@ -11,7 +11,7 @@ npm install
 npm run dev
 ```
 
-The static bundle is written to `dist/` by `npm run build`. The page uses a local-first Avenir Next / DM Sans pairing with system fallbacks, so typography does not depend on a third-party font request.
+The static bundle is written to `dist/` by `npm run build`. The site uses Bricolage Grotesque, IBM Plex Sans, and DM Mono with system fallbacks. If a deployment must be fully offline, remove the Google Fonts import in `src/styles.css` and provide local font assets.
 
 ## Production deployment & canonical domain
 

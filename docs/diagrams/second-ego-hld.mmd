@@ -1,0 +1,20 @@
+flowchart LR
+  U[Developer] --> T[Terminal CLI / TUI]
+  U --> D[Electron Desktop]
+  T --> API[Versioned local API]
+  D --> API
+  API --> P[Profile + workspace service]
+  P --> K[(OS keychain)]
+  P --> E[Rust engine]
+  E --> R[Repository intelligence]
+  E --> M[Provider registry]
+  M --> DS[DeepSeek]
+  M --> GM[Gemini]
+  M --> OA[OpenAI]
+  M --> AN[Anthropic]
+  M --> OR[OpenRouter]
+  E --> X[Bounded tools + policy]
+  X --> W[Detached Git worktree]
+  E --> V[Verification + diff service]
+  E --> S[(SQLite event journal)]
+  V --> API
