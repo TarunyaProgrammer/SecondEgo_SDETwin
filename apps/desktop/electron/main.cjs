@@ -438,7 +438,7 @@ function startGateway() {
   });
   let announced = false;
   let announcing = false;
-  const sendProviderSession = () => {
+  const sendProviderSession = (attempt = 0) => {
     if (!rustGateway || !credentialSession.apiKey) return Promise.resolve();
     const payload = JSON.stringify({
       profile_id: credentialSession.SECONDEGO_PROFILE_ID,
@@ -446,7 +446,7 @@ function startGateway() {
       model: credentialSession.SECONDEGO_MODEL || null,
       api_key: credentialSession.apiKey,
     });
-    return new Promise((resolve, reject) => {
+    const requestSession = new Promise((resolve, reject) => {
       const request = httpRequest({
         host: "127.0.0.1",
         port: gatewayPort,
@@ -462,12 +462,21 @@ function startGateway() {
         response.resume();
         response.on("end", () => {
           if (response.statusCode && response.statusCode >= 200 && response.statusCode < 300) resolve();
-          else reject(new Error("gateway rejected the provider session"));
+          else {
+            const error = new Error(`gateway rejected the provider session (${response.statusCode || "no status"})`);
+            error.retryable = !response.statusCode || response.statusCode >= 500;
+            reject(error);
+          }
         });
       });
       request.on("timeout", () => request.destroy(new Error("gateway provider session timed out")));
       request.on("error", reject);
       request.end(payload);
+    });
+    return requestSession.catch((error) => {
+      if (error.retryable === false || attempt >= 3) throw error;
+      return new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)))
+        .then(() => sendProviderSession(attempt + 1));
     });
   };
   const announce = () => {
@@ -478,7 +487,7 @@ function startGateway() {
       .finally(() => {
         announcing = false;
         announced = true;
-        createWindow(token);
+        if (!mainWindow || mainWindow.isDestroyed()) createWindow(token);
       });
   };
   let portInUse = false;
