@@ -30,8 +30,9 @@ secondego provider models
 secondego provider list --json
 ```
 
-On macOS, secrets are stored in Keychain. On Linux, secrets are stored in
-Secret Service/libsecret through `secret-tool`. `profiles.json` contains only
+On macOS, secrets are stored in Keychain. On Windows, terminal profiles use
+Windows Credential Manager. On Linux, secrets are stored in Secret
+Service/libsecret through `secret-tool`. `profiles.json` contains only
 provider/profile/model metadata and the active profile id. It never contains a
 secret. `provider remove` deletes both the vault item and its metadata.
 
@@ -42,9 +43,10 @@ does not appear in the `security` command's process arguments. Development
 builds fall back to the system `security` command when the helper has not been
 compiled; release builds stage the helper automatically.
 
-The terminal adapter currently supports macOS and Linux. Windows users should
-use the desktop vault or provider-specific environment variables until the
-Credential Manager adapter lands.
+The terminal adapter supports macOS Keychain, Windows Credential Manager, and
+Linux Secret Service. On Windows, the key is written through the native
+Credential Manager API rather than `cmdkey`, so it never appears in a command
+argument.
 
 ## Desktop
 

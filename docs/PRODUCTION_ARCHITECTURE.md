@@ -38,7 +38,7 @@ The current source of truth is in `engine-rs/crates/secondego-runtime`. The Pyth
 ### Current production gaps
 
 1. The provider registry and five required adapters exist, but Gemini/OpenAI/Anthropic/OpenRouter/DeepSeek need live cross-platform contract tests against current provider accounts and model availability.
-2. Credentials support multiple named profiles in the desktop and macOS/Linux terminal paths. Windows terminal support, vault migration UX, and rotation remain.
+2. Credentials support multiple named profiles in the desktop and macOS/Linux/Windows terminal paths. Vault migration UX and rotation remain.
 3. The gateway now has a versioned, authenticated metadata contract for profile/provider/model identity, but it is still an observer API. Replay metadata, workspace ownership, and durable profile/workspace operations remain.
 4. The Electron shell has provider setup and diff review foundations, but still needs release-grade update UX, recovery flows, accessibility hardening, and a fuller workspace information architecture.
 5. Packaging has an unsigned DMG candidate pipeline with SHA-256 checksums and a release manifest. Signed/notarized artifacts, update channels, and a supported installer contract remain gated on release credentials and CI validation.
@@ -57,8 +57,7 @@ Service. Both surfaces share non-secret profile metadata and the same safe
 connection probe (`provider test`). The gateway now carries a versioned,
 authenticated profile/provider/model metadata contract without accepting or
 returning secrets, and terminal snapshots now use versioned SQLite migrations.
-The remaining work is to finish Windows Credential Manager support and replace
-the current environment injection with a short-lived
+The remaining work is to replace the current environment injection with a short-lived
 credential handle or in-process provider session where possible.
 
 ## 2. Target architecture

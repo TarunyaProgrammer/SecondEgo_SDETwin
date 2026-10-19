@@ -2,7 +2,8 @@
 //!
 //! Secrets are accepted only from stdin and are never written to the profile
 //! metadata file. The metadata path intentionally matches Electron's userData
-//! location on macOS/Linux so desktop and terminal share profile selection.
+//! location on macOS/Linux/Windows so desktop and terminal share profile
+//! selection.
 
 use std::env;
 use std::fs;
@@ -12,6 +13,9 @@ use std::process::{Command, Stdio};
 
 use secondego_model::ProviderKind;
 use serde_json::{Value, json};
+
+#[path = "windows_vault.rs"]
+mod windows_vault;
 
 const KEYCHAIN_SERVICE: &str = "com.secondego.provider";
 
@@ -77,16 +81,25 @@ fn profile_id(provider: ProviderKind, profile: &str) -> String {
 }
 
 fn metadata_path() -> Result<PathBuf, ProfileError> {
-    let home = env::var_os("HOME").map(PathBuf::from).ok_or_else(|| {
-        ProfileError::Io("HOME is not set; cannot locate provider profiles".into())
-    })?;
-    let path = if cfg!(target_os = "macos") {
-        home.join("Library/Application Support/SecondEgo/profiles.json")
-    } else if cfg!(target_os = "windows") {
-        PathBuf::from(env::var_os("APPDATA").unwrap_or_else(|| home.into_os_string()))
-            .join("SecondEgo/profiles.json")
+    let path = if cfg!(target_os = "windows") {
+        let app_data = env::var_os("APPDATA")
+            .or_else(|| env::var_os("USERPROFILE"))
+            .map(PathBuf::from)
+            .ok_or_else(|| {
+                ProfileError::Io(
+                    "APPDATA or USERPROFILE is not set; cannot locate provider profiles".into(),
+                )
+            })?;
+        app_data.join("SecondEgo/profiles.json")
     } else {
-        home.join(".config/SecondEgo/profiles.json")
+        let home = env::var_os("HOME").map(PathBuf::from).ok_or_else(|| {
+            ProfileError::Io("HOME is not set; cannot locate provider profiles".into())
+        })?;
+        if cfg!(target_os = "macos") {
+            home.join("Library/Application Support/SecondEgo/profiles.json")
+        } else {
+            home.join(".config/SecondEgo/profiles.json")
+        }
     };
     Ok(path)
 }
@@ -141,9 +154,7 @@ fn native_command(
     let provider = provider(&entry.provider)?;
     let account = profile_id(provider, &entry.profile);
     if cfg!(target_os = "windows") {
-        return Err(ProfileError::Keychain(
-            "terminal keychain profiles currently support macOS Keychain and Linux Secret Service; use the desktop vault or environment variables on Windows".into(),
-        ));
+        return windows_vault::credential(action, &account, secret);
     }
     let (command, mut arguments) = if cfg!(target_os = "macos") {
         let arguments = match action {
