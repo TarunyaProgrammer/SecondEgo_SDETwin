@@ -17,6 +17,9 @@ the HLD/LLD diagrams, desktop and terminal boundaries, diff/event contracts,
 packaging, and the migration order. The public product site lives in [web/](web/)
 and is intentionally aimed at end users rather than only evaluators.
 
+The current authenticated loopback contract is documented in
+[docs/api/gateway-v1.md](docs/api/gateway-v1.md).
+
 ## Organizer quick start
 
 From the repository root, the standard evaluation flow is:
