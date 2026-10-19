@@ -31,6 +31,12 @@ export type RunResult = {
   phase: string;
   termination_reason: string;
   changed_paths: string[];
+  diff?: {
+    format: string;
+    patch: string;
+    truncated: boolean;
+    files: string[];
+  };
   resource_usage: Record<string, number>;
   verification: Verification;
   evidence: Array<Record<string, unknown>>;

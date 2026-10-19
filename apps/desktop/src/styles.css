@@ -246,3 +246,8 @@ body.notch-mode #root { height: 100vh; }
 .finding-card-actions { display: flex; justify-content: flex-end; margin-top: 4px; }
 .fix-with-secondego-btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 13px; border: 1px solid rgba(139, 92, 246, .45); border-radius: 7px; color: #e5dcff; background: linear-gradient(135deg, rgba(139, 92, 246, .2) 0%, rgba(99, 102, 241, .2) 100%); font: 700 10px/1 var(--sans); cursor: pointer; transition: all var(--fast) ease; }
 .fix-with-secondego-btn:hover { color: #fff; border-color: rgba(139, 92, 246, .8); background: linear-gradient(135deg, rgba(139, 92, 246, .4) 0%, rgba(99, 102, 241, .35) 100%); box-shadow: 0 0 12px rgba(139, 92, 246, .35); transform: translateY(-1px); }
+.diff-review { margin-top: 12px; border: 1px solid rgba(104, 230, 224, .22); border-radius: 9px; overflow: hidden; background: rgba(5, 11, 21, .72); }
+.diff-review summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; color: var(--ink); cursor: pointer; font: 700 10px var(--sans); }
+.diff-review summary b { color: var(--cyan); font: 700 8px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.diff-review pre { max-height: 360px; margin: 0; padding: 12px; overflow: auto; border-top: 1px solid var(--line-soft); color: #cfe3f1; font: 10px/1.5 var(--mono); white-space: pre; }
+.diff-review pre code { color: inherit; }

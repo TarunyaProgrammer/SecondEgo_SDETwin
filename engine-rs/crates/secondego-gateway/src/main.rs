@@ -472,13 +472,32 @@ fn validate_start_request(request: &StartRequest) -> Result<(), &'static str> {
 }
 
 fn result_payload(report: &RunReport) -> serde_json::Value {
+    const MAX_DIFF_BYTES: usize = 512 * 1024;
+    let patch = report.patch.as_deref().unwrap_or_default();
+    let diff_truncated = patch.len() > MAX_DIFF_BYTES;
+    let bounded_patch = if diff_truncated {
+        let mut end = MAX_DIFF_BYTES;
+        while end > 0 && !patch.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}\n\n[diff truncated by gateway]", &patch[..end])
+    } else {
+        patch.to_owned()
+    };
+    let changed_paths = report.changed_paths.clone();
     serde_json::json!({
         "run_id": report.state.run_id,
         "status": serde_json::to_value(report.state.status).unwrap_or_else(|_| serde_json::json!("FAILED")),
         "phase": serde_json::to_value(report.state.phase).unwrap_or_else(|_| serde_json::json!("VERIFY")),
         "termination_reason": report.state.termination_reason,
-        "changed_paths": report.changed_paths,
+        "changed_paths": changed_paths,
         "diff_transferred": report.diff_transferred,
+        "diff": {
+            "format": "git-unified-v1",
+            "patch": bounded_patch,
+            "truncated": diff_truncated,
+            "files": report.changed_paths,
+        },
         "resource_usage": report.resource_usage,
         "verification": report.verification,
         "evidence": report.evidence,
@@ -687,5 +706,7 @@ mod tests {
         assert!(payload.get("changed_paths").is_some());
         assert_eq!(payload["diff_transferred"], true);
         assert!(payload.get("evidence").is_some());
+        assert_eq!(payload["diff"]["format"], "git-unified-v1");
+        assert_eq!(payload["diff"]["files"][0], "src/example.py");
     }
 }
