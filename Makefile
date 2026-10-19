@@ -177,6 +177,7 @@ desktop-macos:
 	@npm --prefix "$(DESKTOP_DIR)" run build
 	@mkdir -p apps/desktop/native/.build/SecondEgo.app/Contents/MacOS apps/desktop/native/.build/SecondEgo.app/Contents/Resources apps/desktop/native/.build/module-cache
 	@CLANG_MODULE_CACHE_PATH="$(CURDIR)/apps/desktop/native/.build/module-cache" swiftc -target "$(shell uname -m)-apple-macosx11.0" -framework Cocoa -framework WebKit -O -o apps/desktop/native/.build/SecondEgo.app/Contents/MacOS/SecondEgo apps/desktop/native/SecondEgo.swift
+	@CLANG_MODULE_CACHE_PATH="$(CURDIR)/apps/desktop/native/.build/module-cache" swiftc -target "$(shell uname -m)-apple-macosx11.0" -framework Foundation -framework Security -O -o apps/desktop/native/.build/SecondEgoCredentialHelper apps/desktop/native/CredentialHelper.swift
 	@cp apps/desktop/native/Info.plist apps/desktop/native/.build/SecondEgo.app/Contents/Info.plist
 	@cp apps/desktop/native/SecondEgo.icns apps/desktop/native/.build/SecondEgo.app/Contents/Resources/SecondEgo.icns
 	@$(LOAD_LOCAL_ENV) \

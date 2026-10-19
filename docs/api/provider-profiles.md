@@ -34,6 +34,13 @@ Secret Service/libsecret through `secret-tool`. `profiles.json` contains only
 provider/profile/model metadata and the active profile id. It never contains a
 secret. `provider remove` deletes both the vault item and its metadata.
 
+The packaged macOS desktop app includes a small native
+`SecondEgoCredentialHelper` built against Security.framework. Electron sends
+save/read/delete operations to that helper over stdin/stdout, so a provider key
+does not appear in the `security` command's process arguments. Development
+builds fall back to the system `security` command when the helper has not been
+compiled; release builds stage the helper automatically.
+
 The terminal adapter currently supports macOS and Linux. Windows users should
 use the desktop vault or provider-specific environment variables until the
 Credential Manager adapter lands.

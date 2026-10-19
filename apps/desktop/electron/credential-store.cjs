@@ -59,11 +59,21 @@ function ensureSecureStorage() {
 }
 
 function nativeBackend() {
-  if (process.platform === "darwin") return "macos-keychain";
+  if (process.platform === "darwin") return nativeHelperPath() ? "macos-keychain-helper" : "macos-keychain";
   if (process.platform === "linux" && spawnSync("secret-tool", ["--version"], { encoding: "utf8" }).status === 0) {
     return "linux-secret-service";
   }
   return null;
+}
+
+function nativeHelperPath() {
+  if (process.platform !== "darwin") return null;
+  const candidates = [
+    process.env.SECONDEGO_CREDENTIAL_HELPER,
+    app.isPackaged ? path.join(process.resourcesPath, "SecondEgoCredentialHelper") : null,
+    path.join(__dirname, "..", "native", ".build", "SecondEgoCredentialHelper"),
+  ].filter(Boolean);
+  return candidates.find((candidate) => fs.existsSync(candidate)) || null;
 }
 
 function credentialId(provider, profile) {
@@ -90,8 +100,24 @@ function runNative(args, input = "") {
   return result.stdout.trim();
 }
 
+function runMacHelper(args, input = "") {
+  const helper = nativeHelperPath();
+  if (!helper) throw new Error("The macOS credential helper is unavailable.");
+  const result = spawnSync(helper, args, {
+    input,
+    encoding: "utf8",
+    timeout: 10_000,
+    maxBuffer: 64 * 1024,
+  });
+  if (result.error || result.status !== 0) throw new Error("The operating system credential vault rejected the request.");
+  return result.stdout.trim();
+}
+
 function nativeCredential(provider, profile, action, secret = "") {
   const account = credentialId(provider, profile);
+  if (nativeBackend() === "macos-keychain-helper") {
+    return runMacHelper([action, KEYCHAIN_SERVICE, account], action === "save" ? `${secret}\n` : "");
+  }
   if (nativeBackend() === "macos-keychain") {
     // `security` only works non-interactively when the password is the final
     // -w argument. The value is never persisted outside Keychain, but exists
