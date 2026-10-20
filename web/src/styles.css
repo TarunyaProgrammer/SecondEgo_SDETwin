@@ -1,6 +1,6 @@
-@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=Manrope:wght@400;500;600;700;800&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;1,500;1,600&family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap");
 
-:root { --black: #060607; --ink: #0b0b0d; --panel: #111114; --panel-2: #17171b; --line: rgba(255,255,255,.12); --line-strong: rgba(255,255,255,.2); --white: #f7f5f1; --muted: #a6a3a0; --quiet: #6e6b70; --red: #ff3b4e; --red-hot: #ff6570; --red-deep: #8c1028; --serif: "Instrument Serif", Georgia, serif; --display: "Manrope", Arial, sans-serif; --body: "DM Sans", Arial, sans-serif; }
+:root { --black: #060607; --ink: #0b0b0d; --panel: #111114; --panel-2: #17171b; --line: rgba(255,255,255,.12); --line-strong: rgba(255,255,255,.2); --white: #f7f5f1; --muted: #a6a3a0; --quiet: #6e6b70; --red: #ff3b4e; --red-hot: #ff6570; --red-deep: #8c1028; --serif: "Cormorant Garamond", Georgia, serif; --display: "Manrope", Arial, sans-serif; --body: "DM Sans", Arial, sans-serif; }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; background: var(--black); }
 body { margin: 0; background: var(--black); color: var(--white); font-family: var(--body); -webkit-font-smoothing: antialiased; }
