@@ -146,9 +146,9 @@ Terminal:
 
 ```text
 secondego provider list
-secondego provider add openai --key-stdin
+secondego provider profile add openai --key-stdin
 secondego provider test
-secondego provider use openai --model gpt-5
+secondego provider profile use openai
 ```
 
 Desktop:

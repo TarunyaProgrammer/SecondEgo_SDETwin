@@ -196,10 +196,12 @@ state.
 Open the desktop companion's settings gear to save multiple named provider
 profiles. The key field is intentionally uncontrolled and is sent directly to
 Electron's main process; React state, the local gateway API, SQLite run state,
-logs, and telemetry never receive the secret. Electron encrypts the key with
-the operating system's `safeStorage` backend and starts the gateway with only
-the selected profile's named environment variable. If the operating system
-does not provide an encrypted backend, SecondEgo refuses to save the key.
+logs, and telemetry never receive the secret. Electron writes the key through
+the native credential helper/vault, then sends it once over an authenticated
+loopback session to the Rust gateway for the active run. The gateway keeps it
+in memory only; it is never placed in a child-process environment, SQLite, or
+the renderer. If the operating system does not provide a supported vault,
+SecondEgo refuses to save the key.
 
 The terminal uses the same provider names and environment contract. On macOS,
 terminal profiles use Keychain; on Windows they use Credential Manager; and on
@@ -208,9 +210,9 @@ the desktop app, while the secret remains in the native credential vault.
 
 ```bash
 # Read the key without putting it in shell history.
-printf '%s\n' "$OPENAI_API_KEY" | secondego provider add openai --key-stdin --profile work --model gpt-5-mini
-secondego provider list
-secondego provider use openai --profile work
+printf '%s\n' "$OPENAI_API_KEY" | secondego provider profile add openai --key-stdin --profile work --model gpt-5-mini
+secondego provider profile list
+secondego provider profile use openai --profile work
 secondego provider test
 secondego provider models
 ```
