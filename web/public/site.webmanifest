@@ -4,8 +4,8 @@
   "description": "An open-source, local-first AI coding-agent harness that turns software issues into isolated, verified diffs.",
   "start_url": "/",
   "display": "minimal-ui",
-  "theme_color": "#f3f2ee",
-  "background_color": "#10100f",
+  "theme_color": "#060607",
+  "background_color": "#060607",
   "icons": [
     {
       "src": "/favicon-32x32.png",

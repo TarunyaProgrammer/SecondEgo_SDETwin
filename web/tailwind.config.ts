@@ -15,7 +15,7 @@ const config: Config = {
       },
       fontFamily: {
         sans: ["var(--font-geist-sans)", "Arial", "sans-serif"],
-        mono: ["var(--font-geist-mono)", "monospace"],
+        display: ["Manrope", "Arial", "sans-serif"],
         editorial: ["Iowan Old Style", "Palatino Linotype", "Book Antiqua", "Georgia", "serif"],
       },
       boxShadow: {

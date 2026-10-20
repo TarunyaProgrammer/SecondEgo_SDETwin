@@ -47,13 +47,13 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" v
     <text x="86" y="28" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="28" font-weight="700" fill="#F4F1EA" letter-spacing="-0.04em">second<tspan fill="#8E8D86" font-weight="400">ego</tspan></text>
     <!-- Category pill -->
     <rect x="245" y="7" width="220" height="26" rx="13" fill="rgba(237, 69, 32, 0.12)" stroke="rgba(237, 69, 32, 0.3)" stroke-width="1"/>
-    <text x="355" y="24" font-family="'SF Mono', Menlo, Consolas, monospace" font-size="11" font-weight="600" fill="#ED4520" text-anchor="middle" letter-spacing="0.08em">LOCAL AI CODING HARNESS</text>
+    <text x="355" y="24" font-family="'Manrope', Arial, sans-serif" font-size="11" font-weight="600" fill="#ED4520" text-anchor="middle" letter-spacing="0.08em">LOCAL AI CODING HARNESS</text>
   </g>
 
   <!-- Left Main Content: Headline and Subhead -->
   <g transform="translate(64, 155)">
     <!-- Section eyebrow -->
-    <text x="0" y="16" font-family="'SF Mono', Menlo, Consolas, monospace" font-size="12" font-weight="600" fill="#8B8A82" letter-spacing="0.14em">BOUNDED EXECUTION · VERIFIED DIFFS</text>
+    <text x="0" y="16" font-family="'Manrope', Arial, sans-serif" font-size="12" font-weight="600" fill="#8B8A82" letter-spacing="0.14em">BOUNDED EXECUTION · VERIFIED DIFFS</text>
 
     <!-- Main Headline -->
     <text x="0" y="85" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="62" font-weight="800" fill="#F5F3EC" letter-spacing="-0.04em">
@@ -73,22 +73,22 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" v
       <!-- Badge 1 -->
       <rect x="0" y="0" width="130" height="34" rx="8" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.12)" stroke-width="1"/>
       <circle cx="16" cy="17" r="4" fill="#22c55e"/>
-      <text x="28" y="22" font-family="'SF Mono', Menlo, monospace" font-size="12" font-weight="500" fill="#E2E0D8">Local-First</text>
+      <text x="28" y="22" font-family="'Manrope', Arial, sans-serif" font-size="12" font-weight="500" fill="#E2E0D8">Local-First</text>
 
       <!-- Badge 2 -->
       <rect x="142" y="0" width="136" height="34" rx="8" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.12)" stroke-width="1"/>
       <circle cx="158" cy="17" r="4" fill="#ED4520"/>
-      <text x="170" y="22" font-family="'SF Mono', Menlo, monospace" font-size="12" font-weight="500" fill="#E2E0D8">Rust Engine</text>
+      <text x="170" y="22" font-family="'Manrope', Arial, sans-serif" font-size="12" font-weight="500" fill="#E2E0D8">Rust Engine</text>
 
       <!-- Badge 3 -->
       <rect x="290" y="0" width="144" height="34" rx="8" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.12)" stroke-width="1"/>
       <circle cx="306" cy="17" r="4" fill="#3b82f6"/>
-      <text x="318" y="22" font-family="'SF Mono', Menlo, monospace" font-size="12" font-weight="500" fill="#E2E0D8">MIT Licensed</text>
+      <text x="318" y="22" font-family="'Manrope', Arial, sans-serif" font-size="12" font-weight="500" fill="#E2E0D8">MIT Licensed</text>
 
       <!-- Badge 4 -->
       <rect x="446" y="0" width="132" height="34" rx="8" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.12)" stroke-width="1"/>
       <circle cx="462" cy="17" r="4" fill="#a855f7"/>
-      <text x="474" y="22" font-family="'SF Mono', Menlo, monospace" font-size="12" font-weight="500" fill="#E2E0D8">Zero Cloud</text>
+      <text x="474" y="22" font-family="'Manrope', Arial, sans-serif" font-size="12" font-weight="500" fill="#E2E0D8">Zero Cloud</text>
     </g>
   </g>
 
@@ -106,9 +106,9 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" v
     <circle cx="22" cy="21" r="5" fill="#EF4444" opacity="0.8"/>
     <circle cx="38" cy="21" r="5" fill="#F59E0B" opacity="0.8"/>
     <circle cx="54" cy="21" r="5" fill="#10B981" opacity="0.8"/>
-    <text x="74" y="25" font-family="'SF Mono', Menlo, monospace" font-size="11" font-weight="500" fill="#71717A">secondego · run-boundary</text>
+    <text x="74" y="25" font-family="'Manrope', Arial, sans-serif" font-size="11" font-weight="500" fill="#71717A">secondego · run-boundary</text>
     <rect x="330" y="11" width="108" height="20" rx="4" fill="rgba(34,197,94,0.12)"/>
-    <text x="384" y="24" font-family="'SF Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#22C55E" text-anchor="middle">VERIFIED PASS</text>
+    <text x="384" y="24" font-family="'Manrope', Arial, sans-serif" font-size="10" font-weight="600" fill="#22C55E" text-anchor="middle">VERIFIED PASS</text>
 
     <!-- Rail and Stages -->
     <g transform="translate(24, 60)">
@@ -118,43 +118,43 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" v
 
       <!-- Stage 1 -->
       <circle cx="16" cy="20" r="6" fill="#13161C" stroke="#38BDF8" stroke-width="3"/>
-      <text x="36" y="18" font-family="'SF Mono', Menlo, monospace" font-size="12" font-weight="700" fill="#38BDF8">01 MODEL</text>
-      <text x="120" y="18" font-family="'SF Mono', Menlo, monospace" font-size="11" fill="#71717A">/ structured AST plan</text>
+      <text x="36" y="18" font-family="'Manrope', Arial, sans-serif" font-size="12" font-weight="700" fill="#38BDF8">01 MODEL</text>
+      <text x="120" y="18" font-family="'Manrope', Arial, sans-serif" font-size="11" fill="#71717A">/ structured AST plan</text>
       <text x="36" y="34" font-family="-apple-system, sans-serif" font-size="11" fill="#A1A1AA">Deterministic tool invocation</text>
 
       <!-- Stage 2 -->
       <circle cx="16" cy="75" r="6" fill="#13161C" stroke="#A78BFA" stroke-width="3"/>
-      <text x="36" y="73" font-family="'SF Mono', Menlo, monospace" font-size="12" font-weight="700" fill="#A78BFA">02 RUNTIME</text>
-      <text x="134" y="73" font-family="'SF Mono', Menlo, monospace" font-size="11" fill="#71717A">/ validates actions</text>
+      <text x="36" y="73" font-family="'Manrope', Arial, sans-serif" font-size="12" font-weight="700" fill="#A78BFA">02 RUNTIME</text>
+      <text x="134" y="73" font-family="'Manrope', Arial, sans-serif" font-size="11" fill="#71717A">/ validates actions</text>
       <text x="36" y="89" font-family="-apple-system, sans-serif" font-size="11" fill="#A1A1AA">Pre-commit policy gates</text>
 
       <!-- Stage 3 -->
       <circle cx="16" cy="130" r="6" fill="#13161C" stroke="#34D399" stroke-width="3"/>
-      <text x="36" y="128" font-family="'SF Mono', Menlo, monospace" font-size="12" font-weight="700" fill="#34D399">03 WORKTREE</text>
-      <text x="144" y="128" font-family="'SF Mono', Menlo, monospace" font-size="11" fill="#71717A">/ isolated git diff</text>
+      <text x="36" y="128" font-family="'Manrope', Arial, sans-serif" font-size="12" font-weight="700" fill="#34D399">03 WORKTREE</text>
+      <text x="144" y="128" font-family="'Manrope', Arial, sans-serif" font-size="11" fill="#71717A">/ isolated git diff</text>
       <text x="36" y="144" font-family="-apple-system, sans-serif" font-size="11" fill="#A1A1AA">Transactional branch sandbox</text>
 
       <!-- Stage 4 -->
       <circle cx="16" cy="185" r="6" fill="#13161C" stroke="#FBBF24" stroke-width="3"/>
-      <text x="36" y="183" font-family="'SF Mono', Menlo, monospace" font-size="12" font-weight="700" fill="#FBBF24">04 VERIFY</text>
-      <text x="122" y="183" font-family="'SF Mono', Menlo, monospace" font-size="11" fill="#71717A">/ evidence decides completion</text>
+      <text x="36" y="183" font-family="'Manrope', Arial, sans-serif" font-size="12" font-weight="700" fill="#FBBF24">04 VERIFY</text>
+      <text x="122" y="183" font-family="'Manrope', Arial, sans-serif" font-size="11" fill="#71717A">/ evidence decides completion</text>
       <text x="36" y="199" font-family="-apple-system, sans-serif" font-size="11" fill="#A1A1AA">Tests, lints &amp; contracts pass</text>
     </g>
 
     <!-- Bottom summary box -->
     <rect x="20" y="295" width="416" height="58" rx="8" fill="#1A1E26" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
-    <text x="36" y="322" font-family="'SF Mono', Menlo, monospace" font-size="11" font-weight="600" fill="#71717A">DECISION OWNERSHIP</text>
-    <text x="36" y="340" font-family="'SF Mono', Menlo, monospace" font-size="13" font-weight="700" fill="#ED4520">PROVEN BY RUNTIME EVIDENCE</text>
+    <text x="36" y="322" font-family="'Manrope', Arial, sans-serif" font-size="11" font-weight="600" fill="#71717A">DECISION OWNERSHIP</text>
+    <text x="36" y="340" font-family="'Manrope', Arial, sans-serif" font-size="13" font-weight="700" fill="#ED4520">PROVEN BY RUNTIME EVIDENCE</text>
     <rect x="330" y="309" width="92" height="30" rx="6" fill="#ED4520"/>
     <text x="376" y="329" font-family="-apple-system, sans-serif" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="middle">DIFF READY</text>
   </g>
 
   <!-- Bottom Bar: GitHub Source of Truth -->
   <g transform="translate(64, 555)">
-    <text x="0" y="16" font-family="'SF Mono', Menlo, Consolas, monospace" font-size="12" fill="#6B6963">
+    <text x="0" y="16" font-family="'Manrope', Arial, sans-serif" font-size="12" fill="#6B6963">
       OPEN SOURCE ON GITHUB: <tspan fill="#ED4520" font-weight="600">github.com/TarunyaProgrammer/SecondEgo_SDETwin</tspan>
     </text>
-    <text x="1072" y="16" font-family="'SF Mono', Menlo, Consolas, monospace" font-size="12" fill="#6B6963" text-anchor="end">
+    <text x="1072" y="16" font-family="'Manrope', Arial, sans-serif" font-size="12" fill="#6B6963" text-anchor="end">
       RUST 2024 · GEMINI · PYTHON COMPAT
     </text>
   </g>

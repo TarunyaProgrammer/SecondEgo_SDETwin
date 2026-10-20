@@ -15,6 +15,8 @@ The static bundle is written to `dist/` by `npm run build`. The site uses Manrop
 
 Routes are handled by the lightweight client router in `src/App.tsx`: `/`, `/docs`, `/download`, `/about`, and `/terms`. The download page detects macOS, Windows, or Linux from the browser user agent and highlights the matching release card. GitHub Releases remains the source of truth for artifact availability.
 
+The included `public/_redirects` and `vercel.json` keep those history routes working on common static hosts. Configure an equivalent SPA fallback if deploying elsewhere.
+
 ## Production deployment & canonical domain
 
 Configure the canonical production URL by setting `SITE_URL` (or `VITE_SITE_URL`) in your build environment:
