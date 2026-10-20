@@ -386,6 +386,10 @@ function App() {
       const response = await fetch(`${api}/api/runs/${summary.request_id}`, { headers: { "X-SecondEgo-Token": token } });
       const payload = (await response.json()) as RunView & { error?: string };
       if (!response.ok) throw new Error(payload.error || "Could not reopen this run.");
+      // Resume polling after the events already returned by the history read.
+      // Without this cursor handoff, reopening an active run can duplicate its
+      // transcript or skip events when the next poll starts at a stale offset.
+      offsetRef.current = payload.events.length;
       setRun(payload);
       setBusy(false);
       setStopping(false);
