@@ -317,7 +317,7 @@ function App() {
   }, [notchMode]);
 
   useEffect(() => {
-    if (!showSettings || !window.secondEgoWindow?.listProviderProfiles) return;
+    if (!window.secondEgoWindow?.listProviderProfiles) return;
     void window.secondEgoWindow.listProviderProfiles().then((snapshot) => {
       setProviderProfiles(snapshot);
       const active = snapshot.entries.find((entry) => entry.id === snapshot.active);
@@ -433,6 +433,13 @@ function App() {
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (mode !== "discover" && !providerProfiles.active) {
+      setShowSettings(true);
+      setNotchOpen(true);
+      setProviderMessage("Add a provider profile before starting a coding run. Your key stays in the operating system vault.");
+      setError("No provider profile is active. Open Providers, save a key, then start the run again.");
+      return;
+    }
     setBusy(true);
     setStopping(false);
     setError("");

@@ -116,6 +116,11 @@ React state. Electron sends it directly to the main process, which writes to
 the operating system vault. Only the selected profile is resolved for a local
 run.
 
+The desktop loads profile metadata during startup. If a user submits a coding
+run before configuring a profile, the task is not sent to the gateway; the UI
+opens Providers and explains that an active profile is required. Read-only
+repository discovery remains available without a model key.
+
 In the Rust desktop path, Electron's main process sends that key once to the
 authenticated loopback `POST /api/providers/session` endpoint. The renderer
 never receives it and the gateway response contains metadata only. The Python
