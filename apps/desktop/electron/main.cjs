@@ -15,7 +15,9 @@ const {
 } = require("./credential-store.cjs");
 
 const devUrl = process.env.SECONDEGO_DESKTOP_URL;
-const gatewayPort = Number(process.env.SECONDEGO_GATEWAY_PORT || 8787);
+const configuredGatewayPort = Number(process.env.SECONDEGO_GATEWAY_PORT || 0);
+const gatewayPortIsExplicit = Number.isInteger(configuredGatewayPort) && configuredGatewayPort > 0 && configuredGatewayPort < 65536;
+let gatewayPort = gatewayPortIsExplicit ? configuredGatewayPort : 0;
 const sourceRoot = path.join(__dirname, "..", "..", "..");
 const repoRoot = app.isPackaged ? process.resourcesPath : sourceRoot;
 const allowedGestureNames = new Set(["open_palm", "pinch"]);
@@ -60,6 +62,25 @@ function notchBounds(expanded) {
     width,
     height,
   };
+}
+
+function reserveGatewayPort() {
+  if (gatewayPortIsExplicit) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.unref();
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const address = probe.address();
+      if (!address || typeof address === "string") {
+        probe.close();
+        reject(new Error("Could not reserve a local gateway port."));
+        return;
+      }
+      gatewayPort = address.port;
+      probe.close((error) => error ? reject(error) : resolve());
+    });
+  });
 }
 
 function sendGestureStatus() {
@@ -337,6 +358,7 @@ function createWindow(token) {
   }
 
   const query = new URLSearchParams({
+    gateway: `http://127.0.0.1:${gatewayPort}`,
     ...(token ? { token } : {}),
     ...(notchMode ? { notch: "1" } : {}),
     ...(process.env.SECONDEGO_GESTURES_ENABLED
@@ -491,16 +513,12 @@ function startGateway() {
         if (!mainWindow || mainWindow.isDestroyed()) createWindow(token);
       });
   };
-  let portInUse = false;
   gatewayProcess.stdout.on("data", (data) => {
     if (data.toString().includes("SecondEgo UI:")) announce();
   });
   gatewayProcess.stderr.on("data", (data) => {
     const text = data.toString();
     console.error(text.trim());
-    if (text.includes("Address already in use") || text.includes("in use")) {
-      portInUse = true;
-    }
   });
   gatewayProcess.on("error", (error) => {
     console.error(`Could not start SecondEgo gateway: ${error.message}`);
@@ -512,10 +530,6 @@ function startGateway() {
   setTimeout(announce, 250);
   gatewayProcess.on("exit", () => {
     if (restartingGateway) return;
-    if (portInUse) {
-      console.log("Gateway is already running externally; keeping UI open.");
-      return;
-    }
     if (app.isReady() && mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
   });
 }
@@ -531,7 +545,12 @@ function restartGateway() {
 
 app.whenReady().then(() => {
   if (notchMode && app.dock) app.dock.hide();
-  startGateway();
+  reserveGatewayPort()
+    .then(() => startGateway())
+    .catch((error) => {
+      console.error(`Could not reserve the local gateway port: ${error.message}`);
+      app.quit();
+    });
   if (gestureEnabled) startGestureService();
   if (notchMode) {
     screen.on("display-metrics-changed", () => {

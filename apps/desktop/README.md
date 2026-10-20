@@ -52,6 +52,12 @@ the renderer. For development, run
 the Vite server with `npm run dev`, then launch Electron with
 `SECONDEGO_DESKTOP_URL=http://127.0.0.1:5173 npm run electron`.
 
+When `SECONDEGO_GATEWAY_PORT` is not explicitly set, Electron reserves an
+ephemeral loopback port and passes the exact gateway URL to the renderer. This
+avoids collisions with another local process and prevents the app from
+silently attaching its UI to an unrelated gateway. Set the variable only when
+an explicit stable port is required for development or an integration test.
+
 The launcher explicitly removes `ELECTRON_RUN_AS_NODE`; if that variable is set
 in the parent shell, Electron silently runs as Node.js and no window can open.
 
