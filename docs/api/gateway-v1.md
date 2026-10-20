@@ -50,6 +50,11 @@ is process-local and is replaced when another profile is selected or the
 gateway restarts. The terminal and Python compatibility gateway use the
 named-key environment contract instead.
 
+When a run is accepted, the gateway snapshots the active provider session into
+that run's worker. Switching profiles while a run is in progress affects only
+subsequent runs; it cannot change the credentials or model used by an existing
+attempt.
+
 ```json
 {"api_version":1,"ok":true,"profile_id":"openai:work","provider":"openai","model":"gpt-5-mini"}
 ```

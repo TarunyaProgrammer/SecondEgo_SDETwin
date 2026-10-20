@@ -587,7 +587,10 @@ fn create_run(
     let run_cancellation = cancellation.clone();
     let run_voice = voice.clone();
     let run_store = store.clone();
-    let run_credentials = credentials.clone();
+    // Freeze the credential session at enqueue time. A later profile switch
+    // must affect only later runs; an in-flight run must never change model
+    // or credentials halfway through its isolated attempt.
+    let run_session = session_snapshot(credentials);
     thread::spawn(move || {
         let resolved =
             match resolve_repository_with_cancellation(&record_repository, Some(&run_cancellation))
@@ -752,7 +755,7 @@ fn create_run(
             }
             return;
         }
-        let provider = match configured_provider(&run_credentials)
+        let provider = match configured_provider_from_session(run_session.as_ref())
             .and_then(|provider| provider.with_model(model))
         {
             Ok(provider) => provider,
@@ -1156,11 +1159,17 @@ fn active_api_key(credentials: &CredentialSession) -> Option<String> {
 fn configured_provider(
     credentials: &CredentialSession,
 ) -> Result<ConfiguredProvider, secondego_model::ProviderError> {
-    match session_snapshot(credentials) {
+    configured_provider_from_session(session_snapshot(credentials).as_ref())
+}
+
+fn configured_provider_from_session(
+    session: Option<&ProviderSession>,
+) -> Result<ConfiguredProvider, secondego_model::ProviderError> {
+    match session {
         Some(session) => ConfiguredProvider::from_provider_key(
             session.provider,
-            session.model,
-            session.api_key,
+            session.model.clone(),
+            session.api_key.clone(),
         ),
         None => ConfiguredProvider::from_environment(),
     }
@@ -1576,5 +1585,32 @@ mod tests {
         assert_eq!(files[0]["deletions"], 1);
         assert_eq!(files[0]["hunks"][0]["lines"][0]["kind"], "delete");
         assert_eq!(files[0]["hunks"][0]["lines"][1]["content"], "new()");
+    }
+
+    #[test]
+    fn configured_provider_can_be_frozen_for_an_enqueued_run() {
+        let first = ProviderSession {
+            profile_id: "openai:work".into(),
+            provider: ProviderKind::OpenAI,
+            model: "gpt-5-mini".into(),
+            api_key: "first-secret".into(),
+        };
+        let provider = configured_provider_from_session(Some(&first)).unwrap();
+        match provider {
+            ConfiguredProvider::OpenAI(provider) => {
+                assert_eq!(provider.model, "gpt-5-mini");
+                assert_eq!(provider.api_key.as_deref(), Some("first-secret"));
+            }
+            _ => panic!("expected the frozen OpenAI session"),
+        }
+
+        let second = ProviderSession {
+            profile_id: "anthropic:work".into(),
+            provider: ProviderKind::Anthropic,
+            model: "claude-sonnet-4-6".into(),
+            api_key: "second-secret".into(),
+        };
+        let later_provider = configured_provider_from_session(Some(&second)).unwrap();
+        assert!(matches!(later_provider, ConfiguredProvider::Anthropic(_)));
     }
 }
