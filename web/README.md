@@ -33,4 +33,7 @@ To regenerate the 1200×630 Open Graph preview image asset:
 npm run generate:og
 ```
 
+The generator uses the portable `@resvg/resvg-js` renderer, so it does not
+depend on macOS `sips` or an ImageMagick installation in CI.
+
 The architecture copy is based on the current project context and evaluation materials. The recovery panel is an architecture walkthrough, not a customer case study. The footer signup field is intentionally a status message; it does not submit email addresses anywhere. Release downloads currently come from GitHub Releases with platform-specific artifacts, checksums, and manifests; signing, notarization, and update channels remain release-infrastructure work.

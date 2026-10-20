@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import { execSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { Resvg } from "@resvg/resvg-js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const webDir = path.resolve(__dirname, "..");
@@ -160,12 +160,13 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" v
   </g>
 </svg>`;
 
-const tmpSvg = path.resolve(webDir, "public/og-image.svg");
 const outPng = path.resolve(webDir, "public/og-image.png");
 const twitterPng = path.resolve(webDir, "public/twitter-image.png");
 
-fs.writeFileSync(tmpSvg, svg.trim());
-execSync(`sips -s format png "${tmpSvg}" --out "${outPng}"`);
+const png = new Resvg(svg.trim(), {
+  fitTo: { mode: "width", value: 1200 },
+}).render().asPng();
+fs.writeFileSync(outPng, png);
 fs.copyFileSync(outPng, twitterPng);
 
 console.log("Generated og-image.png and twitter-image.png successfully!");
