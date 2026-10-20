@@ -94,6 +94,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(PathBuf::from)
         .filter(|path| path.is_dir());
     let store = open_state_store()?;
+    let reconciled = store
+        .lock()
+        .map_err(|_| "state store lock poisoned")?
+        .reconcile_incomplete_runs("gateway restarted while the run was active")?;
+    if reconciled > 0 {
+        eprintln!(
+            "SecondEgo Rust gateway: marked {reconciled} interrupted run(s) as failed"
+        );
+    }
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     let runs: Arc<Mutex<HashMap<Uuid, RunRecord>>> = Arc::new(Mutex::new(HashMap::new()));
     let credentials: CredentialSession = Arc::new(Mutex::new(None));
@@ -602,6 +611,22 @@ fn create_run(
             },
         );
     }
+    let mut initial_state = ExecutionState::new(request.issue.clone(), request.repository.clone());
+    initial_state.run_id = id;
+    persist_snapshot(
+        &store,
+        &initial_state,
+        &[],
+        &RunMetadata {
+            profile_id: profile_id.clone(),
+            workspace_id: Some(request.repository.clone()),
+            provider: Some(provider.clone()),
+            model: Some(model.clone()),
+            engine_version: Some(env!("CARGO_PKG_VERSION").into()),
+        },
+        None,
+        None,
+    );
     let runs_for_thread = runs.clone();
     let record_repository = request.repository.clone();
     let record_issue = request.issue.clone();

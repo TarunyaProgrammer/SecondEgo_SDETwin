@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, params};
-use secondego_core::{EngineEvent, ExecutionState};
+use secondego_core::{EngineEvent, ExecutionState, Phase, TerminalStatus};
 
 pub const STORAGE_SCHEMA_VERSION: i64 = 3;
 
@@ -246,6 +246,47 @@ impl SQLiteRunStore {
         rows.collect::<Result<Vec<_>, _>>().map_err(StorageError::from)
     }
 
+    /// Convert runs that were persisted before a gateway process died into an
+    /// explicit terminal failure. A local worker cannot be resumed safely from
+    /// the middle of a provider/tool call, so keeping these rows RUNNING would
+    /// make history and polling lie indefinitely.
+    pub fn reconcile_incomplete_runs(&self, reason: &str) -> Result<usize, StorageError> {
+        let mut statement = self.connection.prepare(
+            "SELECT run_id FROM runs WHERE LOWER(status) IN ('queued', 'running', 'cancel_requested')",
+        )?;
+        let run_ids = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+
+        let mut reconciled = 0;
+        for run_id in run_ids {
+            let Some(stored) = self.load(&run_id)? else {
+                continue;
+            };
+            let mut state = stored.state;
+            state.phase = Phase::Recover;
+            state.status = TerminalStatus::Failed;
+            state.termination_reason = Some(reason.to_owned());
+            let mut events = stored.events;
+            let mut event = EngineEvent::new(&state, "run.terminated");
+            event.payload = serde_json::json!({
+                "reason": reason,
+                "recovery": "gateway_restart",
+            });
+            events.push(event);
+            self.save_snapshot(
+                &state,
+                &events,
+                &stored.metadata,
+                stored.result.as_ref(),
+                Some(reason),
+            )?;
+            reconciled += 1;
+        }
+        Ok(reconciled)
+    }
+
     fn migrate(&self) -> Result<(), StorageError> {
         self.connection.execute_batch(
             "PRAGMA foreign_keys = ON;
@@ -388,5 +429,23 @@ mod tests {
         store.migrate().unwrap();
         assert_eq!(store.schema_version().unwrap(), STORAGE_SCHEMA_VERSION);
         assert!(store.has_column("runs", "profile_id").unwrap());
+    }
+
+    #[test]
+    fn reconciles_runs_left_active_by_a_gateway_restart() {
+        let store = SQLiteRunStore::open_memory().unwrap();
+        let state = ExecutionState::new("task", "/workspace");
+        let event = EngineEvent::new(&state, "activity.started");
+        store.save(&state, &[event]).unwrap();
+
+        let reason = "gateway restarted while the run was active";
+        assert_eq!(store.reconcile_incomplete_runs(reason).unwrap(), 1);
+        let stored = store.load(&state.run_id.to_string()).unwrap().unwrap();
+        assert_eq!(stored.state.status, TerminalStatus::Failed);
+        assert_eq!(stored.state.phase, Phase::Recover);
+        assert_eq!(stored.state.termination_reason.as_deref(), Some(reason));
+        assert_eq!(stored.error.as_deref(), Some(reason));
+        assert_eq!(stored.events.last().unwrap().event_type, "run.terminated");
+        assert_eq!(store.reconcile_incomplete_runs(reason).unwrap(), 0);
     }
 }

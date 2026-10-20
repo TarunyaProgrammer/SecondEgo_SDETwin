@@ -14,7 +14,10 @@ cancellation of an active run is inherently process-local. The Electron shell
 keeps the window open during an unexpected gateway exit, retries startup with
 bounded backoff (up to three attempts), and exposes a versioned recovery state
 to the renderer. Repeated failure becomes an explicit user-visible error; it
-does not loop forever or silently attach to another local process.
+does not loop forever or silently attach to another local process. On the next
+gateway start, persisted `QUEUED`, `RUNNING`, or `CANCEL_REQUESTED` rows are
+reconciled to a failed `RECOVER`-phase result with a `run.terminated` recovery
+event. The worker is not resumed mid-call; the next attempt is explicit.
 
 ## Common rules
 
