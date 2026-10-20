@@ -68,4 +68,6 @@ on Windows, and AppImage/deb artifacts on Linux. The Rust gateway is staged with
 the platform-native executable name (`secondego-gateway` or
 `secondego-gateway.exe`); the macOS credential helper is included only in the
 macOS target. Release jobs write platform-specific manifests and checksums so
-parallel jobs do not overwrite each other's metadata.
+parallel jobs do not overwrite each other's metadata. Manual dispatch can build
+unsigned candidates for QA; tagged macOS and Windows releases fail closed unless
+their signing credentials are present (macOS also requires notarization).

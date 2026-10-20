@@ -51,6 +51,11 @@ jobs:
           npm run prepare-release
         env:
           SECONDEGO_GATEWAY_SOURCE: ${{ github.workspace }}/engine-rs/target/${{ matrix.rust_target }}/release/secondego-gateway
+      - name: Require signed and notarized artifacts for tags
+        if: startsWith(github.ref, 'refs/tags/v') && (env.RELEASE_SIGNING_ENABLED != 'true' || env.RELEASE_NOTARIZATION_ENABLED != 'true')
+        run: |
+          echo "Tagged macOS releases require certificate and notarization credentials."
+          exit 1
       - name: Build signed DMG (notarizes when Apple credentials are present)
         if: env.RELEASE_SIGNING_ENABLED == 'true'
         working-directory: apps/desktop
@@ -64,7 +69,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Build unsigned DMG candidate
-        if: env.RELEASE_SIGNING_ENABLED != 'true'
+        if: env.RELEASE_SIGNING_ENABLED != 'true' && !startsWith(github.ref, 'refs/tags/v')
         working-directory: apps/desktop
         run: npx --yes electron-builder@25.1.8 --mac dmg --${{ matrix.arch }}
         env:
@@ -123,6 +128,12 @@ jobs:
           npm run prepare-release
         env:
           SECONDEGO_GATEWAY_SOURCE: ${{ github.workspace }}\engine-rs\target\release\secondego-gateway.exe
+      - name: Require signed artifacts for tags
+        if: startsWith(github.ref, 'refs/tags/v') && env.RELEASE_SIGNING_ENABLED != 'true'
+        shell: pwsh
+        run: |
+          Write-Error "Tagged Windows releases require certificate credentials."
+          exit 1
       - name: Build signed Windows installer
         if: env.RELEASE_SIGNING_ENABLED == 'true'
         working-directory: apps/desktop
@@ -132,7 +143,7 @@ jobs:
           CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
           CSC_IDENTITY_AUTO_DISCOVERY: 'true'
       - name: Build unsigned Windows installer
-        if: env.RELEASE_SIGNING_ENABLED != 'true'
+        if: env.RELEASE_SIGNING_ENABLED != 'true' && !startsWith(github.ref, 'refs/tags/v')
         working-directory: apps/desktop
         run: npx --yes electron-builder@25.1.8 --win nsis
         env:

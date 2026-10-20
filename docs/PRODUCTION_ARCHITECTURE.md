@@ -295,7 +295,7 @@ Do not call the local profile model “multi-tenant”. A hosted service would a
 - `apps/desktop/scripts/prepare-release.cjs` — copies the release Rust gateway into the packaged resource set.
 - `.github/workflows/ci.yml` — locked Rust workspace tests, production website build, desktop renderer build, and Electron process-script checks on every change.
 - `.github/workflows/release.yml` — arm64/x64 macOS, native Windows NSIS, and Linux AppImage/deb artifact jobs with GitHub release publication.
-- Release signing and notarization are conditional on `MACOS_CERTIFICATE_P12_BASE64`, `MACOS_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID`; without them the workflow intentionally produces unsigned candidates and marks the manifest accordingly.
+- Release signing and notarization require `MACOS_CERTIFICATE_P12_BASE64`, `MACOS_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID` for tagged macOS releases. Manual workflow dispatch may still produce explicitly marked unsigned candidates; tagged releases fail closed when credentials are absent.
 - `apps/desktop/native/Info.plist` — bundle identifiers, permissions, update metadata.
 - `README.md`, `SECURITY.md`, `CONTRIBUTING.md` — install, support, incident, and release policy.
 
