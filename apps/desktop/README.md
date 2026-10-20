@@ -58,6 +58,13 @@ avoids collisions with another local process and prevents the app from
 silently attaching its UI to an unrelated gateway. Set the variable only when
 an explicit stable port is required for development or an integration test.
 
+The local SQLite history is retained indefinitely by the gateway. If storage
+needs to be trimmed, use the explicit terminal maintenance command with a
+chosen limit and `--yes`; only terminal runs are pruned, queued/running/
+cancellation-requested runs are preserved, and deleting a run also removes its
+cascaded events. The runtime never silently deletes a user's evidence during
+startup or snapshot writes.
+
 If the local gateway exits unexpectedly, the Electron shell keeps the UI open,
 shows the current recovery state, and retries with bounded backoff. After three
 failed attempts it stops retrying and presents an explicit error so the user

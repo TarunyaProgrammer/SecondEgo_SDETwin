@@ -239,7 +239,11 @@ safe terminal failure; partial worktree changes are not transferred.
 The storage crate maintains a `schema_migrations` ledger. Versions currently
 cover the legacy run/event tables, provider/profile/workspace metadata, and
 terminal result/error snapshots. Older databases are upgraded in place without
-rewriting existing event payloads.
+rewriting existing event payloads. History is preserved indefinitely by the
+gateway. An operator may explicitly prune terminal runs through the CLI
+maintenance command; active `QUEUED`, `RUNNING`, and `CANCEL_REQUESTED` rows
+are never selected for retention deletion. Their cascaded events are removed
+with the run row.
 
 ## Next version boundary
 

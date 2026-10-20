@@ -157,6 +157,16 @@ fn main() {
         }
         return;
     }
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == "maintenance")
+    {
+        if let Err(error) = run_maintenance(&arguments[1..]) {
+            eprintln!("SecondEgo maintenance failed: {error}");
+            std::process::exit(2);
+        }
+        return;
+    }
     let gc = collect_garbage();
     if gc.deleted > 0 {
         eprintln!(
@@ -399,6 +409,7 @@ fn print_help() {
     println!(
         "  secondego doctor [--json]              Diagnose local setup without printing secrets"
     );
+    println!("  secondego maintenance prune-history    Explicitly prune terminal history");
     println!("  secondego --interactive                 Run the verified task-fixing harness");
     println!("  secondego --workspace PATH --task TEXT   Run a non-interactive task");
     println!("  secondego --json --workspace PATH --task TEXT  Emit a stable JSON envelope");
@@ -440,13 +451,49 @@ fn print_help() {
     println!("  5. Re-run and show the target Git diff is unchanged.");
 }
 
+fn run_maintenance(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    if arguments.first().map(String::as_str) != Some("prune-history") {
+        return Err("maintenance command must be prune-history".into());
+    }
+    if !arguments.iter().any(|argument| argument == "--yes") {
+        return Err(
+            "prune-history is destructive; repeat with --yes after choosing a limit".into(),
+        );
+    }
+    let state_db = value(arguments, "--state-db")
+        .or_else(|| env::var("SECONDEGO_STATE_DB").ok())
+        .ok_or("--state-db or SECONDEGO_STATE_DB is required")?;
+    let max_runs = value(arguments, "--max-runs")
+        .ok_or("--max-runs is required and must be between 1 and 10000")?
+        .parse::<u32>()?;
+    if !(1..=10_000).contains(&max_runs) {
+        return Err("--max-runs must be between 1 and 10000".into());
+    }
+    let store = secondego_storage::SQLiteRunStore::open(state_db)?;
+    let deleted = store.prune_terminal_runs(max_runs)?;
+    if arguments.iter().any(|argument| argument == "--json") {
+        println!(
+            "{}",
+            serde_json::json!({
+                "schema_version": 1,
+                "max_runs": max_runs,
+                "deleted_runs": deleted,
+                "active_runs_preserved": true,
+            })
+        );
+    } else {
+        println!("Pruned {deleted} terminal run(s); active runs were preserved.");
+    }
+    Ok(())
+}
+
 fn print_completion(shell: Option<&str>) -> Result<(), &'static str> {
     match shell.unwrap_or("zsh").to_ascii_lowercase().as_str() {
         "bash" => println!(
             "{}",
             r#"_secondego() {
   local cur="${COMP_WORDS[COMP_CWORD]}"
-  local commands="launch preflight doctor discover provider providers completion completions help"
+  local commands="launch preflight doctor maintenance discover provider providers completion completions help"
   if [[ ${COMP_CWORD} -eq 1 ]]; then
     COMPREPLY=( $(compgen -W "${commands}" -- "${cur}") )
     return
@@ -467,7 +514,7 @@ complete -F _secondego secondego
             r#"#compdef secondego
 
 _secondego() {
-  _arguments '1:command:(launch preflight doctor discover provider providers completion completions help)' \
+  _arguments '1:command:(launch preflight doctor maintenance discover provider providers completion completions help)' \
     '*::argument:->args'
   case "$words[2]" in
     provider|providers)
@@ -484,7 +531,7 @@ _secondego "$@"
         ),
         "fish" => println!(
             "{}",
-            r#"complete -c secondego -f -n '__fish_use_subcommand' -a 'launch preflight doctor discover provider providers completion completions help'
+            r#"complete -c secondego -f -n '__fish_use_subcommand' -a 'launch preflight doctor maintenance discover provider providers completion completions help'
 complete -c secondego -f -n '__fish_seen_subcommand_from provider providers; and test (count (commandline -opc)) -eq 2' -a 'list status models test profile add use remove help'
 complete -c secondego -f -n '__fish_seen_subcommand_from completion completions; and test (count (commandline -opc)) -eq 2' -a 'bash zsh fish'
 "#

@@ -43,7 +43,7 @@ The current source of truth is in `engine-rs/crates/secondego-runtime`. The Pyth
 4. The Electron shell has provider setup and diff review foundations plus bounded gateway restart recovery. Release-grade update UX, accessibility hardening, recovery telemetry, and a fuller workspace information architecture remain.
 5. Packaging now has native macOS/Windows/Linux target definitions, platform-specific SHA-256 checksums, and non-colliding release manifests. Signed/notarized artifacts, update channels, and a supported installer contract remain gated on release credentials and CI validation.
 6. The terminal path now has documented native profiles, safe probes, a schema-versioned profile JSON contract, built-in bash/zsh/fish completion output, Windows CI coverage for the Credential Manager backend, and a dependency-free live dashboard. Keyboard-driven evidence expansion/retry controls and live vault smoke tests on each supported desktop remain.
-7. The gateway now persists an accepted run before worker startup and reconciles stale active rows after restart into explicit failed recovery results. Safe mid-call resume, workspace ownership, replay retention, and multi-user tenancy remain.
+7. The gateway now persists an accepted run before worker startup and reconciles stale active rows after restart into explicit failed recovery results. An explicit maintenance command can prune old terminal runs within a bounded local retention window; safe mid-call resume, workspace ownership, and multi-user tenancy remain.
 
 ### Increment delivered in this repository
 

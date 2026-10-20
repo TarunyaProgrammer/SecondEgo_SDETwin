@@ -1,9 +1,10 @@
 use std::path::Path;
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use secondego_core::{EngineEvent, ExecutionState, Phase, TerminalStatus};
 
 pub const STORAGE_SCHEMA_VERSION: i64 = 3;
+const MAX_CONFIGURED_STORED_RUNS: u32 = 10_000;
 
 #[derive(Debug)]
 pub enum StorageError {
@@ -140,6 +141,22 @@ impl SQLiteRunStore {
         }
         transaction.commit()?;
         Ok(())
+    }
+
+    /// Delete the oldest terminal runs while preserving all active runs.
+    ///
+    /// This is intentionally explicit and local: event replay remains durable
+    /// for the retention window, but an unattended desktop cannot grow its
+    /// SQLite file forever. The return value is the number of run rows removed;
+    /// their events are removed by the foreign-key cascade.
+    pub fn prune_terminal_runs(&self, max_runs: u32) -> Result<usize, StorageError> {
+        let transaction = self.connection.unchecked_transaction()?;
+        let deleted = Self::prune_terminal_runs_in_transaction(
+            &transaction,
+            max_runs.clamp(1, MAX_CONFIGURED_STORED_RUNS),
+        )?;
+        transaction.commit()?;
+        Ok(deleted)
     }
 
     pub fn event_count(&self, run_id: &str) -> Result<u32, StorageError> {
@@ -351,6 +368,35 @@ impl SQLiteRunStore {
         Ok(())
     }
 
+    fn prune_terminal_runs_in_transaction(
+        transaction: &Transaction<'_>,
+        max_runs: u32,
+    ) -> Result<usize, StorageError> {
+        let total: i64 = transaction.query_row("SELECT COUNT(*) FROM runs", [], |row| row.get(0))?;
+        let limit = i64::from(max_runs);
+        if total <= limit {
+            return Ok(0);
+        }
+        let surplus = total - limit;
+
+        let mut statement = transaction.prepare(
+            "SELECT run_id FROM runs
+             WHERE LOWER(status) NOT IN ('queued', 'running', 'cancel_requested')
+             ORDER BY updated_at ASC, created_at ASC
+             LIMIT ?1",
+        )?;
+        let ids = statement
+            .query_map(params![surplus], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+
+        let mut deleted = 0;
+        for run_id in ids {
+            deleted += transaction.execute("DELETE FROM runs WHERE run_id = ?1", params![run_id])?;
+        }
+        Ok(deleted)
+    }
+
     fn has_column(&self, table: &str, column: &str) -> Result<bool, StorageError> {
         let mut statement = self
             .connection
@@ -447,5 +493,38 @@ mod tests {
         assert_eq!(stored.error.as_deref(), Some(reason));
         assert_eq!(stored.events.last().unwrap().event_type, "run.terminated");
         assert_eq!(store.reconcile_incomplete_runs(reason).unwrap(), 0);
+    }
+
+    #[test]
+    fn retention_deletes_old_terminal_runs_but_preserves_active_runs_and_events() {
+        let store = SQLiteRunStore::open_memory().unwrap();
+        let active = ExecutionState::new("active", "/workspace");
+        store
+            .save(&active, &[EngineEvent::new(&active, "run.started")])
+            .unwrap();
+
+        let mut terminal_ids = Vec::new();
+        for index in 0..3 {
+            let mut state = ExecutionState::new(format!("terminal-{index}"), "/workspace");
+            state.status = TerminalStatus::Complete;
+            state.phase = Phase::Verify;
+            state.termination_reason = Some("verified".into());
+            terminal_ids.push(state.run_id.to_string());
+            store
+                .save(&state, &[EngineEvent::new(&state, "run.completed")])
+                .unwrap();
+        }
+
+        assert_eq!(store.prune_terminal_runs(2).unwrap(), 2);
+        assert!(store.load(&active.run_id.to_string()).unwrap().is_some());
+        assert_eq!(store.event_count(&active.run_id.to_string()).unwrap(), 1);
+        assert_eq!(store.list(10).unwrap().len(), 2);
+        assert_eq!(
+            terminal_ids
+                .iter()
+                .filter(|run_id| store.load(run_id).unwrap().is_some())
+                .count(),
+            1
+        );
     }
 }
