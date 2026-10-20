@@ -236,8 +236,11 @@ cargo run --manifest-path engine-rs/Cargo.toml -p secondego-cli -- completion zs
 For scripts, add `--json` to a task run to receive a schema-versioned envelope
 containing the run id, provider/profile metadata, and the normal redacted
 report. `--ui events` streams versioned JSONL events as the engine emits them,
-then writes one `run.completed` summary line. Use `--no-color` for human output
-in logs that do not set `NO_COLOR`.
+then writes one `run.completed` summary line. For a richer human terminal
+surface, use `--interactive --ui tui`; it keeps one live dashboard line for the
+current phase, terminal status, tool count, verification count, and latest
+evidence message before printing the final result card. Use `--no-color` for
+human output in logs that do not set `NO_COLOR`.
 
 ## Execution flow
 
@@ -372,18 +375,19 @@ compliance.
 
 ## Optional presentation modes
 
-The default evaluation mode is headless. Compact engine events can be displayed
-without changing model/tool budgets:
+The default evaluation mode is headless. The live dashboard or compact engine
+events can be displayed without changing model/tool budgets:
 
 ```bash
+make run UI_MODE=tui
 make run UI_MODE=events
 ```
 
-The terminal interface is intentionally compact and state-led. Human mode shows
-the current execution phase, tool/verification events, and final outcome without
-inventing progress percentages or agent activity. Event mode is a pure JSONL
-stream for terminal integrations; it does not print banners or duplicate the
-final report.
+The terminal interface is state-led. Dashboard mode keeps the current execution
+phase, tool/verification counts, latest evidence, and final outcome visible
+without inventing progress percentages or agent activity. Event mode is a pure
+JSONL stream for terminal integrations; it does not print banners or duplicate
+the final report.
 
 The desktop UI is an explicit opt-in switch. It is off by default:
 

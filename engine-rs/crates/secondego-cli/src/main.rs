@@ -4,6 +4,7 @@ use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -28,6 +29,78 @@ static INTERRUPT_REQUESTED: AtomicBool = AtomicBool::new(false);
 static RUN_ACTIVE: AtomicBool = AtomicBool::new(false);
 static PARENT_TERMINAL_PGRP: AtomicI32 = AtomicI32::new(0);
 static FORCE_NO_COLOR: AtomicBool = AtomicBool::new(false);
+
+#[derive(Default)]
+struct DashboardState {
+    phase: String,
+    status: String,
+    tool_count: usize,
+    verification_count: usize,
+    last_message: String,
+}
+
+struct LiveDashboard {
+    state: Mutex<DashboardState>,
+    terminal: bool,
+}
+
+impl LiveDashboard {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(DashboardState::default()),
+            terminal: io::stdout().is_terminal(),
+        }
+    }
+
+    fn on_event(&self, event: &secondego_core::EngineEvent) {
+        if !self.terminal {
+            print_live_event(event);
+            return;
+        }
+
+        let message = event_message(event);
+        let mut state = self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.phase = format!("{:?}", event.phase);
+        state.status = format!("{:?}", event.status);
+        state.last_message = truncate_str(message, 58);
+        if let Some(tool_calls) = event
+            .payload
+            .pointer("/resource_usage/tool_calls")
+            .and_then(serde_json::Value::as_u64)
+        {
+            state.tool_count = tool_calls as usize;
+        }
+        if event.event_type == "verification.completed"
+            || (event.event_type == "activity.completed"
+                && event.payload.get("operation").and_then(serde_json::Value::as_str)
+                    == Some("verification.run"))
+        {
+            state.verification_count += 1;
+        }
+        let icon = match event.event_type.as_str() {
+            "tool.completed" => "→",
+            "verification.completed" => "✓",
+            "run.terminated" => "■",
+            _ => "·",
+        };
+        print!(
+            "\r\x1b[2K  {} {:<10} {:<12}  tools {:>2} · checks {:>2}  {}",
+            paint(CORAL, icon),
+            paint(MUTED, &state.phase),
+            paint(PEACH, &state.status),
+            state.tool_count,
+            state.verification_count,
+            state.last_message,
+        );
+        let _ = io::stdout().flush();
+    }
+
+    fn finish(&self) {
+        if self.terminal {
+            println!();
+        }
+    }
+}
 
 fn augment_env_path() {
     if let Some(path) = env::var_os("PATH") {
@@ -153,9 +226,13 @@ fn main() {
         return;
     }
     let json_output = arguments.iter().any(|argument| argument == "--json");
-    let events = value(&arguments, "--ui").as_deref() == Some("events") && !json_output;
+    let ui_mode = value(&arguments, "--ui");
+    let events = ui_mode.as_deref() == Some("events") && !json_output;
     let interactive =
-        arguments.iter().any(|argument| argument == "--interactive") && !json_output && !events;
+        (arguments.iter().any(|argument| argument == "--interactive")
+            || matches!(ui_mode.as_deref(), Some("tui" | "live")))
+            && !json_output
+            && !events;
     FORCE_NO_COLOR.store(
         arguments.iter().any(|argument| argument == "--no-color"),
         Ordering::Release,
@@ -325,6 +402,7 @@ fn print_help() {
     println!("  secondego --interactive                 Run the verified task-fixing harness");
     println!("  secondego --workspace PATH --task TEXT   Run a non-interactive task");
     println!("  secondego --json --workspace PATH --task TEXT  Emit a stable JSON envelope");
+    println!("  --ui tui                                 Run the live terminal dashboard");
     println!("  --ui events                              Stream versioned JSONL events");
     println!("  --no-color                               Disable ANSI colors in human output");
     println!("  secondego discover --repo PATH           Scan a repository without modifying it");
@@ -1099,10 +1177,9 @@ fn configure_launch(config: &mut LaunchConfig) -> Result<(), Box<dyn std::error:
     } else {
         Surface::Terminal
     };
-    config.terminal_mode = if prompt("Terminal output [1=compact, 2=events]").trim() == "2" {
-        "events".into()
-    } else {
-        "headless".into()
+    config.terminal_mode = match prompt("Terminal output [1=dashboard, 2=events]").trim() {
+        "2" => "events".into(),
+        _ => "tui".into(),
     };
     config.voice_enabled = prompt("Enable Gemini voice? [y/N]")
         .trim()
@@ -1190,8 +1267,14 @@ fn launch_terminal(
     let executable = env::current_exe()?;
     let mut command = Command::new(executable);
     command.arg("--interactive");
-    if config.terminal_mode == "events" {
-        command.args(["--ui", "events"]);
+    match config.terminal_mode.as_str() {
+        "events" => {
+            command.args(["--ui", "events"]);
+        }
+        "tui" | "live" | "compact" => {
+            command.args(["--ui", "tui"]);
+        }
+        _ => {}
     }
     apply_child_environment(&mut command, config, credentials);
     let status = command.status()?;
@@ -1490,12 +1573,18 @@ fn run_scripted(
     let mut engine = RustEngine::new(ScriptedProvider::new(vec![proposal]))
         .with_cancellation(cancellation)
         .with_voice(voice.clone());
+    let dashboard = interactive.then(|| Arc::new(LiveDashboard::new()));
     if events {
         engine = engine.with_event_sink(print_json_event);
-    } else if interactive {
-        engine = engine.with_event_sink(print_live_event);
+    } else if let Some(dashboard) = &dashboard {
+        let dashboard = Arc::clone(dashboard);
+        engine = engine.with_event_sink(move |event| dashboard.on_event(event));
     }
-    let report = engine.run(task, &workspace)?;
+    let result = engine.run(task, &workspace);
+    if let Some(dashboard) = &dashboard {
+        dashboard.finish();
+    }
+    let report = result?;
     emit_report(
         report,
         events,
@@ -1520,12 +1609,18 @@ fn run_configured(
     let mut engine = RustEngine::new(ConfiguredProvider::from_environment()?)
         .with_cancellation(cancellation)
         .with_voice(voice.clone());
+    let dashboard = interactive.then(|| Arc::new(LiveDashboard::new()));
     if events {
         engine = engine.with_event_sink(print_json_event);
-    } else if interactive {
-        engine = engine.with_event_sink(print_live_event);
+    } else if let Some(dashboard) = &dashboard {
+        let dashboard = Arc::clone(dashboard);
+        engine = engine.with_event_sink(move |event| dashboard.on_event(event));
     }
-    let report = engine.run(task, &workspace)?;
+    let result = engine.run(task, &workspace);
+    if let Some(dashboard) = &dashboard {
+        dashboard.finish();
+    }
+    let report = result?;
     emit_report(
         report,
         events,
@@ -1940,14 +2035,8 @@ fn print_json_summary(report: &secondego_runtime::RunReport) {
     let _ = io::stdout().flush();
 }
 
-fn print_live_event(event: &secondego_core::EngineEvent) {
-    let icon = match event.event_type.as_str() {
-        "tool.completed" => "→",
-        "verification.completed" => "✓",
-        "run.terminated" => "■",
-        _ => "·",
-    };
-    let message = event
+fn event_message(event: &secondego_core::EngineEvent) -> &str {
+    event
         .payload
         .get("message")
         .and_then(serde_json::Value::as_str)
@@ -1957,7 +2046,17 @@ fn print_live_event(event: &secondego_core::EngineEvent) {
                 .get("reason")
                 .and_then(serde_json::Value::as_str)
         })
-        .unwrap_or(&event.event_type);
+        .unwrap_or(&event.event_type)
+}
+
+fn print_live_event(event: &secondego_core::EngineEvent) {
+    let icon = match event.event_type.as_str() {
+        "tool.completed" => "→",
+        "verification.completed" => "✓",
+        "run.terminated" => "■",
+        _ => "·",
+    };
+    let message = event_message(event);
     println!(
         "  {} {:<10} {:<22} {}",
         paint(CORAL, icon),

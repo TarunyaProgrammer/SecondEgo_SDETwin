@@ -42,7 +42,7 @@ The current source of truth is in `engine-rs/crates/secondego-runtime`. The Pyth
 3. The gateway now has a versioned, authenticated profile/provider session and run contract. Rust desktop profile changes refresh that session in place, preserving active runs; replay metadata, workspace ownership, and durable profile/workspace operations remain.
 4. The Electron shell has provider setup and diff review foundations plus bounded gateway restart recovery. Release-grade update UX, accessibility hardening, recovery telemetry, and a fuller workspace information architecture remain.
 5. Packaging now has native macOS/Windows/Linux target definitions, platform-specific SHA-256 checksums, and non-colliding release manifests. Signed/notarized artifacts, update channels, and a supported installer contract remain gated on release credentials and CI validation.
-6. The terminal path now has documented native profiles, safe probes, a schema-versioned profile JSON contract, built-in bash/zsh/fish completion output, and Windows CI coverage for the Credential Manager backend, but still needs a richer TUI and live vault smoke tests on each supported desktop.
+6. The terminal path now has documented native profiles, safe probes, a schema-versioned profile JSON contract, built-in bash/zsh/fish completion output, Windows CI coverage for the Credential Manager backend, and a dependency-free live dashboard. Keyboard-driven evidence expansion/retry controls and live vault smoke tests on each supported desktop remain.
 7. The gateway now persists terminal task snapshots through migration-managed SQLite with provider/profile/workspace metadata. Workspace ownership, replay retention, active-run recovery, and multi-user tenancy remain.
 
 ### Increment delivered in this repository
