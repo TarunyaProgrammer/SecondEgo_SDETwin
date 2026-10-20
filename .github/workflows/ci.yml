@@ -31,6 +31,19 @@ jobs:
           grep -q '"schema_version": 1' doctor.json
           grep -q '"ok": true' doctor.json
           ! grep -q 'ci-placeholder-key' doctor.json
+      - name: Verify live JSONL event contract
+        working-directory: engine-rs
+        run: |
+          event_tmp="$(mktemp -d)"
+          git clone --no-local --quiet .. "$event_tmp/repo"
+          cargo run --locked -p secondego-cli -- \
+            --ui events \
+            --script ../tests/fixtures/cli_event_plan.json \
+            --workspace "$event_tmp/repo" > "$event_tmp/events.jsonl"
+          grep -q '"event_type":"run.completed"' "$event_tmp/events.jsonl"
+          grep -q '"verification_passed":true' "$event_tmp/events.jsonl"
+          ! grep -q 'RUN CONFIG' "$event_tmp/events.jsonl"
+          ! grep -q 'RUN RESULT' "$event_tmp/events.jsonl"
 
   windows-rust:
     name: Windows Rust compatibility

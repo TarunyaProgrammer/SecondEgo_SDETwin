@@ -1,0 +1,14 @@
+{
+  "acceptance_criteria": ["event-mode fixture completes without a provider"],
+  "actions": [
+    {
+      "action": "edit_file",
+      "arguments": {
+        "path": ".secondego-event-marker.txt",
+        "content": "event-mode fixture\n"
+      },
+      "rationale": "Create a disposable marker so the scripted run has a bounded change."
+    }
+  ],
+  "verification_commands": [["python3", "-c", "assert True"]]
+}
