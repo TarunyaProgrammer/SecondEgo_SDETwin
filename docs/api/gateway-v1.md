@@ -50,6 +50,18 @@ is process-local and is replaced when another profile is selected or the
 gateway restarts. The terminal and Python compatibility gateway use the
 named-key environment contract instead.
 
+To clear the active Rust session after the last local profile is deleted:
+
+```http
+DELETE /api/providers/session
+X-SecondEgo-Token: <launch token>
+```
+
+The response contains only `{ "api_version": 1, "ok": true, "cleared": true }`.
+The desktop uses this endpoint to refresh credentials in place without killing
+an active gateway process; the Python compatibility gateway retains its restart
+fallback.
+
 When a run is accepted, the gateway snapshots the active provider session into
 that run's worker. Switching profiles while a run is in progress affects only
 subsequent runs; it cannot change the credentials or model used by an existing

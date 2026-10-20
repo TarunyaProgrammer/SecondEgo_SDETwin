@@ -28,6 +28,7 @@ const gesturePort = Number.isInteger(configuredGesturePort) && configuredGesture
   : 52381;
 let gatewayProcess;
 let gatewayToken;
+let gatewayKind;
 let restartingGateway = false;
 let mainWindow;
 let gestureProcess;
@@ -395,20 +396,82 @@ ipcMain.handle("secondego:gesture-enabled", (_event, enabled) => {
   return gestureEnabled ? startGestureService() : (stopGestureService(), gestureStatus);
 });
 
+function requestProviderSession(session, attempt = 0) {
+  const hasSession = Boolean(session && session.apiKey && session.SECONDEGO_PROFILE_ID && session.SECONDEGO_PROVIDER);
+  const payload = hasSession ? JSON.stringify({
+    profile_id: session.SECONDEGO_PROFILE_ID,
+    provider: session.SECONDEGO_PROVIDER,
+    model: session.SECONDEGO_MODEL || null,
+    api_key: session.apiKey,
+  }) : "";
+  return new Promise((resolve, reject) => {
+    const request = httpRequest({
+      host: "127.0.0.1",
+      port: gatewayPort,
+      path: "/api/providers/session",
+      method: hasSession ? "POST" : "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(payload),
+        "X-SecondEgo-Token": gatewayToken,
+      },
+      timeout: 5000,
+    }, (response) => {
+      response.resume();
+      response.on("end", () => {
+        if (response.statusCode && response.statusCode >= 200 && response.statusCode < 300) {
+          resolve();
+          return;
+        }
+        const error = new Error(`gateway rejected the provider session refresh (${response.statusCode || "no status"})`);
+        error.retryable = !response.statusCode || response.statusCode >= 500;
+        reject(error);
+      });
+    });
+    request.on("timeout", () => request.destroy(new Error("gateway provider session refresh timed out")));
+    request.on("error", (error) => {
+      error.retryable = true;
+      reject(error);
+    });
+    request.end(payload);
+  }).catch((error) => {
+    if (!error.retryable || attempt >= 4) throw error;
+    return new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)))
+      .then(() => requestProviderSession(session, attempt + 1));
+  });
+}
+
+async function refreshGatewaySession() {
+  if (gatewayKind !== "rust") {
+    restartGateway();
+    return;
+  }
+  if (!gatewayProcess || gatewayProcess.exitCode !== null || gatewayProcess.killed) {
+    restartGateway();
+    return;
+  }
+  try {
+    await requestProviderSession(activeCredentialSession());
+  } catch (error) {
+    restartGateway();
+    throw new Error(`Provider profile saved, but the gateway session could not be refreshed: ${error.message}`);
+  }
+}
+
 ipcMain.handle("secondego:providers:list", () => listProfiles());
-ipcMain.handle("secondego:providers:save", (_event, profile) => {
+ipcMain.handle("secondego:providers:save", async (_event, profile) => {
   const result = saveProfile(profile || {});
-  restartGateway();
+  await refreshGatewaySession();
   return result;
 });
-ipcMain.handle("secondego:providers:activate", (_event, profile) => {
+ipcMain.handle("secondego:providers:activate", async (_event, profile) => {
   const result = setActiveProfile(profile || {});
-  restartGateway();
+  await refreshGatewaySession();
   return result;
 });
-ipcMain.handle("secondego:providers:delete", (_event, profile) => {
+ipcMain.handle("secondego:providers:delete", async (_event, profile) => {
   const result = deleteProfile(profile || {});
-  restartGateway();
+  await refreshGatewaySession();
   return result;
 });
 
@@ -429,6 +492,7 @@ function startGateway() {
   }
   const python = process.env.SECONDEGO_PYTHON || path.join(repoRoot, ".venv", "bin", "python");
   const command = rustGateway || python;
+  gatewayKind = rustGateway ? "rust" : "python";
   const args = rustGateway ? [] : ["-m", "SecondEgo.desktop.gateway", "--host", "127.0.0.1", "--port", String(gatewayPort)];
   const credentialSession = activeCredentialSession();
   const providerEnvironment = { ...activeEnvironment() };

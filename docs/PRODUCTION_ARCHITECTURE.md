@@ -39,7 +39,7 @@ The current source of truth is in `engine-rs/crates/secondego-runtime`. The Pyth
 
 1. The provider registry and five required adapters exist, with credential-free localhost transport contract tests covering endpoint, auth header, payload, and response normalization. Live cross-platform account/model availability still needs release-environment rehearsal.
 2. Credentials support multiple named profiles in the desktop and macOS/Linux/Windows terminal paths. Vault migration UX and rotation remain.
-3. The gateway now has a versioned, authenticated profile/provider session and run contract. Replay metadata, workspace ownership, and durable profile/workspace operations remain.
+3. The gateway now has a versioned, authenticated profile/provider session and run contract. Rust desktop profile changes refresh that session in place, preserving active runs; replay metadata, workspace ownership, and durable profile/workspace operations remain.
 4. The Electron shell has provider setup and diff review foundations, but still needs release-grade update UX, recovery flows, accessibility hardening, and a fuller workspace information architecture.
 5. Packaging now has native macOS/Windows/Linux target definitions, platform-specific SHA-256 checksums, and non-colliding release manifests. Signed/notarized artifacts, update channels, and a supported installer contract remain gated on release credentials and CI validation.
 6. The terminal path now has documented native profiles, safe probes, a schema-versioned profile JSON contract, built-in bash/zsh/fish completion output, and Windows CI coverage for the Credential Manager backend, but still needs a richer TUI and live vault smoke tests on each supported desktop.

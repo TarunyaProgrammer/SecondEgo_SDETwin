@@ -197,6 +197,7 @@ fn handle(
         ("POST", "/api/providers/session") => {
             set_provider_session(&mut stream, request.body, credentials)
         }
+        ("DELETE", "/api/providers/session") => clear_provider_session(&mut stream, credentials),
         ("POST", "/api/providers/test") => test_provider(&mut stream, request.body, credentials),
         ("POST", "/api/providers/models") => {
             list_provider_models(&mut stream, request.body, credentials)
@@ -275,6 +276,22 @@ fn set_provider_session(
             "provider": session.provider.name(),
             "model": session.model,
         }),
+    )
+}
+
+fn clear_provider_session(
+    stream: &mut TcpStream,
+    credentials: &CredentialSession,
+) -> std::io::Result<()> {
+    if let Ok(mut active) = credentials.lock() {
+        *active = None;
+    } else {
+        return respond(stream, 503, serde_json::json!({"error":"credential session unavailable"}));
+    }
+    respond(
+        stream,
+        200,
+        serde_json::json!({"api_version": API_VERSION, "ok": true, "cleared": true}),
     )
 }
 
@@ -1451,7 +1468,7 @@ fn respond_bytes(
     };
     write!(
         stream,
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, X-SecondEgo-Token\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, X-SecondEgo-Token\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         data.len(),
     )?;
     stream.write_all(data)
