@@ -1,0 +1,30 @@
+sequenceDiagram
+  participant User
+  participant Client
+  participant Identity as Identity/Tenant API
+  participant Queue as Durable Job Queue
+  participant Worker as Isolated Worker
+  participant Secret as Secret Broker/KMS
+  participant Repo as Repository Broker
+  participant Engine as Rust Engine
+  participant Provider as Provider Registry
+  participant Model as Model API
+  participant Audit as Audit/Evidence Store
+
+  User->>Client: Submit task + workspace reference
+  Client->>Identity: authenticated request(tenant, workspace, policy)
+  Identity->>Identity: authorize, quota, idempotency key
+  Identity->>Queue: enqueue tenant-scoped job
+  Queue-->>Client: job id + event cursor
+  Queue->>Worker: lease job with bounded budget
+  Worker->>Secret: resolve tenant/provider credential handle
+  Worker->>Repo: materialize repository into isolated workspace
+  Worker->>Engine: run(task, policy, workspace, secret handle)
+  Engine->>Provider: normalized request
+  Provider->>Model: provider-specific HTTPS request
+  Model-->>Provider: response / rate-limit metadata
+  Provider-->>Engine: proposal or classified error
+  Engine->>Audit: redacted events, diff, verification evidence
+  Worker-->>Queue: terminal status + artifact references
+  Queue-->>Client: replayable events + result metadata
+  Client-->>User: review, approve, reject, or retry

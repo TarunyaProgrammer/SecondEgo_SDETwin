@@ -1,0 +1,20 @@
+flowchart LR
+  U[Developer / Team Member] --> W[Web or Desktop Client]
+  W --> I[Identity + tenant API]
+  I --> Q[(Durable job queue)]
+  I --> M[(Tenant metadata + audit DB)]
+  I --> C[Quota + policy service]
+  Q --> R[Isolated worker pool]
+  R --> S[Secret broker / KMS]
+  R --> G[Repository credential broker]
+  R --> E[SecondEgo Rust engine]
+  E --> P[Provider registry]
+  P --> DS[DeepSeek]
+  P --> GM[Gemini]
+  P --> OA[OpenAI]
+  P --> AN[Anthropic]
+  P --> OR[OpenRouter]
+  E --> T[Ephemeral workspace + verification]
+  T --> A[(Redacted evidence + artifacts)]
+  A --> W
+

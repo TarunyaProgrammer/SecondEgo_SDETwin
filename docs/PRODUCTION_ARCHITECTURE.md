@@ -242,6 +242,14 @@ The DMG itself should stay conventional. Custom animations inside a disk image d
 
 Do not call the local profile model “multi-tenant”. A hosted service would additionally require authenticated tenants, server-side secret management, durable job queues, worker isolation, repository credential handling, audit logs, quotas, billing, and a remote execution threat model. That should be a later architecture, not hidden inside the desktop gateway.
 
+The hosted boundary is documented separately in
+[`docs/diagrams/hosted-multi-user-hld.mmd`](diagrams/hosted-multi-user-hld.mmd)
+and
+[`docs/diagrams/hosted-multi-user-lld.mmd`](diagrams/hosted-multi-user-lld.mmd).
+The local Rust gateway must remain usable without these services; the hosted
+control plane would submit tenant-scoped jobs to isolated workers and return
+replayable, redacted evidence rather than exposing a remote shell or raw key.
+
 ### Required engineering hygiene
 
 - version every public event and API payload;
