@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { Reveal } from "@/components/Reveal";
+import { applyPageMeta } from "./seo";
 import "./styles.css";
 
 const repository = "https://github.com/TarunyaProgrammer/SecondEgo_SDETwin";
@@ -136,6 +137,6 @@ function Footer({ navigate }: { navigate: (to: string) => void }) {
 export default function App() {
   const { path, navigate } = useRoute();
   const page = useMemo(() => { if (path === "/docs") return <DocsPage navigate={navigate} />; if (path === "/download" || path === "/downloads") return <DownloadPage />; if (path === "/about") return <AboutPage navigate={navigate} />; if (path === "/terms" || path === "/terms-and-conditions") return <TermsPage />; return <HomePage navigate={navigate} />; }, [navigate, path]);
-  useEffect(() => { document.title = path === "/" ? "SecondEgo — The coding agent with a conscience" : `${path.slice(1).replace(/-/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase())} | SecondEgo`; }, [path]);
+  useEffect(() => { applyPageMeta(path); }, [path]);
   return <div className="site-shell"><Navigation navigate={navigate} /><main>{page}</main><Footer navigate={navigate} /></div>;
 }
