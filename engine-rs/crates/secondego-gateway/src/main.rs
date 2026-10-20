@@ -291,6 +291,7 @@ fn test_provider(
             Err(_) => return respond(stream, 400, serde_json::json!({"error":"invalid request"})),
         }
     };
+    let session = session_snapshot(credentials);
     if let Some(profile_id) = request.profile_id.as_deref() {
         if !valid_profile_id(profile_id) {
             return respond(
@@ -299,7 +300,7 @@ fn test_provider(
                 serde_json::json!({"error":"invalid profile id"}),
             );
         }
-        if active_profile_id(credentials).as_deref() != Some(profile_id)
+        if session.as_ref().map(|session| session.profile_id.as_str()) != Some(profile_id)
             && env::var("SECONDEGO_PROFILE_ID").ok().as_deref() != Some(profile_id)
         {
             return respond(
@@ -310,7 +311,7 @@ fn test_provider(
         }
     }
     let started = std::time::Instant::now();
-    let active_provider = match active_provider_kind(credentials) {
+    let active_provider = match provider_kind_from_session(session.as_ref()) {
         Ok(provider) => provider,
         Err(error) => {
             return respond(
@@ -321,7 +322,7 @@ fn test_provider(
         }
     };
     let requested_model = request.model.clone();
-    let result = configured_provider(credentials)
+    let result = configured_provider_from_session(session.as_ref())
         .and_then(|provider| {
             if let Some(requested_provider) = request.provider.as_deref()
                 && !requested_provider.eq_ignore_ascii_case(active_provider.name())
@@ -332,7 +333,7 @@ fn test_provider(
             }
             let model = requested_model
                 .clone()
-                .or_else(|| active_model(credentials))
+                .or_else(|| session.as_ref().map(|session| session.model.clone()))
                 .unwrap_or(configured_model()?);
             provider.with_model(model)
         })
@@ -353,10 +354,10 @@ fn test_provider(
                 "api_version": API_VERSION,
                 "ok": true,
                 "latency_ms": started.elapsed().as_millis(),
-                "profile_id": request.profile_id.or_else(|| active_profile_id(credentials).or_else(|| env::var("SECONDEGO_PROFILE_ID").ok())),
+                "profile_id": request.profile_id.or_else(|| session.as_ref().map(|session| session.profile_id.clone()).or_else(|| env::var("SECONDEGO_PROFILE_ID").ok())),
                 "provider": active_provider.name(),
                 "model": requested_model
-                    .or_else(|| active_model(credentials))
+                    .or_else(|| session.as_ref().map(|session| session.model.clone()))
                     .or_else(|| configured_model().ok())
                     .unwrap_or_else(|| "unknown".into()),
             }),
@@ -382,6 +383,7 @@ fn list_provider_models(
             Err(_) => return respond(stream, 400, serde_json::json!({"error":"invalid request"})),
         }
     };
+    let session = session_snapshot(credentials);
     if let Some(profile_id) = request.profile_id.as_deref() {
         if !valid_profile_id(profile_id) {
             return respond(
@@ -390,7 +392,7 @@ fn list_provider_models(
                 serde_json::json!({"error":"invalid profile id"}),
             );
         }
-        if active_profile_id(credentials).as_deref() != Some(profile_id)
+        if session.as_ref().map(|session| session.profile_id.as_str()) != Some(profile_id)
             && env::var("SECONDEGO_PROFILE_ID").ok().as_deref() != Some(profile_id)
         {
             return respond(
@@ -400,7 +402,7 @@ fn list_provider_models(
             );
         }
     }
-    let provider = match active_provider_kind(credentials) {
+    let provider = match provider_kind_from_session(session.as_ref()) {
         Ok(provider) => provider,
         Err(error) => {
             return respond(
@@ -420,8 +422,9 @@ fn list_provider_models(
         );
     }
     let started = std::time::Instant::now();
-    let models = active_api_key(credentials)
-        .map(|key| available_models_for_provider_with_key(provider, &key))
+    let models = session
+        .as_ref()
+        .map(|session| available_models_for_provider_with_key(provider, &session.api_key))
         .unwrap_or_else(|| available_models_for_provider(provider));
     match models {
         Ok(models) => respond(
@@ -1139,33 +1142,6 @@ fn session_snapshot(credentials: &CredentialSession) -> Option<ProviderSession> 
     credentials.lock().ok().and_then(|session| session.clone())
 }
 
-fn active_profile_id(credentials: &CredentialSession) -> Option<String> {
-    session_snapshot(credentials).map(|session| session.profile_id)
-}
-
-fn active_provider_kind(
-    credentials: &CredentialSession,
-) -> Result<ProviderKind, secondego_model::ProviderError> {
-    match session_snapshot(credentials) {
-        Some(session) => Ok(session.provider),
-        None => ProviderKind::from_environment(),
-    }
-}
-
-fn active_model(credentials: &CredentialSession) -> Option<String> {
-    session_snapshot(credentials).map(|session| session.model)
-}
-
-fn active_api_key(credentials: &CredentialSession) -> Option<String> {
-    session_snapshot(credentials).map(|session| session.api_key)
-}
-
-fn configured_provider(
-    credentials: &CredentialSession,
-) -> Result<ConfiguredProvider, secondego_model::ProviderError> {
-    configured_provider_from_session(session_snapshot(credentials).as_ref())
-}
-
 fn configured_provider_from_session(
     session: Option<&ProviderSession>,
 ) -> Result<ConfiguredProvider, secondego_model::ProviderError> {
@@ -1177,6 +1153,15 @@ fn configured_provider_from_session(
         ),
         None => ConfiguredProvider::from_environment(),
     }
+}
+
+fn provider_kind_from_session(
+    session: Option<&ProviderSession>,
+) -> Result<ProviderKind, secondego_model::ProviderError> {
+    session
+        .map(|session| session.provider)
+        .map(Ok)
+        .unwrap_or_else(ProviderKind::from_environment)
 }
 
 fn valid_profile_id(value: &str) -> bool {
