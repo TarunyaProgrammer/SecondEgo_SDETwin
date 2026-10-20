@@ -9,11 +9,6 @@ files:
   - dist/**/*
   - electron/**/*
   - package.json
-extraResources:
-  - from: resources/secondego-gateway
-    to: secondego-gateway
-    filter:
-      - '**/*'
 mac:
   category: public.app-category.developer-tools
   target:
@@ -24,14 +19,28 @@ mac:
   hardenedRuntime: true
   gatekeeperAssess: false
   extraResources:
+    - from: resources/secondego-gateway
+      to: secondego-gateway
+      filter:
+        - '**/*'
     - from: resources/SecondEgoCredentialHelper
       to: SecondEgoCredentialHelper
 win:
+  extraResources:
+    - from: resources/secondego-gateway.exe
+      to: secondego-gateway.exe
+      filter:
+        - '**/*'
   target:
     - nsis
   artifactName: SecondEgo-${version}-${arch}.${ext}
   publisherName: SecondEgo contributors
 linux:
+  extraResources:
+    - from: resources/secondego-gateway
+      to: secondego-gateway
+      filter:
+        - '**/*'
   category: Development
   target:
     - AppImage

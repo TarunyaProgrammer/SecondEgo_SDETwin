@@ -12,8 +12,8 @@ permissions:
 jobs:
   macos:
     env:
-      RELEASE_SIGNING_ENABLED: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 != '' && 'true' || 'false' }}
-      RELEASE_NOTARIZATION_ENABLED: ${{ secrets.APPLE_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' && 'true' || 'false' }}
+      RELEASE_SIGNING_ENABLED: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 != '' && secrets.MACOS_CERTIFICATE_PASSWORD != '' && 'true' || 'false' }}
+      RELEASE_NOTARIZATION_ENABLED: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 != '' && secrets.APPLE_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' && 'true' || 'false' }}
     strategy:
       matrix:
         include:
@@ -97,7 +97,7 @@ jobs:
 
   windows:
     env:
-      RELEASE_SIGNING_ENABLED: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 != '' && 'true' || 'false' }}
+      RELEASE_SIGNING_ENABLED: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 != '' && secrets.WINDOWS_CERTIFICATE_PASSWORD != '' && 'true' || 'false' }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
