@@ -342,6 +342,7 @@ fn require_key_from_stdin() -> Result<String, ProfileError> {
 
 pub fn run_command(args: &[String]) -> Result<(), ProfileError> {
     let command = args.first().map(String::as_str).unwrap_or("list");
+    let json_output = args.iter().any(|argument| argument == "--json");
     match command {
         "list" => {
             let metadata = read_metadata()?;
@@ -352,14 +353,39 @@ pub fn run_command(args: &[String]) -> Result<(), ProfileError> {
                 .cloned()
                 .unwrap_or_default();
             if entries.is_empty() {
+                if json_output {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&json!({
+                            "schema_version": 1,
+                            "active_profile": Value::Null,
+                            "profiles": [],
+                        }))
+                        .map_err(|error| ProfileError::Metadata(error.to_string()))?
+                    );
+                    return Ok(());
+                }
                 println!("No native provider profiles saved. Add one with --key-stdin.");
                 return Ok(());
             }
+            let mut profiles = Vec::new();
             for (id, item) in entries {
                 let entry = entry_from_metadata(&metadata, &id).ok_or_else(|| {
                     ProfileError::Metadata("provider profile metadata is malformed".into())
                 })?;
                 let ready = native_command(&entry, "read", None).is_ok();
+                profiles.push(json!({
+                    "id": id.clone(),
+                    "provider": entry.provider.clone(),
+                    "profile": entry.profile.clone(),
+                    "model": entry.model.clone(),
+                    "active": active == Some(id.as_str()),
+                    "ready": ready,
+                }));
+                if json_output {
+                    let _ = item;
+                    continue;
+                }
                 println!(
                     "{} {} / {} — {}{}",
                     if active == Some(id.as_str()) {
@@ -377,6 +403,22 @@ pub fn run_command(args: &[String]) -> Result<(), ProfileError> {
                         .unwrap_or_default()
                 );
                 let _ = item;
+            }
+            if json_output {
+                profiles.sort_by(|left, right| {
+                    left.get("id")
+                        .and_then(Value::as_str)
+                        .cmp(&right.get("id").and_then(Value::as_str))
+                });
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                        "schema_version": 1,
+                        "active_profile": active,
+                        "profiles": profiles,
+                    }))
+                    .map_err(|error| ProfileError::Metadata(error.to_string()))?
+                );
             }
             Ok(())
         }
@@ -414,6 +456,22 @@ pub fn run_command(args: &[String]) -> Result<(), ProfileError> {
                 metadata["active"] = Value::String(id);
             }
             write_metadata(&metadata)?;
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                        "schema_version": 1,
+                        "ok": true,
+                        "action": "add",
+                        "id": profile_id(provider_kind, &profile),
+                        "provider": provider_kind.name(),
+                        "profile": profile,
+                        "model": model,
+                    }))
+                    .map_err(|error| ProfileError::Metadata(error.to_string()))?
+                );
+                return Ok(());
+            }
             println!("Saved native provider profile; key value was not printed.");
             Ok(())
         }
@@ -436,6 +494,21 @@ pub fn run_command(args: &[String]) -> Result<(), ProfileError> {
             }
             metadata["active"] = Value::String(id);
             write_metadata(&metadata)?;
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                        "schema_version": 1,
+                        "ok": true,
+                        "action": "use",
+                        "id": profile_id(provider_kind, &profile),
+                        "provider": provider_kind.name(),
+                        "profile": profile,
+                    }))
+                    .map_err(|error| ProfileError::Metadata(error.to_string()))?
+                );
+                return Ok(());
+            }
             println!(
                 "Activated provider profile {} / {}.",
                 provider_kind.name(),
@@ -463,6 +536,21 @@ pub fn run_command(args: &[String]) -> Result<(), ProfileError> {
                 metadata["active"] = Value::Null;
             }
             write_metadata(&metadata)?;
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                        "schema_version": 1,
+                        "ok": true,
+                        "action": "remove",
+                        "id": id,
+                        "provider": provider_kind.name(),
+                        "profile": profile,
+                    }))
+                    .map_err(|error| ProfileError::Metadata(error.to_string()))?
+                );
+                return Ok(());
+            }
             println!(
                 "Removed provider profile {} / {}.",
                 provider_kind.name(),
@@ -473,11 +561,11 @@ pub fn run_command(args: &[String]) -> Result<(), ProfileError> {
         "help" => {
             println!("Usage:");
             println!(
-                "  secondego provider add PROVIDER --key-stdin [--profile NAME] [--model MODEL]"
+                "  secondego provider profile add PROVIDER --key-stdin [--profile NAME] [--model MODEL]"
             );
-            println!("  secondego provider use PROVIDER [--profile NAME]");
-            println!("  secondego provider list");
-            println!("  secondego provider remove PROVIDER [--profile NAME]");
+            println!("  secondego provider profile use PROVIDER [--profile NAME]");
+            println!("  secondego provider profile list [--json]");
+            println!("  secondego provider profile remove PROVIDER [--profile NAME]");
             Ok(())
         }
         _ => Err(ProfileError::Invalid(

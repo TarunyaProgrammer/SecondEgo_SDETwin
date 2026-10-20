@@ -22,13 +22,37 @@ Use stdin so the key does not appear in shell history:
 
 ```bash
 printf '%s\n' "$OPENAI_API_KEY" \
-  | secondego provider add openai --key-stdin --profile work --model gpt-5-mini
-secondego provider list
-secondego provider use openai --profile work
+  | secondego provider profile add openai --key-stdin --profile work --model gpt-5-mini
+secondego provider profile list
+secondego provider profile use openai --profile work
 secondego provider test
 secondego provider models
-secondego provider list --json
+secondego provider profile list --json
 ```
+
+`provider list` reports provider-level readiness. `provider profile list` reports
+the saved profile metadata and active profile as a separate stable contract:
+
+```json
+{
+  "schema_version": 1,
+  "active_profile": "openai:work",
+  "profiles": [
+    {
+      "id": "openai:work",
+      "provider": "openai",
+      "profile": "work",
+      "model": "gpt-5-mini",
+      "active": true,
+      "ready": true
+    }
+  ]
+}
+```
+
+The profile JSON contract never contains a key or vault value. Use it from
+launchers, shell integrations, or the desktop bridge when they need to render
+profile selection without parsing human-oriented output.
 
 On macOS, secrets are stored in Keychain. On Windows, terminal profiles use
 Windows Credential Manager. On Linux, secrets are stored in Secret

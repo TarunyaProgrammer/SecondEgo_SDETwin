@@ -96,6 +96,16 @@ fn main() {
     {
         if arguments
             .get(1)
+            .is_some_and(|argument| matches!(argument.as_str(), "profile" | "profiles"))
+        {
+            if let Err(error) = profiles::run_command(&arguments[2..]) {
+                eprintln!("SecondEgo provider profile command failed: {error}");
+                std::process::exit(2);
+            }
+            return;
+        }
+        if arguments
+            .get(1)
             .is_some_and(|argument| matches!(argument.as_str(), "add" | "use" | "remove"))
         {
             if let Err(error) = profiles::run_command(&arguments[1..]) {
@@ -288,6 +298,8 @@ fn print_help() {
     println!("  secondego --json --workspace PATH --task TEXT  Emit a stable JSON envelope");
     println!("  secondego discover --repo PATH           Scan a repository without modifying it");
     println!("  secondego provider list [--json]         Show providers and safe key status");
+    println!("  secondego provider profile list [--json] Show saved profile metadata");
+    println!("  secondego provider profile add PROVIDER --key-stdin");
     println!("  secondego provider models [--json]       Discover models for the active key");
     println!("  secondego help                           Show this command guide");
     println!();
@@ -456,8 +468,8 @@ fn run_provider_command(arguments: &[String]) -> Result<(), Box<dyn std::error::
             Ok(())
         }
         "help" => {
-            println!("Usage: secondego provider list | models | test | add | use | remove");
-            println!("Run 'secondego provider help' for profile command details.");
+            println!("Usage: secondego provider list | models | test | profile");
+            println!("Run 'secondego provider profile help' for profile command details.");
             Ok(())
         }
         command => Err(format!(
