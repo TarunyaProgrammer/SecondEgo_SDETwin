@@ -80,6 +80,7 @@ jobs:
       - name: Validate platform gateway resources
         working-directory: apps/desktop
         run: |
+          test -f build/dmg-background.png
           ruby -e '
             require "yaml"
             config = YAML.load_file("electron-builder.yml")

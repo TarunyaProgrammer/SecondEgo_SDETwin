@@ -78,9 +78,11 @@ parallel jobs do not overwrite each other's metadata. Manual dispatch can build
 unsigned candidates for QA; tagged macOS and Windows releases fail closed unless
 their signing credentials are present (macOS also requires notarization).
 
-The installer contract stays conventional: on macOS, open the DMG and drag
-SecondEgo to the provided Applications shortcut; on Windows, run the signed
-NSIS installer; on Linux, launch the AppImage after granting execute permission
-or install the `.deb` package. First launch performs gateway startup and the
+The installer contract stays conventional: on macOS, open the branded DMG and
+drag SecondEgo to the provided Applications shortcut; on Windows, run the
+signed NSIS installer; on Linux, launch the AppImage after granting execute
+permission or install the `.deb` package. The DMG artwork is intentionally
+static so Finder remains predictable and accessible; motion belongs in the
+first-run experience. First launch performs gateway startup and the
 provider-vault setup inside the app rather than asking users to copy binaries or
 edit release files by hand.

@@ -49,6 +49,7 @@ linux:
 dmg:
   title: SecondEgo
   artifactName: SecondEgo-${version}-${arch}.dmg
+  background: build/dmg-background.png
   backgroundColor: '#0b0f14'
   window:
     width: 720
