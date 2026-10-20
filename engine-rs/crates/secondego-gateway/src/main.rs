@@ -202,6 +202,9 @@ fn handle(
             list_provider_models(&mut stream, request.body, credentials)
         }
         ("POST", "/api/runs") => create_run(&mut stream, request.body, runs, voice, store, credentials),
+        ("GET", path) if path.split('?').next() == Some("/api/runs") => {
+            list_runs(&mut stream, path, store)
+        }
         ("POST", path) if path.starts_with("/api/runs/") && path.ends_with("/cancel") => {
             cancel_run(&mut stream, path, runs)
         }
@@ -954,6 +957,44 @@ fn persist_snapshot(
     if let Ok(store) = store.lock() {
         let _ = store.save_snapshot(state, events, metadata, result, error);
     }
+}
+
+fn list_runs(stream: &mut TcpStream, path: &str, store: &RunStore) -> std::io::Result<()> {
+    let limit = path
+        .split_once('?')
+        .and_then(|(_, query)| {
+            query
+                .split('&')
+                .find_map(|item| item.strip_prefix("limit="))
+                .and_then(|value| value.parse::<u32>().ok())
+        })
+        .unwrap_or(20)
+        .clamp(1, 50);
+    let summaries = match store.lock().ok().and_then(|store| store.list(limit).ok()) {
+        Some(summaries) => summaries,
+        None => return respond(stream, 500, serde_json::json!({"error":"run history unavailable"})),
+    };
+    let runs = summaries
+        .into_iter()
+        .map(|summary| {
+            serde_json::json!({
+                "request_id": summary.run_id,
+                "status": summary.status,
+                "profile_id": summary.metadata.profile_id,
+                "workspace": summary.metadata.workspace_id,
+                "provider": summary.metadata.provider,
+                "model": summary.metadata.model,
+                "engine_version": summary.metadata.engine_version,
+                "created_at": summary.created_at,
+                "updated_at": summary.updated_at,
+            })
+        })
+        .collect::<Vec<_>>();
+    respond(
+        stream,
+        200,
+        serde_json::json!({"api_version":API_VERSION,"runs":runs,"limit":limit}),
+    )
 }
 
 fn get_run(

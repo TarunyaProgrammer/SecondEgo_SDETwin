@@ -51,6 +51,15 @@ pub struct StoredRun {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredRunSummary {
+    pub run_id: String,
+    pub status: String,
+    pub metadata: RunMetadata,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
 impl SQLiteRunStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StorageError> {
         let connection = Connection::open(path)?;
@@ -213,6 +222,30 @@ impl SQLiteRunStore {
         }))
     }
 
+    pub fn list(&self, limit: u32) -> Result<Vec<StoredRunSummary>, StorageError> {
+        let bounded_limit = i64::from(limit.clamp(1, 100));
+        let mut statement = self.connection.prepare(
+            "SELECT run_id, status, profile_id, workspace_id, provider, model, engine_version, created_at, updated_at
+             FROM runs ORDER BY updated_at DESC, created_at DESC LIMIT ?1",
+        )?;
+        let rows = statement.query_map(params![bounded_limit], |row| {
+            Ok(StoredRunSummary {
+                run_id: row.get(0)?,
+                status: row.get(1)?,
+                metadata: RunMetadata {
+                    profile_id: row.get(2)?,
+                    workspace_id: row.get(3)?,
+                    provider: row.get(4)?,
+                    model: row.get(5)?,
+                    engine_version: row.get(6)?,
+                },
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(StorageError::from)
+    }
+
     fn migrate(&self) -> Result<(), StorageError> {
         self.connection.execute_batch(
             "PRAGMA foreign_keys = ON;
@@ -336,6 +369,10 @@ mod tests {
             .unwrap();
         assert_eq!(loaded.events.len(), 1);
         assert_eq!(loaded.result.unwrap()["verified"], true);
+        let summaries = store.list(10).unwrap();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].run_id, machine.state.run_id.to_string());
+        assert_eq!(summaries[0].metadata, metadata);
     }
 
     #[test]

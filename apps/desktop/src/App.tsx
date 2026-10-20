@@ -3,7 +3,7 @@ import logoUrl from "./assets/secondego-logo.png";
 import { GestureIndicator } from "./components/GestureIndicator";
 import { phaseGroupFor, phaseGroups, VillageScene, workerStateFor, workers } from "./components/VillageScene";
 import { useGestureControl } from "./hooks/useGestureControl";
-import type { DiscoveryFinding, EngineEvent, GestureActionType, GestureEvent, ProviderModel, ProviderProfile, ProviderProfileSnapshot, RunResult, RunView, VoiceSnapshot } from "./types";
+import type { DiscoveryFinding, EngineEvent, GestureActionType, GestureEvent, ProviderModel, ProviderProfile, ProviderProfileSnapshot, RunResult, RunSummary, RunView, VoiceSnapshot } from "./types";
 
 const defaultGateway =
   new URLSearchParams(window.location.search).get("gateway") ||
@@ -220,6 +220,10 @@ function App() {
   const [error, setError] = useState("");
   const [notchOpen, setNotchOpen] = useState(!notchMode);
   const [showSettings, setShowSettings] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [history, setHistory] = useState<RunSummary[]>([]);
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const [historyMessage, setHistoryMessage] = useState("");
   const [providerProfiles, setProviderProfiles] = useState<ProviderProfileSnapshot>({ active: null, entries: [] });
   const [providerChoice, setProviderChoice] = useState("deepseek");
   const [profileName, setProfileName] = useState("default");
@@ -335,6 +339,41 @@ function App() {
       setProviderModelsStatus(reason instanceof Error ? reason.message : "Could not discover provider models.");
     } finally {
       setProviderModelsBusy(false);
+    }
+  }
+
+  async function loadHistory() {
+    setHistoryBusy(true);
+    setHistoryMessage("");
+    try {
+      const response = await fetch(`${api}/api/runs?limit=20`, { headers: { "X-SecondEgo-Token": token } });
+      const payload = (await response.json()) as { runs?: RunSummary[]; error?: string };
+      if (!response.ok) throw new Error(payload.error || "Could not load run history.");
+      setHistory(Array.isArray(payload.runs) ? payload.runs : []);
+    } catch (reason) {
+      setHistoryMessage(reason instanceof Error ? reason.message : "Could not load run history.");
+    } finally {
+      setHistoryBusy(false);
+    }
+  }
+
+  async function openHistoryRun(summary: RunSummary) {
+    setHistoryBusy(true);
+    setHistoryMessage("");
+    try {
+      const response = await fetch(`${api}/api/runs/${summary.request_id}`, { headers: { "X-SecondEgo-Token": token } });
+      const payload = (await response.json()) as RunView & { error?: string };
+      if (!response.ok) throw new Error(payload.error || "Could not reopen this run.");
+      setRun(payload);
+      setBusy(false);
+      setStopping(false);
+      setHistoryOpen(false);
+      setShowSettings(false);
+      setNotchOpen(true);
+    } catch (reason) {
+      setHistoryMessage(reason instanceof Error ? reason.message : "Could not reopen this run.");
+    } finally {
+      setHistoryBusy(false);
     }
   }
 
@@ -553,6 +592,24 @@ function App() {
         <div className="app-header-meta"><span className="workspace-badge"><i />local-first</span><div className={`status ${statusTone}`}><i />{run ? statusLabel : "ready"}</div><button className="desktop-settings-trigger" type="button" onClick={() => setShowSettings((open) => !open)} aria-expanded={showSettings} aria-controls="notch-settings" aria-label="Open settings">⚙</button></div>
       </header>
 
+      <nav className="workspace-nav" aria-label="Workspace navigation">
+        <button type="button" className="workspace-nav__active" onClick={() => { setHistoryOpen(false); setNotchOpen(true); }}>Mission control</button>
+        <button type="button" onClick={() => { setHistoryOpen(true); setShowSettings(false); void loadHistory(); }}>Run history</button>
+        <button type="button" onClick={() => { setHistoryOpen(false); setShowSettings(true); setNotchOpen(true); }}>Providers</button>
+        <span className="workspace-nav__hint">local workspace</span>
+      </nav>
+      {historyOpen && (
+        <section className="history-drawer" aria-label="Run history">
+          <header className="history-drawer__header">
+            <div><span className="kicker">Durable evidence</span><h2>Run history</h2></div>
+            <button type="button" onClick={() => setHistoryOpen(false)} aria-label="Close run history">×</button>
+          </header>
+          {historyBusy && <p className="history-drawer__state">Loading local run snapshots…</p>}
+          {!historyBusy && historyMessage && <p className="history-drawer__state is-error" role="alert">{historyMessage}</p>}
+          {!historyBusy && !historyMessage && history.length === 0 && <p className="history-drawer__state">No completed runs yet. Start a mission to create the first evidence snapshot.</p>}
+          {!historyBusy && history.length > 0 && <div className="history-list">{history.map((summary) => <button type="button" className="history-item" key={summary.request_id} onClick={() => void openHistoryRun(summary)}><span className="history-item__status"><i />{summary.status}</span><strong>{summary.provider || "local"}{summary.model ? ` / ${summary.model}` : ""}</strong><small>{summary.workspace || "workspace unavailable"}</small><code>{summary.request_id.slice(0, 8)} · {summary.updated_at || summary.created_at || "saved locally"}</code></button>)}</div>}
+        </section>
+      )}
       <section className="command-surface">
         <button className="notch-trigger" type="button" onClick={() => {
           setNotchOpen((open) => {

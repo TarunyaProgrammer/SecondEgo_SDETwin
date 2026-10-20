@@ -132,6 +132,32 @@ The response is asynchronous:
 `mode: "discover"` starts a read-only repository scan. Discovery accepts
 bounded `lenses` and `max_findings` fields.
 
+## Run history
+
+```http
+GET /api/runs?limit=20
+X-SecondEgo-Token: <launch token>
+```
+
+Returns bounded, metadata-only summaries from the local SQLite run store. The
+desktop uses these summaries for its history menu and reopens a selected run
+through the normal `GET /api/runs/<uuid>` contract.
+
+```json
+{
+  "api_version": 1,
+  "limit": 20,
+  "runs": [{
+    "request_id": "<uuid>",
+    "status": "Complete",
+    "workspace": "/absolute/path/to/repository",
+    "provider": "openai",
+    "model": "gpt-5-mini",
+    "updated_at": "2026-10-19 10:20:30"
+  }]
+}
+```
+
 ## Read a run
 
 ```http

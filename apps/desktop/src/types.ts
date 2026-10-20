@@ -87,6 +87,18 @@ export type RunView = {
   voice?: VoiceSnapshot;
 };
 
+export type RunSummary = {
+  request_id: string;
+  status: string;
+  profile_id?: string | null;
+  workspace?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  engine_version?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
 export type GestureActionType =
   | "expand_notch"
   | "collapse_notch";
