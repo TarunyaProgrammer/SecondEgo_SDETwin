@@ -185,7 +185,8 @@ The terminal should use a stable event renderer with:
 - explicit `PLAN`, `EXECUTE`, `VERIFY`, `RECOVER`, and `DIFF` sections;
 - keyboard commands: cancel, pause, expand evidence, open diff, retry, quit;
 - final summary containing status, changed paths, verification commands, and next action;
-- `--json` and `--no-color` modes for scripts and CI.
+- `--json` and `--no-color` modes for scripts and CI;
+- `--ui events` as a pure, live JSONL stream followed by one `run.completed` summary line.
 
 The Rust CLI should own rendering. The Python TUI should remain a compatibility surface until the migration is complete.
 

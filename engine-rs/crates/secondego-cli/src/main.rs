@@ -9,13 +9,13 @@ use std::time::Duration;
 
 use secondego_core::ActionProposal;
 use secondego_model::{
-    ConfiguredProvider, ModelProvider, ProviderContext, ProviderKind, ScriptedProvider,
-    available_models_for_provider, configured_model,
+    available_models_for_provider, configured_model, ConfiguredProvider, ModelProvider,
+    ProviderContext, ProviderKind, ScriptedProvider,
 };
-use secondego_runtime::discovery::{DiscoveryLens, DiscoveryRequest, discover};
+use secondego_runtime::discovery::{discover, DiscoveryLens, DiscoveryRequest};
 use secondego_runtime::{
-    CancellationToken, RuntimeError, RustEngine, collect_garbage, resolve_repository,
-    resolve_repository_with_cancellation, voice::VoiceService,
+    collect_garbage, resolve_repository, resolve_repository_with_cancellation, voice::VoiceService,
+    CancellationToken, RuntimeError, RustEngine,
 };
 
 mod profiles;
@@ -27,6 +27,7 @@ const MUTED: &str = "38;2;170;143;92";
 static INTERRUPT_REQUESTED: AtomicBool = AtomicBool::new(false);
 static RUN_ACTIVE: AtomicBool = AtomicBool::new(false);
 static PARENT_TERMINAL_PGRP: AtomicI32 = AtomicI32::new(0);
+static FORCE_NO_COLOR: AtomicBool = AtomicBool::new(false);
 
 fn augment_env_path() {
     if let Some(path) = env::var_os("PATH") {
@@ -152,7 +153,13 @@ fn main() {
         return;
     }
     let json_output = arguments.iter().any(|argument| argument == "--json");
-    let interactive = arguments.iter().any(|argument| argument == "--interactive") && !json_output;
+    let events = value(&arguments, "--ui").as_deref() == Some("events") && !json_output;
+    let interactive =
+        arguments.iter().any(|argument| argument == "--interactive") && !json_output && !events;
+    FORCE_NO_COLOR.store(
+        arguments.iter().any(|argument| argument == "--no-color"),
+        Ordering::Release,
+    );
     let cancellation = CancellationToken::default();
     if interactive {
         install_cancel_handler();
@@ -213,7 +220,6 @@ fn main() {
     if interactive {
         RUN_ACTIVE.store(true, Ordering::Release);
     }
-    let events = value(&arguments, "--ui").as_deref() == Some("events");
     let state_db = value(&arguments, "--state-db");
     let resolved = match resolve_repository_with_cancellation(&workspace, Some(&cancellation)) {
         Ok(repository) => repository,
@@ -319,6 +325,8 @@ fn print_help() {
     println!("  secondego --interactive                 Run the verified task-fixing harness");
     println!("  secondego --workspace PATH --task TEXT   Run a non-interactive task");
     println!("  secondego --json --workspace PATH --task TEXT  Emit a stable JSON envelope");
+    println!("  --ui events                              Stream versioned JSONL events");
+    println!("  --no-color                               Disable ANSI colors in human output");
     println!("  secondego discover --repo PATH           Scan a repository without modifying it");
     println!("  secondego provider list [--json]         Show providers and safe key status");
     println!("  secondego provider profile list [--json] Show saved profile metadata");
@@ -1383,7 +1391,11 @@ fn print_preflight_with_credentials(config: &LaunchConfig, credentials: &Runtime
 }
 
 fn secret_status(present: bool) -> &'static str {
-    if present { "PRESENT" } else { "MISSING" }
+    if present {
+        "PRESENT"
+    } else {
+        "MISSING"
+    }
 }
 
 fn model_api_key_name() -> &'static str {
@@ -1478,7 +1490,9 @@ fn run_scripted(
     let mut engine = RustEngine::new(ScriptedProvider::new(vec![proposal]))
         .with_cancellation(cancellation)
         .with_voice(voice.clone());
-    if interactive && !events {
+    if events {
+        engine = engine.with_event_sink(print_json_event);
+    } else if interactive {
         engine = engine.with_event_sink(print_live_event);
     }
     let report = engine.run(task, &workspace)?;
@@ -1506,7 +1520,9 @@ fn run_configured(
     let mut engine = RustEngine::new(ConfiguredProvider::from_environment()?)
         .with_cancellation(cancellation)
         .with_voice(voice.clone());
-    if interactive && !events {
+    if events {
+        engine = engine.with_event_sink(print_json_event);
+    } else if interactive {
         engine = engine.with_event_sink(print_live_event);
     }
     let report = engine.run(task, &workspace)?;
@@ -1531,9 +1547,7 @@ fn emit_report(
     workspace: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if events {
-        for event in &report.events {
-            println!("{}", serde_json::to_string(event)?);
-        }
+        print_json_summary(&report);
     }
     if let Some(path) = state_db {
         let metadata = secondego_storage::RunMetadata {
@@ -1583,7 +1597,7 @@ fn emit_report(
         if let Some(voice) = voice {
             print_voice_summary(voice, report.state.run_id);
         }
-    } else {
+    } else if !events {
         println!("{}", serde_json::to_string_pretty(&report)?);
     }
     if passed {
@@ -1903,6 +1917,29 @@ fn panel_value(value: &str, width: usize) -> String {
     format!("{shortened}…")
 }
 
+fn print_json_event(event: &secondego_core::EngineEvent) {
+    match serde_json::to_string(event) {
+        Ok(line) => println!("{line}"),
+        Err(error) => eprintln!("SecondEgo could not serialize an engine event: {error}"),
+    }
+    let _ = io::stdout().flush();
+}
+
+fn print_json_summary(report: &secondego_runtime::RunReport) {
+    let summary = serde_json::json!({
+        "schema_version": 1,
+        "event_type": "run.completed",
+        "run_id": report.state.run_id,
+        "status": format!("{:?}", report.state.status),
+        "verification_passed": report.verification_passed,
+        "diff_transferred": report.diff_transferred,
+        "changed_paths": report.changed_paths,
+        "termination_reason": report.state.termination_reason,
+    });
+    println!("{}", summary);
+    let _ = io::stdout().flush();
+}
+
 fn print_live_event(event: &secondego_core::EngineEvent) {
     let icon = match event.event_type.as_str() {
         "tool.completed" => "→",
@@ -2199,7 +2236,10 @@ fn print_error_card(error: &dyn std::error::Error, workspace: &Path) {
 }
 
 fn paint(code: &str, value: &str) -> String {
-    if io::stdout().is_terminal() && env::var_os("NO_COLOR").is_none() {
+    if io::stdout().is_terminal()
+        && env::var_os("NO_COLOR").is_none()
+        && !FORCE_NO_COLOR.load(Ordering::Acquire)
+    {
         format!("\x1b[{code}m{value}\x1b[0m")
     } else {
         value.to_owned()
@@ -2208,7 +2248,7 @@ fn paint(code: &str, value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{LaunchConfig, Surface, parse_bool, secret_status};
+    use super::{parse_bool, secret_status, LaunchConfig, Surface};
 
     #[test]
     fn boolean_configuration_accepts_safe_user_forms() {
