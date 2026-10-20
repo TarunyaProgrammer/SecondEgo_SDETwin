@@ -62,6 +62,34 @@ secondego completion bash > ~/.local/share/bash-completion/completions/secondego
 secondego completion fish > ~/.config/fish/completions/secondego.fish
 ```
 
+## Setup diagnostics
+
+Use `secondego doctor` when a fresh install or support request needs a single
+safe report:
+
+```bash
+secondego doctor
+secondego doctor --workspace /path/to/repository --json
+```
+
+The schema-versioned JSON report contains only provider/model ids, profile ids,
+readiness sources, dependency availability, and bounded workspace status. It
+never contains credential values. A missing unselected provider is a warning;
+the active provider, model, Git, and an explicitly supplied workspace are
+required checks.
+
+```json
+{
+  "schema_version": 1,
+  "ok": true,
+  "selected_provider": "openai",
+  "selected_model": "gpt-5-mini",
+  "checks": [
+    {"id": "selected_key", "status": "pass", "required": true}
+  ]
+}
+```
+
 On macOS, secrets are stored in Keychain. On Windows, terminal profiles use
 Windows Credential Manager. On Linux, secrets are stored in Secret
 Service/libsecret through `secret-tool`. `profiles.json` contains only

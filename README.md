@@ -424,6 +424,22 @@ be present in the environment. Optional voice credentials entered at a
 terminal prompt are kept in memory for that process and are never written to
 `.env`, profiles, reports, or the renderer.
 
+For a support-friendly, machine-readable setup report, run:
+
+```bash
+secondego doctor
+secondego doctor --json
+secondego doctor --workspace /path/to/repository --json
+```
+
+Doctor checks the selected provider/model, selected credential readiness,
+native profile access, Git, optional desktop prerequisites, and (when supplied)
+the repository boundary. It never prints key values. The JSON output is
+schema-versioned and uses `pass`, `warn`, or `fail` statuses so installers,
+CI, and the desktop support flow can consume it without parsing terminal art.
+Missing unselected provider keys are warnings; only the active provider and
+other required launch capabilities can make the report fail.
+
 The optional browser observer is started with:
 
 ```bash

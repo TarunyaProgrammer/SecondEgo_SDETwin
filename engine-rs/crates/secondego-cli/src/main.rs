@@ -73,6 +73,16 @@ fn main() {
         }
         return;
     }
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == "doctor")
+    {
+        if let Err(error) = run_doctor(&arguments[1..]) {
+            eprintln!("SecondEgo doctor failed: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     let gc = collect_garbage();
     if gc.deleted > 0 {
         eprintln!(
@@ -303,6 +313,9 @@ fn print_help() {
     println!("COMMANDS");
     println!("  secondego launch                       Resolve features, then start a run");
     println!("  secondego preflight                    Show safe capability status");
+    println!(
+        "  secondego doctor [--json]              Diagnose local setup without printing secrets"
+    );
     println!("  secondego --interactive                 Run the verified task-fixing harness");
     println!("  secondego --workspace PATH --task TEXT   Run a non-interactive task");
     println!("  secondego --json --workspace PATH --task TEXT  Emit a stable JSON envelope");
@@ -347,7 +360,7 @@ fn print_completion(shell: Option<&str>) -> Result<(), &'static str> {
             "{}",
             r#"_secondego() {
   local cur="${COMP_WORDS[COMP_CWORD]}"
-  local commands="launch preflight discover provider providers completion completions help"
+  local commands="launch preflight doctor discover provider providers completion completions help"
   if [[ ${COMP_CWORD} -eq 1 ]]; then
     COMPREPLY=( $(compgen -W "${commands}" -- "${cur}") )
     return
@@ -368,7 +381,7 @@ complete -F _secondego secondego
             r#"#compdef secondego
 
 _secondego() {
-  _arguments '1:command:(launch preflight discover provider providers completion completions help)' \
+  _arguments '1:command:(launch preflight doctor discover provider providers completion completions help)' \
     '*::argument:->args'
   case "$words[2]" in
     provider|providers)
@@ -385,7 +398,7 @@ _secondego "$@"
         ),
         "fish" => println!(
             "{}",
-            r#"complete -c secondego -f -n '__fish_use_subcommand' -a 'launch preflight discover provider providers completion completions help'
+            r#"complete -c secondego -f -n '__fish_use_subcommand' -a 'launch preflight doctor discover provider providers completion completions help'
 complete -c secondego -f -n '__fish_seen_subcommand_from provider providers; and test (count (commandline -opc)) -eq 2' -a 'list status models test profile add use remove help'
 complete -c secondego -f -n '__fish_seen_subcommand_from completion completions; and test (count (commandline -opc)) -eq 2' -a 'bash zsh fish'
 "#
@@ -568,6 +581,270 @@ struct RuntimeCredentials {
     anthropic_api_key: Option<String>,
     openrouter_api_key: Option<String>,
     groq_api_key: Option<String>,
+}
+
+fn run_doctor(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let json_output = arguments.iter().any(|argument| argument == "--json");
+    let workspace = value(arguments, "--workspace");
+
+    // Resolve the active vault profile before checking readiness. The key is
+    // process-local and is never included in the report.
+    let profile_load_error = profiles::load_active_into_environment().err();
+    let provider_result = ProviderKind::from_environment();
+    let model_result = configured_model();
+    let credentials = RuntimeCredentials {
+        ai_api_key: non_empty_env("AI_API_KEY"),
+        deepseek_api_key: non_empty_env("DEEPSEEK_API_KEY"),
+        gemini_api_key: non_empty_env("GEMINI_API_KEY"),
+        openai_api_key: non_empty_env("OPENAI_API_KEY"),
+        anthropic_api_key: non_empty_env("ANTHROPIC_API_KEY"),
+        openrouter_api_key: non_empty_env("OPENROUTER_API_KEY"),
+        groq_api_key: non_empty_env("GROQ_API_KEY"),
+    };
+    let vault_status = profiles::provider_vault_status();
+    let vault_lookup = |provider: ProviderKind| {
+        vault_status
+            .as_ref()
+            .ok()
+            .and_then(|items| items.iter().find(|(item, _)| *item == provider))
+            .is_some_and(|(_, ready)| *ready)
+    };
+    let selected_provider = provider_result.as_ref().ok().copied();
+    let selected_key_present = selected_provider.is_some_and(|provider| {
+        let value = match provider {
+            ProviderKind::DeepSeek => credentials.deepseek_api_key.as_ref(),
+            ProviderKind::Gemini => credentials.gemini_api_key.as_ref(),
+            ProviderKind::OpenAI => credentials.openai_api_key.as_ref(),
+            ProviderKind::Anthropic => credentials.anthropic_api_key.as_ref(),
+            ProviderKind::OpenRouter => credentials.openrouter_api_key.as_ref(),
+            ProviderKind::Groq => credentials.groq_api_key.as_ref(),
+        };
+        value
+            .or(credentials.ai_api_key.as_ref())
+            .is_some_and(|key| !key.trim().is_empty())
+            || vault_lookup(provider)
+    });
+
+    let mut checks = Vec::new();
+    let mut fatal = false;
+    macro_rules! add_check {
+        ($id:expr, $status:expr, $detail:expr, $required:expr $(,)?) => {{
+            let status = $status;
+            let required = $required;
+            if required && status == "fail" {
+                fatal = true;
+            }
+            checks.push(serde_json::json!({
+                "id": $id,
+                "status": status,
+                "detail": $detail,
+                "required": required,
+            }));
+        }};
+    }
+
+    add_check!(
+        "engine",
+        "pass",
+        format!(
+            "Rust CLI {} on {}/{}",
+            env!("CARGO_PKG_VERSION"),
+            env::consts::OS,
+            env::consts::ARCH
+        ),
+        true,
+    );
+    match &provider_result {
+        Ok(provider) => add_check!(
+            "provider",
+            "pass",
+            format!("selected provider: {}", provider.name()),
+            true,
+        ),
+        Err(error) => add_check!("provider", "fail", error.to_string(), true),
+    }
+    match &model_result {
+        Ok(model) => add_check!("model", "pass", format!("selected model: {model}"), true),
+        Err(error) => add_check!("model", "fail", error.to_string(), true),
+    }
+    match selected_provider {
+        Some(provider) if selected_key_present => add_check!(
+            "selected_key",
+            "pass",
+            format!("{} credential is available", provider.credential_env_name()),
+            true,
+        ),
+        Some(provider) => add_check!(
+            "selected_key",
+            "fail",
+            format!(
+                "{} is missing; add a named key or provider profile",
+                provider.credential_env_name()
+            ),
+            true,
+        ),
+        None => add_check!(
+            "selected_key",
+            "fail",
+            String::from("provider selection is invalid"),
+            true
+        ),
+    }
+
+    if let Some(error) = profile_load_error {
+        add_check!(
+            "native_vault",
+            "warn",
+            format!("could not read native profiles: {error}"),
+            false
+        );
+    } else if vault_status.is_ok() {
+        add_check!(
+            "native_vault",
+            "pass",
+            String::from("native profile metadata is readable"),
+            false
+        );
+    } else {
+        add_check!(
+            "native_vault",
+            "warn",
+            String::from("native profile status is unavailable"),
+            false
+        );
+    }
+
+    for provider in ProviderKind::all() {
+        let environment = non_empty_env(provider.credential_env_name()).is_some();
+        let legacy = non_empty_env("AI_API_KEY").is_some();
+        let vault = vault_lookup(provider);
+        let status = if environment || vault || legacy {
+            "ready"
+        } else {
+            "missing"
+        };
+        let source = if environment {
+            "environment"
+        } else if vault {
+            "native_vault"
+        } else if legacy {
+            "legacy_environment"
+        } else {
+            "none"
+        };
+        checks.push(serde_json::json!({
+            "id": format!("provider:{}", provider.name()),
+            "status": if status == "ready" { "pass" } else { "warn" },
+            "detail": format!("{}: {status} ({source})", provider.credential_env_name()),
+            "required": false,
+        }));
+    }
+
+    add_check!(
+        "git",
+        if command_available("git") {
+            "pass"
+        } else {
+            "fail"
+        },
+        if command_available("git") {
+            String::from("git is available")
+        } else {
+            String::from("git is required for repository attempts")
+        },
+        true,
+    );
+    add_check!(
+        "node",
+        if command_available("node") {
+            "pass"
+        } else {
+            "warn"
+        },
+        if command_available("node") {
+            String::from("node is available for the desktop surface")
+        } else {
+            String::from("node is not installed; terminal runs still work")
+        },
+        false,
+    );
+    add_check!(
+        "npm",
+        if command_available("npm") {
+            "pass"
+        } else {
+            "warn"
+        },
+        if command_available("npm") {
+            String::from("npm is available for the desktop surface")
+        } else {
+            String::from("npm is not installed; desktop setup cannot run")
+        },
+        false,
+    );
+
+    if let Some(workspace) = workspace {
+        let path = PathBuf::from(&workspace);
+        let valid = path.is_dir();
+        let git_metadata = valid && (path.join(".git").is_dir() || path.join(".git").is_file());
+        add_check!(
+            "workspace",
+            if valid && git_metadata {
+                "pass"
+            } else {
+                "fail"
+            },
+            if !valid {
+                format!("workspace does not exist: {workspace}")
+            } else if !git_metadata {
+                format!("workspace is not a Git repository: {workspace}")
+            } else {
+                format!("Git workspace is ready: {}", path.display())
+            },
+            true,
+        );
+    } else {
+        add_check!(
+            "workspace",
+            "warn",
+            String::from("no workspace supplied; use --workspace PATH for a repository check"),
+            false
+        );
+    }
+
+    let report = serde_json::json!({
+        "schema_version": 1,
+        "ok": !fatal,
+        "selected_provider": selected_provider.map(ProviderKind::name),
+        "selected_model": model_result.ok(),
+        "profile_id": env::var("SECONDEGO_PROFILE_ID").ok(),
+        "checks": checks,
+    });
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("SecondEgo doctor — secret-free local diagnostics");
+        for check in report["checks"].as_array().into_iter().flatten() {
+            let status = check["status"].as_str().unwrap_or("unknown");
+            let marker = match status {
+                "pass" => "✓",
+                "warn" => "·",
+                _ => "✗",
+            };
+            println!(
+                "  {marker} {:<20} {}",
+                check["id"].as_str().unwrap_or("check"),
+                check["detail"].as_str().unwrap_or("")
+            );
+        }
+        println!();
+        println!("Result: {}", if fatal { "NOT READY" } else { "READY" });
+    }
+    if fatal {
+        Err("one or more required checks failed".into())
+    } else {
+        Ok(())
+    }
 }
 
 fn run_preflight(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {

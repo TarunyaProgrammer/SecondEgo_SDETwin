@@ -56,7 +56,7 @@ if [ -f ".env" ]; then \
 fi;
 endef
 
-.PHONY: setup setup-python setup-desktop check-git check-rust check-python check-node config run run-rust run-python discover help ui desktop desktop-electron desktop-macos judge rust-check rust-test rust-build rust-build-release rust-run gc test clean
+.PHONY: setup setup-python setup-desktop check-git check-rust check-python check-node config run run-rust run-python discover doctor help ui desktop desktop-electron desktop-macos judge rust-check rust-test rust-build rust-build-release rust-run gc test clean
 
 check-git:
 	@command -v git >/dev/null 2>&1 || { echo "Error: git is required. Install Git, then re-run make setup."; exit 2; }
@@ -155,6 +155,9 @@ help: rust-build
 discover: rust-build
 	@test -n "$(REPO)" || (echo "Usage: make discover REPO=/path/to/repository [LENSES=error,test,structural]"; exit 2)
 	"$(CURDIR)/engine-rs/target/debug/secondego-cli" discover --repo "$(REPO)" $(if $(LENSES),--lens "$(LENSES)",)
+
+doctor: rust-build
+	"$(CURDIR)/engine-rs/target/debug/secondego-cli" doctor $(if $(REPO),--workspace "$(REPO)",) $(if $(JSON),--json,)
 
 desktop:
 	@$(LOAD_LOCAL_ENV) \

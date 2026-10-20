@@ -22,6 +22,15 @@ jobs:
       - name: Test locked workspace
         working-directory: engine-rs
         run: cargo test --locked --workspace
+      - name: Verify secret-free doctor contract
+        working-directory: engine-rs
+        env:
+          DEEPSEEK_API_KEY: ci-placeholder-key
+        run: |
+          cargo run --locked -p secondego-cli -- doctor --json --workspace .. > doctor.json
+          grep -q '"schema_version": 1' doctor.json
+          grep -q '"ok": true' doctor.json
+          ! grep -q 'ci-placeholder-key' doctor.json
 
   web:
     name: Marketing website
