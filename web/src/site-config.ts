@@ -86,9 +86,9 @@ export const siteConfig = {
   ],
 } as const;
 
-// Release jobs can provide exact artifact URLs at build time. Until they do,
-// the download page deliberately falls back to the public release index rather
-// than inventing a file that may not exist.
+// Release jobs provide exact artifact URLs at build time. The website is the
+// only public download gateway; an unset URL keeps that platform unavailable
+// instead of sending visitors to a secondary release surface.
 const releaseEnv = typeof import.meta !== "undefined" ? import.meta.env : undefined;
 export const downloadConfig = {
   macOS: releaseEnv?.VITE_DOWNLOAD_MAC_URL || "",

@@ -13,7 +13,7 @@ npm run dev
 
 The static bundle is written to `dist/` by `npm run build`. The site uses Manrope, DM Sans, and Instrument Serif with system fallbacks; there is no terminal-style font in the product UI. If a deployment must be fully offline, remove the Google Fonts import in `src/styles.css` and provide local font assets.
 
-Routes are handled by the lightweight client router in `src/App.tsx`: `/`, `/docs`, `/download`, `/about`, and `/terms`. The download page detects macOS, Windows, or Linux from the browser user agent and highlights the matching release card. GitHub Releases remains the source of truth for artifact availability.
+Routes are handled by the lightweight client router in `src/App.tsx`: `/`, `/docs`, `/download`, `/about`, `/terms`, and `/terms-and-conditions`. The download page detects macOS, Windows, or Linux from the browser user agent and highlights the matching release card. The website is the only public download gateway; a platform is enabled only when its exact signed artifact URL is configured at build time.
 
 Published deployments can promote exact artifact links without changing the UI:
 
@@ -24,9 +24,10 @@ VITE_DOWNLOAD_LINUX_URL="https://.../SecondEgo-x64.AppImage" \\
 npm run build
 ```
 
-When a URL is absent, the platform card stays honest and links to the project
-release/source page instead of fabricating a download. This lets the website
-remain deployable before the first signed artifacts exist.
+When a URL is absent, the platform card stays unavailable and does not link to
+GitHub or any secondary download surface. This keeps the website deployable
+before the first signed artifacts exist without violating the distribution
+policy.
 
 The included `public/_redirects` and `vercel.json` keep those history routes working on common static hosts. Configure an equivalent SPA fallback if deploying elsewhere.
 
@@ -49,4 +50,4 @@ npm run generate:og
 The generator uses the portable `@resvg/resvg-js` renderer, so it does not
 depend on macOS `sips` or an ImageMagick installation in CI.
 
-The architecture copy is based on the current project context and evaluation materials. The recovery panel is an architecture walkthrough, not a customer case study. The footer signup field is intentionally a status message; it does not submit email addresses anywhere. Release downloads currently come from GitHub Releases with platform-specific artifacts, checksums, and manifests; signing, notarization, and update channels remain release-infrastructure work.
+The architecture copy is based on the current project context and evaluation materials. The recovery panel is an architecture walkthrough, not a customer case study. The footer signup field is intentionally a status message; it does not submit email addresses anywhere. Release jobs produce platform-specific artifacts, checksums, and manifests; signing, notarization, direct website URLs, and update channels remain release-infrastructure gates.
