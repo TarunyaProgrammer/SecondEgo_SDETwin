@@ -1836,6 +1836,167 @@ fn normalize_rationale(value: Option<&Value>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::thread::JoinHandle;
+
+    fn read_http_request(stream: &mut TcpStream) -> String {
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        let header_end = loop {
+            let count = stream.read(&mut buffer).expect("read mock request");
+            assert!(count > 0, "mock client closed before sending headers");
+            bytes.extend_from_slice(&buffer[..count]);
+            if let Some(index) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                break index + 4;
+            }
+            assert!(bytes.len() < 64 * 1024, "mock request headers are unbounded");
+        };
+        let headers = String::from_utf8_lossy(&bytes[..header_end]);
+        let content_length = headers
+            .lines()
+            .find_map(|line| line.strip_prefix("Content-Length:").or_else(|| line.strip_prefix("content-length:")))
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .unwrap_or_default();
+        while bytes.len() < header_end + content_length {
+            let count = stream.read(&mut buffer).expect("read mock request body");
+            assert!(count > 0, "mock client closed before sending body");
+            bytes.extend_from_slice(&buffer[..count]);
+        }
+        String::from_utf8_lossy(&bytes[..header_end + content_length]).into_owned()
+    }
+
+    fn mock_json_server(payload: Value) -> (String, JoinHandle<String>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind mock provider server");
+        let address = listener.local_addr().expect("mock provider address");
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept mock provider request");
+            let request = read_http_request(&mut stream);
+            let body = serde_json::to_vec(&payload).expect("serialize mock response");
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .expect("write mock provider headers");
+            stream.write_all(&body).expect("write mock provider body");
+            request
+        });
+        (format!("http://{address}"), handle)
+    }
+
+    fn valid_openai_response() -> Value {
+        serde_json::json!({
+            "choices": [{"message": {"content": r#"{"action":"submit_plan","arguments":{},"rationale":"ok"}"#}}],
+            "usage": {"prompt_tokens": 8, "completion_tokens": 5, "total_tokens": 13}
+        })
+    }
+
+    fn valid_gemini_response() -> Value {
+        serde_json::json!({
+            "candidates": [{"content": {"parts": [{"text": r#"{"action":"submit_plan","arguments":{},"rationale":"ok"}"#}]}}],
+            "usageMetadata": {"promptTokenCount": 8, "candidatesTokenCount": 5, "totalTokenCount": 13}
+        })
+    }
+
+    fn valid_anthropic_response() -> Value {
+        serde_json::json!({
+            "content": [{"type": "text", "text": r#"{"action":"submit_plan","arguments":{},"rationale":"ok"}"#}],
+            "usage": {"input_tokens": 8, "output_tokens": 5}
+        })
+    }
+
+    fn provider_context() -> ProviderContext {
+        ProviderContext { run_id: "contract-test".into(), phase: "PLAN".into() }
+    }
+
+    fn assert_request_contract(request: &str, path: &str, key: &str, model: &str) {
+        assert!(request.starts_with(&format!("POST {path} HTTP/1.1")), "unexpected request line: {request}");
+        let lower = request.to_ascii_lowercase();
+        assert!(lower.contains(&format!("authorization: bearer {key}")), "missing bearer auth: {request}");
+        let body = request.split("\r\n\r\n").nth(1).unwrap_or_default();
+        assert!(body.contains(&format!("\"model\":\"{model}\"")), "missing model in request body: {body}");
+        assert!(!body.contains(key), "credential leaked into request body: {body}");
+    }
+
+    #[test]
+    fn required_provider_adapters_pass_transport_contracts() {
+        let (base_url, server) = mock_json_server(valid_openai_response());
+        let response = DeepSeekProvider {
+            model: "deepseek-chat".into(),
+            api_key: Some("deepseek-secret".into()),
+            base_url,
+            timeout: Duration::from_secs(5),
+        }
+        .generate("make a plan", &provider_context())
+        .expect("DeepSeek contract request");
+        assert_eq!(response.proposal.action, "submit_plan");
+        assert_eq!(response.usage.total_tokens, Some(13));
+        let request = server.join().expect("DeepSeek contract server");
+        assert_request_contract(&request, "/chat/completions", "deepseek-secret", "deepseek-chat");
+
+        let (base_url, server) = mock_json_server(valid_gemini_response());
+        let response = GeminiProvider {
+            model: "gemini-test".into(),
+            api_key: Some("gemini-secret".into()),
+            base_url,
+            timeout: Duration::from_secs(5),
+        }
+        .generate("make a plan", &provider_context())
+        .expect("Gemini contract request");
+        assert_eq!(response.proposal.action, "submit_plan");
+        assert_eq!(response.usage.total_tokens, Some(13));
+        let request = server.join().expect("Gemini contract server");
+        assert!(request.starts_with("POST /models/gemini-test:generateContent HTTP/1.1"));
+        let lower = request.to_ascii_lowercase();
+        assert!(lower.contains("x-goog-api-key: gemini-secret"), "missing Gemini auth: {request}");
+        assert!(!lower.contains("authorization: bearer"), "Gemini must not use bearer auth: {request}");
+        assert!(!request.split("\r\n\r\n").nth(1).unwrap_or_default().contains("gemini-secret"));
+
+        let (base_url, server) = mock_json_server(valid_openai_response());
+        let response = OpenAIProvider {
+            model: "gpt-test".into(),
+            api_key: Some("openai-secret".into()),
+            base_url,
+            timeout: Duration::from_secs(5),
+        }
+        .generate("make a plan", &provider_context())
+        .expect("OpenAI contract request");
+        assert_eq!(response.proposal.action, "submit_plan");
+        let request = server.join().expect("OpenAI contract server");
+        assert_request_contract(&request, "/chat/completions", "openai-secret", "gpt-test");
+
+        let (base_url, server) = mock_json_server(valid_anthropic_response());
+        let response = AnthropicProvider {
+            model: "claude-test".into(),
+            api_key: Some("anthropic-secret".into()),
+            base_url,
+            timeout: Duration::from_secs(5),
+        }
+        .generate("make a plan", &provider_context())
+        .expect("Anthropic contract request");
+        assert_eq!(response.proposal.action, "submit_plan");
+        assert_eq!(response.usage.total_tokens, Some(13));
+        let request = server.join().expect("Anthropic contract server");
+        assert!(request.starts_with("POST /messages HTTP/1.1"));
+        let lower = request.to_ascii_lowercase();
+        assert!(lower.contains("x-api-key: anthropic-secret"), "missing Anthropic auth: {request}");
+        assert!(lower.contains(&format!("anthropic-version: {ANTHROPIC_API_VERSION}")));
+        assert!(!request.split("\r\n\r\n").nth(1).unwrap_or_default().contains("anthropic-secret"));
+
+        let (base_url, server) = mock_json_server(valid_openai_response());
+        let response = OpenRouterProvider {
+            model: "vendor/test-model".into(),
+            api_key: Some("openrouter-secret".into()),
+            base_url,
+            timeout: Duration::from_secs(5),
+        }
+        .generate("make a plan", &provider_context())
+        .expect("OpenRouter contract request");
+        assert_eq!(response.proposal.action, "submit_plan");
+        let request = server.join().expect("OpenRouter contract server");
+        assert_request_contract(&request, "/chat/completions", "openrouter-secret", "vendor/test-model");
+    }
 
     #[test]
     fn deepseek_is_the_evaluator_default() {

@@ -37,7 +37,7 @@ The current source of truth is in `engine-rs/crates/secondego-runtime`. The Pyth
 
 ### Current production gaps
 
-1. The provider registry and five required adapters exist, but Gemini/OpenAI/Anthropic/OpenRouter/DeepSeek need live cross-platform contract tests against current provider accounts and model availability.
+1. The provider registry and five required adapters exist, with credential-free localhost transport contract tests covering endpoint, auth header, payload, and response normalization. Live cross-platform account/model availability still needs release-environment rehearsal.
 2. Credentials support multiple named profiles in the desktop and macOS/Linux/Windows terminal paths. Vault migration UX and rotation remain.
 3. The gateway now has a versioned, authenticated profile/provider session and run contract. Replay metadata, workspace ownership, and durable profile/workspace operations remain.
 4. The Electron shell has provider setup and diff review foundations, but still needs release-grade update UX, recovery flows, accessibility hardening, and a fuller workspace information architecture.
@@ -247,7 +247,7 @@ Do not call the local profile model “multi-tenant”. A hosted service would a
 - version every public event and API payload;
 - add migration tests for SQLite schema changes;
 - centralize provider and model defaults;
-- add contract tests for each provider with recorded/redacted fixtures;
+- keep transport contract tests for each provider and add recorded/redacted live-response fixtures without committing credentials;
 - cap all model, tool, output, diff, and event sizes;
 - record safe configuration snapshots for replay;
 - add crash recovery and cancellation tests;
