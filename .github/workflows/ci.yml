@@ -32,6 +32,19 @@ jobs:
           grep -q '"ok": true' doctor.json
           ! grep -q 'ci-placeholder-key' doctor.json
 
+  windows-rust:
+    name: Windows Rust compatibility
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check locked workspace on Windows
+        working-directory: engine-rs
+        run: cargo check --locked --workspace
+      - name: Test CLI profile contract on Windows
+        working-directory: engine-rs
+        run: cargo test --locked -p secondego-cli
+
   web:
     name: Marketing website
     runs-on: ubuntu-latest
