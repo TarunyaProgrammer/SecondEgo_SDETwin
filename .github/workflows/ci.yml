@@ -39,6 +39,9 @@ jobs:
       - name: Build production website
         working-directory: web
         run: npm run build
+      - name: Verify social preview generation
+        working-directory: web
+        run: npm run generate:og
 
   desktop:
     name: Desktop renderer and process checks
@@ -63,3 +66,23 @@ jobs:
           node --check electron/preload.cjs
           node --check electron/credential-store.cjs
           node --check electron/launch.cjs
+          node --check scripts/prepare-release.cjs
+          node --check scripts/write-release-manifest.cjs
+      - name: Validate platform gateway resources
+        working-directory: apps/desktop
+        run: |
+          ruby -e '
+            require "yaml"
+            config = YAML.load_file("electron-builder.yml")
+            expected = {
+              "mac" => ["resources/secondego-gateway", "resources/SecondEgoCredentialHelper"],
+              "win" => ["resources/secondego-gateway.exe"],
+              "linux" => ["resources/secondego-gateway"]
+            }
+            expected.each do |platform, paths|
+              configured = Array(config.fetch(platform).fetch("extraResources")).map { |item| item.fetch("from") }
+              missing = paths - configured
+              abort "#{platform} is missing #{missing.join(", ")}" unless missing.empty?
+            end
+            puts "platform gateway resources ok"
+          '
