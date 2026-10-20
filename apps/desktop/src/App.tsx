@@ -109,15 +109,31 @@ function FindingCard({ finding, onFix }: { finding: DiscoveryFinding; onFix: (fi
 }
 
 function DiffReview({ diff }: { diff: NonNullable<RunResult["diff"]> }) {
+  const fileKeys = diff.files.map((file) => `${file.status}:${file.path}`);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>(() => Object.fromEntries(fileKeys.map((key) => [key, true])));
+  const [copyState, setCopyState] = useState("Copy patch");
+  const allExpanded = fileKeys.length > 0 && fileKeys.every((key) => expanded[key] !== false);
+
+  const copyPatch = async () => {
+    if (!diff.patch || !navigator.clipboard) return;
+    try {
+      await navigator.clipboard.writeText(diff.patch);
+      setCopyState("Copied");
+      window.setTimeout(() => setCopyState("Copy patch"), 1500);
+    } catch {
+      setCopyState("Copy unavailable");
+    }
+  };
+
   return (
     <section className="diff-review" aria-label="Verified file diff">
       <div className="diff-review__heading">
         <div><span className="kicker">Verified patch</span><strong>{diff.files.length} file{diff.files.length === 1 ? "" : "s"} changed</strong></div>
-        <span className="diff-review__state">{diff.truncated ? "bounded / truncated" : "normalized"}</span>
+        <div className="diff-review__tools"><span className="diff-review__state">{diff.truncated ? "bounded / truncated" : "normalized"}</span>{diff.files.length > 0 && <button type="button" onClick={() => setExpanded(Object.fromEntries(fileKeys.map((key) => [key, !allExpanded])))}>{allExpanded ? "Collapse all" : "Expand all"}</button>}{diff.patch && <button type="button" onClick={copyPatch} disabled={!navigator.clipboard}>{copyState}</button>}</div>
       </div>
       <div className="diff-files">
         {diff.files.length ? diff.files.map((file) => (
-          <details className="diff-file" key={`${file.status}:${file.path}`} open>
+          <details className="diff-file" key={`${file.status}:${file.path}`} open={expanded[`${file.status}:${file.path}`] !== false} onToggle={(event) => setExpanded((current) => ({ ...current, [`${file.status}:${file.path}`]: event.currentTarget.open }))}>
             <summary>
               <span className={`diff-file__status diff-file__status--${file.status}`}>{file.status}</span>
               <code>{file.path}</code>
