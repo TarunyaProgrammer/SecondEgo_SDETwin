@@ -22,6 +22,10 @@ const pageMeta: Record<string, PageMeta> = {
     title: "About SecondEgo — Software that knows its edges",
     description: "Learn why SecondEgo is built around local execution, explicit boundaries, and evidence-backed software changes.",
   },
+  "/troubleshooting": {
+    title: "Troubleshooting SecondEgo — Recover with evidence",
+    description: "Resolve gateway, provider, download, and diff issues with bounded recovery steps for SecondEgo.",
+  },
   "/terms": {
     title: "Terms and Conditions — SecondEgo",
     description: "Read the product-facing terms and responsibilities for using SecondEgo.",
