@@ -60,3 +60,12 @@ state. It must remain an observer: the engine owns planning, permissions, tools,
 verification, recovery, and termination. When gestures are enabled, the
 renderer uses the configured camera path and plays a short local chime only
 after a debounced gesture is accepted.
+
+## Release packaging
+
+The Electron Builder configuration produces a DMG on macOS, an NSIS installer
+on Windows, and AppImage/deb artifacts on Linux. The Rust gateway is staged with
+the platform-native executable name (`secondego-gateway` or
+`secondego-gateway.exe`); the macOS credential helper is included only in the
+macOS target. Release jobs write platform-specific manifests and checksums so
+parallel jobs do not overwrite each other's metadata.

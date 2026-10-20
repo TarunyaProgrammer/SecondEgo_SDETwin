@@ -14,8 +14,6 @@ extraResources:
     to: secondego-gateway
     filter:
       - '**/*'
-  - from: resources/SecondEgoCredentialHelper
-    to: SecondEgoCredentialHelper
 mac:
   category: public.app-category.developer-tools
   target:
@@ -25,6 +23,20 @@ mac:
         - x64
   hardenedRuntime: true
   gatekeeperAssess: false
+  extraResources:
+    - from: resources/SecondEgoCredentialHelper
+      to: SecondEgoCredentialHelper
+win:
+  target:
+    - nsis
+  artifactName: SecondEgo-${version}-${arch}.${ext}
+  publisherName: SecondEgo contributors
+linux:
+  category: Development
+  target:
+    - AppImage
+    - deb
+  artifactName: SecondEgo-${version}-${arch}.${ext}
 dmg:
   title: SecondEgo
   artifactName: SecondEgo-${version}-${arch}.dmg

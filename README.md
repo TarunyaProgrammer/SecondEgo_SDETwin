@@ -542,7 +542,7 @@ production coding platform. Known gaps are:
 - telemetry and report schemas are internal rather than organizer-standardized;
 - broad language parsing is incomplete; Python has the strongest indexing support;
 - the benchmark fixture set is small;
-- the Electron shell is an observer, not a packaged installer;
+- the Electron shell has macOS/Windows/Linux packaging definitions, but signed artifacts and update channels still depend on release credentials and CI execution;
 - remote GitHub support is for development rehearsal and public HTTPS sources;
 - private repository credentials and automatic GitHub publishing are intentionally absent;
 - full clean-checkout, cross-process, and real-provider evaluation rehearsal should be performed in the organizer environment.

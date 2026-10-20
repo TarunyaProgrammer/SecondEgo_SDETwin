@@ -392,11 +392,12 @@ ipcMain.handle("secondego:providers:delete", (_event, profile) => {
 
 function startGateway() {
   const token = gatewayToken || (gatewayToken = randomBytes(24).toString("base64url"));
+  const gatewayBinaryName = process.platform === "win32" ? "secondego-gateway.exe" : "secondego-gateway";
   const rustCandidates = [
     process.env.SECONDEGO_GATEWAY_BINARY,
-    app.isPackaged ? path.join(process.resourcesPath, "secondego-gateway") : null,
-    path.join(repoRoot, "engine-rs", "target", "release", "secondego-gateway"),
-    path.join(repoRoot, "engine-rs", "target", "debug", "secondego-gateway"),
+    app.isPackaged ? path.join(process.resourcesPath, gatewayBinaryName) : null,
+    path.join(repoRoot, "engine-rs", "target", "release", gatewayBinaryName),
+    path.join(repoRoot, "engine-rs", "target", "debug", gatewayBinaryName),
   ].filter((candidate) => candidate && fs.existsSync(candidate));
   const rustGateway = rustCandidates.find((candidate) => fs.existsSync(candidate));
   if (!rustGateway && app.isPackaged) {

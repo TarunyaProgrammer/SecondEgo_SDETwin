@@ -4,11 +4,12 @@ const { spawnSync } = require("node:child_process");
 
 const desktopRoot = path.join(__dirname, "..");
 const repositoryRoot = path.join(desktopRoot, "..", "..");
+const gatewayBinaryName = process.platform === "win32" ? "secondego-gateway.exe" : "secondego-gateway";
 const source = process.env.SECONDEGO_GATEWAY_SOURCE
   ? path.resolve(process.env.SECONDEGO_GATEWAY_SOURCE)
-  : path.join(repositoryRoot, "engine-rs", "target", "release", "secondego-gateway");
+  : path.join(repositoryRoot, "engine-rs", "target", "release", gatewayBinaryName);
 const targetDirectory = path.join(desktopRoot, "resources");
-const target = path.join(targetDirectory, "secondego-gateway");
+const target = path.join(targetDirectory, gatewayBinaryName);
 
 if (!fs.existsSync(source)) {
   throw new Error(`Missing release gateway: ${source}. Run cargo build --release -p secondego-gateway first.`);

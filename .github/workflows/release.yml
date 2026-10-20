@@ -76,19 +76,143 @@ jobs:
         env:
           RELEASE_SIGNED: ${{ env.RELEASE_SIGNING_ENABLED }}
           RELEASE_NOTARIZED: ${{ env.RELEASE_NOTARIZATION_ENABLED }}
+          RELEASE_PLATFORM: macOS
+          RELEASE_ARCH: ${{ matrix.arch }}
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: secondego-macos-${{ matrix.arch }}
           path: |
             apps/desktop/release/*.dmg
-            apps/desktop/release/SHA256SUMS.txt
-            apps/desktop/release/release-manifest.json
+            apps/desktop/release/SHA256SUMS-macos-${{ matrix.arch }}.txt
+            apps/desktop/release/release-manifest-macos-${{ matrix.arch }}.json
       - name: Publish release assets
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: |
             apps/desktop/release/*.dmg
-            apps/desktop/release/SHA256SUMS.txt
-            apps/desktop/release/release-manifest.json
+            apps/desktop/release/SHA256SUMS-macos-${{ matrix.arch }}.txt
+            apps/desktop/release/release-manifest-macos-${{ matrix.arch }}.json
+
+  windows:
+    env:
+      RELEASE_SIGNING_ENABLED: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 != '' && 'true' || 'false' }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build Rust gateway
+        working-directory: engine-rs
+        run: cargo build --release --locked -p secondego-gateway
+      - name: Stage gateway for Electron
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force apps/desktop/resources | Out-Null
+          Copy-Item engine-rs/target/release/secondego-gateway.exe apps/desktop/resources/secondego-gateway.exe
+      - name: Install desktop dependencies
+        working-directory: apps/desktop
+        run: npm ci
+      - name: Build desktop renderer and stage release resources
+        working-directory: apps/desktop
+        run: |
+          npm run build
+          npm run prepare-release
+        env:
+          SECONDEGO_GATEWAY_SOURCE: ${{ github.workspace }}\engine-rs\target\release\secondego-gateway.exe
+      - name: Build signed Windows installer
+        if: env.RELEASE_SIGNING_ENABLED == 'true'
+        working-directory: apps/desktop
+        run: npx --yes electron-builder@25.1.8 --win nsis
+        env:
+          CSC_LINK: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'true'
+      - name: Build unsigned Windows installer
+        if: env.RELEASE_SIGNING_ENABLED != 'true'
+        working-directory: apps/desktop
+        run: npx --yes electron-builder@25.1.8 --win nsis
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Generate checksums and release manifest
+        working-directory: apps/desktop
+        run: npm run release-manifest
+        env:
+          RELEASE_SIGNED: ${{ env.RELEASE_SIGNING_ENABLED }}
+          RELEASE_PLATFORM: Windows
+          RELEASE_ARCH: x64
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: secondego-windows
+          path: |
+            apps/desktop/release/*.exe
+            apps/desktop/release/SHA256SUMS-windows-x64.txt
+            apps/desktop/release/release-manifest-windows-x64.json
+      - name: Publish release assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            apps/desktop/release/*.exe
+            apps/desktop/release/SHA256SUMS-windows-x64.txt
+            apps/desktop/release/release-manifest-windows-x64.json
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build Rust gateway
+        working-directory: engine-rs
+        run: cargo build --release --locked -p secondego-gateway
+      - name: Stage gateway for Electron
+        shell: bash
+        run: |
+          mkdir -p apps/desktop/resources
+          cp engine-rs/target/release/secondego-gateway apps/desktop/resources/secondego-gateway
+          chmod 755 apps/desktop/resources/secondego-gateway
+      - name: Install desktop dependencies
+        working-directory: apps/desktop
+        run: npm ci
+      - name: Build desktop renderer and stage release resources
+        working-directory: apps/desktop
+        run: |
+          npm run build
+          npm run prepare-release
+        env:
+          SECONDEGO_GATEWAY_SOURCE: ${{ github.workspace }}/engine-rs/target/release/secondego-gateway
+      - name: Build Linux packages
+        working-directory: apps/desktop
+        run: npx --yes electron-builder@25.1.8 --linux AppImage deb
+      - name: Generate checksums and release manifest
+        working-directory: apps/desktop
+        run: npm run release-manifest
+        env:
+          RELEASE_SIGNED: 'false'
+          RELEASE_PLATFORM: Linux
+          RELEASE_ARCH: x64
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: secondego-linux
+          path: |
+            apps/desktop/release/*.AppImage
+            apps/desktop/release/*.deb
+            apps/desktop/release/SHA256SUMS-linux-x64.txt
+            apps/desktop/release/release-manifest-linux-x64.json
+      - name: Publish release assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            apps/desktop/release/*.AppImage
+            apps/desktop/release/*.deb
+            apps/desktop/release/SHA256SUMS-linux-x64.txt
+            apps/desktop/release/release-manifest-linux-x64.json
