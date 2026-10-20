@@ -82,6 +82,10 @@ export type RunView = {
   mode?: "task" | "discover";
   status: string;
   events: EngineEvent[];
+  event_offset?: number;
+  next_offset?: number;
+  event_count?: number;
+  has_more?: boolean;
   result: RunResult | null;
   error: string | null;
   voice?: VoiceSnapshot;

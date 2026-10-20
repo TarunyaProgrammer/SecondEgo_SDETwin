@@ -190,12 +190,18 @@ X-SecondEgo-Token: <launch token>
 ```
 
 The response includes the next event slice, profile/provider/model metadata,
-current status, safe error data, and a result after termination. A completed
-result contains normalized diff data:
+current status, safe error data, and a result after termination. Event slices
+are capped at 128 events. Use `next_offset` for the following request and stop
+when `has_more` is false; `event_count` is informational and is not a license
+to request an unbounded page. A completed result contains normalized diff data:
 
 ```json
 {
   "api_version":1,
+  "event_offset":0,
+  "next_offset":1,
+  "event_count":1,
+  "has_more":false,
   "changed_paths":["src/pagination.py"],
   "diff_transferred":true,
   "diff":{

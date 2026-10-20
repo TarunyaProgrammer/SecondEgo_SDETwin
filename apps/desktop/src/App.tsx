@@ -411,7 +411,8 @@ function App() {
 
   useEffect(() => {
     const requestId = run?.request_id;
-    if (!requestId || run?.result || run?.error || ["COMPLETE", "FAILED", "CANCELLED", "BLOCKED"].includes(run?.status || "")) return;
+    const terminal = ["COMPLETE", "FAILED", "CANCELLED", "BLOCKED"].includes(run?.status || "");
+    if (!requestId || (run?.result && !run?.has_more) || (run?.error && !run?.has_more) || (terminal && !run?.has_more)) return;
     let cancelled = false;
     const poll = async () => {
       try {
@@ -422,11 +423,13 @@ function App() {
         const next = (await response.json()) as RunView & { error?: string };
         if (!response.ok) throw new Error(next.error || "Could not read this run.");
         if (cancelled) return;
-        offsetRef.current += next.events.length;
+        offsetRef.current = typeof next.next_offset === "number"
+          ? next.next_offset
+          : offset + next.events.length;
         setRun((current) => current && current.request_id === requestId
           ? { ...current, ...next, events: [...current.events, ...next.events] }
           : current);
-        if (next.result || next.error || ["COMPLETE", "FAILED", "CANCELLED", "BLOCKED"].includes(next.status)) {
+        if ((next.result || next.error || ["COMPLETE", "FAILED", "CANCELLED", "BLOCKED"].includes(next.status)) && !next.has_more) {
           setBusy(false);
           setStopping(false);
         }
@@ -439,7 +442,7 @@ function App() {
     void poll();
     const timer = window.setInterval(poll, 750);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [api, run?.error, run?.request_id, run?.result, run?.status, token]);
+  }, [api, run?.error, run?.has_more, run?.request_id, run?.result, run?.status, token]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();

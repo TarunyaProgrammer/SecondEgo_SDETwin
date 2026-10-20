@@ -29,6 +29,7 @@ const MAX_REQUEST_BYTES: usize = 64 * 1024;
 const MAX_ACTIVE_CONNECTIONS: usize = 64;
 const MAX_ACTIVE_RUNS: usize = 32;
 const MAX_IN_MEMORY_RUNS: usize = 256;
+const MAX_EVENTS_PER_RESPONSE: usize = 128;
 const API_VERSION: u32 = 1;
 
 type RunStore = Arc<Mutex<SQLiteRunStore>>;
@@ -1070,11 +1071,11 @@ fn get_run(
         })
         .unwrap_or(0);
     if let Some(record) = runs.lock().unwrap().get(&id).cloned() {
-        let events: Vec<EngineEvent> = record.events.iter().skip(offset).cloned().collect();
+        let (events, next_offset, has_more) = bounded_event_page(&record.events, offset);
         return respond(
             stream,
             200,
-            serde_json::json!({"api_version":API_VERSION,"request_id":id,"repository":record.repository,"issue":record.issue,"profile_id":record.profile_id,"provider":record.provider,"model":record.model,"status":record.status,"events":events,"result":record.report,"error":record.error,"voice":record.voice.snapshot(id)}),
+            serde_json::json!({"api_version":API_VERSION,"request_id":id,"repository":record.repository,"issue":record.issue,"profile_id":record.profile_id,"provider":record.provider,"model":record.model,"status":record.status,"events":events,"event_offset":offset.min(record.events.len()),"next_offset":next_offset,"event_count":record.events.len(),"has_more":has_more,"result":record.report,"error":record.error,"voice":record.voice.snapshot(id)}),
         );
     }
     let stored = store
@@ -1092,6 +1093,8 @@ fn get_run(
         .workspace_id
         .clone()
         .unwrap_or_else(|| stored.state.workspace.clone());
+    let (events, next_offset, has_more) = bounded_event_page(&stored.events, offset);
+    let event_count = stored.events.len();
     respond(
         stream,
         200,
@@ -1104,12 +1107,27 @@ fn get_run(
             "provider": stored.metadata.provider,
             "model": stored.metadata.model,
             "status": status,
-            "events": stored.events.into_iter().skip(offset).collect::<Vec<_>>(),
+            "events": events,
+            "event_offset": offset.min(event_count),
+            "next_offset": next_offset,
+            "event_count": event_count,
+            "has_more": has_more,
             "result": stored.result,
             "error": stored.error,
             "voice": serde_json::Value::Null,
         }),
     )
+}
+
+fn bounded_event_page(
+    events: &[EngineEvent],
+    offset: usize,
+) -> (Vec<EngineEvent>, usize, bool) {
+    let start = offset.min(events.len());
+    let end = start
+        .saturating_add(MAX_EVENTS_PER_RESPONSE)
+        .min(events.len());
+    (events[start..end].to_vec(), end, end < events.len())
 }
 
 fn cancel_run(
@@ -1616,6 +1634,35 @@ mod tests {
         assert_eq!(files[0]["deletions"], 1);
         assert_eq!(files[0]["hunks"][0]["lines"][0]["kind"], "delete");
         assert_eq!(files[0]["hunks"][0]["lines"][1]["content"], "new()");
+    }
+
+    #[test]
+    fn event_pages_are_bounded_and_resume_from_the_next_cursor() {
+        let state = ExecutionState::new("task", "/tmp/repo");
+        let events = (0..(MAX_EVENTS_PER_RESPONSE + 2))
+            .map(|index| {
+                let mut event = secondego_core::EngineEvent::new(&state, "activity.started");
+                event.payload = serde_json::json!({"index": index});
+                event
+            })
+            .collect::<Vec<_>>();
+
+        let (first, next, more) = bounded_event_page(&events, 0);
+        assert_eq!(first.len(), MAX_EVENTS_PER_RESPONSE);
+        assert_eq!(next, MAX_EVENTS_PER_RESPONSE);
+        assert!(more);
+        assert_eq!(first[0].payload["index"], 0);
+
+        let (last, next, more) = bounded_event_page(&events, next);
+        assert_eq!(last.len(), 2);
+        assert_eq!(next, events.len());
+        assert!(!more);
+        assert_eq!(last[1].payload["index"], MAX_EVENTS_PER_RESPONSE + 1);
+
+        let (empty, next, more) = bounded_event_page(&events, usize::MAX);
+        assert!(empty.is_empty());
+        assert_eq!(next, events.len());
+        assert!(!more);
     }
 
     #[test]
