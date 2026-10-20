@@ -151,6 +151,13 @@ export type GestureServiceStatus = {
   timestamp: string;
 };
 
+export type GatewayStatus = {
+  schema_version: 1;
+  state: "starting" | "ready" | "recovering" | "failed";
+  message: string | null;
+  timestamp: string;
+};
+
 export type LandmarkGestureSignal = {
   schema_version: 1;
   gesture: "open_palm" | "pinch";
@@ -167,6 +174,7 @@ declare global {
       setGestureEnabled?: (enabled: boolean) => Promise<GestureServiceStatus>;
       onGesture?: (callback: (event: LandmarkGestureSignal) => void) => () => void;
       onGestureStatus?: (callback: (status: GestureServiceStatus) => void) => () => void;
+      onGatewayStatus?: (callback: (status: GatewayStatus) => void) => () => void;
       listProviderProfiles?: () => Promise<ProviderProfileSnapshot>;
       saveProviderProfile?: (profile: { provider: string; profile: string; model?: string; apiKey: string }) => Promise<ProviderProfile>;
       setActiveProviderProfile?: (profile: { provider: string; profile: string }) => Promise<ProviderProfileSnapshot>;

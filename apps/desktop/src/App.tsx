@@ -3,7 +3,7 @@ import logoUrl from "./assets/secondego-logo.png";
 import { GestureIndicator } from "./components/GestureIndicator";
 import { phaseGroupFor, phaseGroups, VillageScene, workerStateFor, workers } from "./components/VillageScene";
 import { useGestureControl } from "./hooks/useGestureControl";
-import type { DiscoveryFinding, EngineEvent, GestureActionType, GestureEvent, ProviderModel, ProviderProfile, ProviderProfileSnapshot, RunResult, RunSummary, RunView, VoiceSnapshot } from "./types";
+import type { DiscoveryFinding, EngineEvent, GatewayStatus, GestureActionType, GestureEvent, ProviderModel, ProviderProfile, ProviderProfileSnapshot, RunResult, RunSummary, RunView, VoiceSnapshot } from "./types";
 
 const defaultGateway =
   new URLSearchParams(window.location.search).get("gateway") ||
@@ -251,6 +251,7 @@ function App() {
   const [providerDefaultModel, setProviderDefaultModel] = useState("");
   const [providerModelsStatus, setProviderModelsStatus] = useState("");
   const [providerModelsBusy, setProviderModelsBusy] = useState(false);
+  const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus>({ schema_version: 1, state: "ready", message: null, timestamp: new Date().toISOString() });
   const providerKeyRef = useRef<HTMLInputElement>(null);
   const offsetRef = useRef(0);
   const api = useMemo(() => gateway.replace(/\/$/, ""), [gateway]);
@@ -315,6 +316,11 @@ function App() {
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [notchMode]);
+
+  useEffect(() => {
+    const unsubscribe = window.secondEgoWindow?.onGatewayStatus?.(setGatewayStatus);
+    return () => unsubscribe?.();
+  }, []);
 
   useEffect(() => {
     if (!window.secondEgoWindow?.listProviderProfiles) return;
@@ -614,6 +620,7 @@ function App() {
         <div className="brand"><img src={logoUrl} alt="SecondEgo" /><span><strong>SecondEgo</strong><small>local coding harness</small></span></div>
         <div className="app-header-meta"><span className="workspace-badge"><i />local-first</span><div className={`status ${statusTone}`}><i />{run ? statusLabel : "ready"}</div><button className="desktop-settings-trigger" type="button" onClick={() => setShowSettings((open) => !open)} aria-expanded={showSettings} aria-controls="notch-settings" aria-label="Open settings">⚙</button></div>
       </header>
+      {(gatewayStatus.state !== "ready" || gatewayStatus.message) && <div className={`gateway-status-banner gateway-status-banner--${gatewayStatus.state}`} role={gatewayStatus.state === "failed" ? "alert" : "status"}><i aria-hidden="true" /><span>{gatewayStatus.message || (gatewayStatus.state === "recovering" ? "Recovering the local engine…" : gatewayStatus.state === "starting" ? "Starting the local engine…" : "The local engine needs attention.")}</span></div>}
 
       <nav className="workspace-nav" aria-label="Workspace navigation">
         <button type="button" className="workspace-nav__active" onClick={() => { setHistoryOpen(false); setNotchOpen(true); }}>Mission control</button>

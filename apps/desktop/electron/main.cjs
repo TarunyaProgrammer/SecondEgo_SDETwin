@@ -29,6 +29,10 @@ const gesturePort = Number.isInteger(configuredGesturePort) && configuredGesture
 let gatewayProcess;
 let gatewayToken;
 let gatewayKind;
+let gatewayRecoveryTimer;
+let gatewayRecoveryStableTimer;
+let gatewayRecoveryAttempts = 0;
+let shuttingDown = false;
 let restartingGateway = false;
 let mainWindow;
 let gestureProcess;
@@ -40,6 +44,12 @@ let gestureEnabled = process.env.SECONDEGO_GESTURES_ENABLED === "true" || proces
 let gestureStatus = {
   schema_version: 1,
   state: "disabled",
+  message: null,
+  timestamp: new Date().toISOString(),
+};
+let gatewayStatus = {
+  schema_version: 1,
+  state: "starting",
   message: null,
   timestamp: new Date().toISOString(),
 };
@@ -87,6 +97,21 @@ function reserveGatewayPort() {
 function sendGestureStatus() {
   if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
   mainWindow.webContents.send("secondego:gesture-status", gestureStatus);
+}
+
+function sendGatewayStatus() {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
+  mainWindow.webContents.send("secondego:gateway-status", gatewayStatus);
+}
+
+function setGatewayStatus(state, message = null) {
+  gatewayStatus = {
+    schema_version: 1,
+    state,
+    message: typeof message === "string" && message.trim() ? message.trim().slice(0, 280) : null,
+    timestamp: new Date().toISOString(),
+  };
+  sendGatewayStatus();
 }
 
 function setGestureStatus(state, message = null) {
@@ -372,7 +397,10 @@ function createWindow(token) {
     mainWindow.loadFile(path.join(__dirname, "..", "dist", "index.html"), { search: query ? `?${query}` : "" });
   }
 
-  mainWindow.webContents.once("did-finish-load", sendGestureStatus);
+  mainWindow.webContents.once("did-finish-load", () => {
+    sendGestureStatus();
+    sendGatewayStatus();
+  });
 
   mainWindow.once("ready-to-show", () => {
     if (notchMode) mainWindow.showInactive();
@@ -493,6 +521,7 @@ function startGateway() {
   const python = process.env.SECONDEGO_PYTHON || path.join(repoRoot, ".venv", "bin", "python");
   const command = rustGateway || python;
   gatewayKind = rustGateway ? "rust" : "python";
+  setGatewayStatus("starting");
   const args = rustGateway ? [] : ["-m", "SecondEgo.desktop.gateway", "--host", "127.0.0.1", "--port", String(gatewayPort)];
   const credentialSession = activeCredentialSession();
   const providerEnvironment = { ...activeEnvironment() };
@@ -570,7 +599,18 @@ function startGateway() {
     if (announced || announcing) return;
     announcing = true;
     sendProviderSession()
-      .catch((error) => console.error(`Could not load the provider session: ${error.message}`))
+      .then(() => {
+        setGatewayStatus("ready");
+        if (gatewayRecoveryStableTimer) clearTimeout(gatewayRecoveryStableTimer);
+        gatewayRecoveryStableTimer = setTimeout(() => {
+          gatewayRecoveryStableTimer = undefined;
+          gatewayRecoveryAttempts = 0;
+        }, 10000);
+      })
+      .catch((error) => {
+        console.error(`Could not load the provider session: ${error.message}`);
+        setGatewayStatus("ready", "Gateway is ready, but the saved provider session needs attention.");
+      })
       .finally(() => {
         announcing = false;
         announced = true;
@@ -592,14 +632,32 @@ function startGateway() {
   // is observational and can safely retry health/run requests while either
   // process finishes binding its loopback socket.
   setTimeout(announce, 250);
-  gatewayProcess.on("exit", () => {
-    if (restartingGateway) return;
-    if (app.isReady() && mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+  gatewayProcess.on("exit", (code, signal) => {
+    if (restartingGateway || shuttingDown) return;
+    if (gatewayRecoveryStableTimer) {
+      clearTimeout(gatewayRecoveryStableTimer);
+      gatewayRecoveryStableTimer = undefined;
+    }
+    gatewayProcess = undefined;
+    if (!app.isReady()) return;
+    if (gatewayRecoveryAttempts >= 3) {
+      setGatewayStatus("failed", "The local engine stopped repeatedly. Close and reopen SecondEgo to retry.");
+      return;
+    }
+    const attempt = ++gatewayRecoveryAttempts;
+    const delay = Math.min(4000, 300 * (2 ** (attempt - 1)));
+    setGatewayStatus("recovering", `The local engine stopped${code === null ? ` (${signal || "unknown signal"})` : ` (exit ${code}`}${code === null ? "" : ")"}. Restarting…`);
+    if (gatewayRecoveryTimer) clearTimeout(gatewayRecoveryTimer);
+    gatewayRecoveryTimer = setTimeout(() => {
+      gatewayRecoveryTimer = undefined;
+      if (!shuttingDown && app.isReady()) startGateway();
+    }, delay);
   });
 }
 
 function restartGateway() {
   restartingGateway = true;
+  setGatewayStatus("recovering", "Refreshing the local engine…");
   if (gatewayProcess) gatewayProcess.kill();
   setTimeout(() => {
     restartingGateway = false;
@@ -622,17 +680,22 @@ app.whenReady().then(() => {
     });
   }
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow("");
+    if (BrowserWindow.getAllWindows().length === 0) createWindow(gatewayToken || "");
   });
 });
 
 app.on("window-all-closed", () => {
-  if (gatewayProcess) gatewayProcess.kill();
-  stopGestureService();
-  if (process.platform !== "darwin") app.quit();
+  if (process.platform !== "darwin") {
+    if (gatewayProcess) gatewayProcess.kill();
+    stopGestureService();
+    app.quit();
+  }
 });
 
 app.on("before-quit", () => {
+  shuttingDown = true;
+  if (gatewayRecoveryTimer) clearTimeout(gatewayRecoveryTimer);
+  if (gatewayRecoveryStableTimer) clearTimeout(gatewayRecoveryStableTimer);
   if (gatewayProcess) gatewayProcess.kill();
   stopGestureService();
 });

@@ -10,7 +10,11 @@ are held in memory for low-latency polling, while terminal task snapshots,
 events, normalized results, and redacted profile/provider/model metadata are
 written through migration-managed storage. If the gateway restarts, completed
 runs remain readable under the same `request_id` used by the desktop poller;
-cancellation of an active run is inherently process-local.
+cancellation of an active run is inherently process-local. The Electron shell
+keeps the window open during an unexpected gateway exit, retries startup with
+bounded backoff (up to three attempts), and exposes a versioned recovery state
+to the renderer. Repeated failure becomes an explicit user-visible error; it
+does not loop forever or silently attach to another local process.
 
 ## Common rules
 

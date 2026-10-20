@@ -58,6 +58,12 @@ avoids collisions with another local process and prevents the app from
 silently attaching its UI to an unrelated gateway. Set the variable only when
 an explicit stable port is required for development or an integration test.
 
+If the local gateway exits unexpectedly, the Electron shell keeps the UI open,
+shows the current recovery state, and retries with bounded backoff. After three
+failed attempts it stops retrying and presents an explicit error so the user
+can close and reopen the app. Profile changes refresh the Rust gateway session
+in place; they do not restart the process or interrupt an active run.
+
 The launcher explicitly removes `ELECTRON_RUN_AS_NODE`; if that variable is set
 in the parent shell, Electron silently runs as Node.js and no window can open.
 
