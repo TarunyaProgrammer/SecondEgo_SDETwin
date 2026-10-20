@@ -1,6 +1,6 @@
 # SecondEgo product site
 
-Static product and documentation site built with Vite, React, TypeScript, and Framer Motion. The page is organized around activation: provider profiles, terminal/desktop installation paths, HLD/LLD architecture, security boundaries, and links to the source documentation.
+Static product and documentation site built with Vite, React, TypeScript, and Framer Motion. It ships as a dark, red-black product surface with route-aware Home, Docs, Download, About, and Terms pages.
 
 ## Run locally
 
@@ -11,7 +11,9 @@ npm install
 npm run dev
 ```
 
-The static bundle is written to `dist/` by `npm run build`. The site uses Bricolage Grotesque, IBM Plex Sans, and DM Mono with system fallbacks. If a deployment must be fully offline, remove the Google Fonts import in `src/styles.css` and provide local font assets.
+The static bundle is written to `dist/` by `npm run build`. The site uses Manrope, DM Sans, and Instrument Serif with system fallbacks; there is no terminal-style font in the product UI. If a deployment must be fully offline, remove the Google Fonts import in `src/styles.css` and provide local font assets.
+
+Routes are handled by the lightweight client router in `src/App.tsx`: `/`, `/docs`, `/download`, `/about`, and `/terms`. The download page detects macOS, Windows, or Linux from the browser user agent and highlights the matching release card. GitHub Releases remains the source of truth for artifact availability.
 
 ## Production deployment & canonical domain
 
