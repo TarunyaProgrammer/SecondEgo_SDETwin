@@ -230,6 +230,7 @@ The Rust CLI exposes the same safe status without contacting a provider:
 cargo run --manifest-path engine-rs/Cargo.toml -p secondego-cli -- provider list
 cargo run --manifest-path engine-rs/Cargo.toml -p secondego-cli -- provider test
 cargo run --manifest-path engine-rs/Cargo.toml -p secondego-cli -- provider list --json
+cargo run --manifest-path engine-rs/Cargo.toml -p secondego-cli -- completion zsh
 ```
 
 For scripts, add `--json` to a task run to receive a schema-versioned envelope

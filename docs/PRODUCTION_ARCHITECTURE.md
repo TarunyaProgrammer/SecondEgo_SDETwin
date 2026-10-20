@@ -42,7 +42,7 @@ The current source of truth is in `engine-rs/crates/secondego-runtime`. The Pyth
 3. The gateway now has a versioned, authenticated profile/provider session and run contract. Replay metadata, workspace ownership, and durable profile/workspace operations remain.
 4. The Electron shell has provider setup and diff review foundations, but still needs release-grade update UX, recovery flows, accessibility hardening, and a fuller workspace information architecture.
 5. Packaging now has native macOS/Windows/Linux target definitions, platform-specific SHA-256 checksums, and non-colliding release manifests. Signed/notarized artifacts, update channels, and a supported installer contract remain gated on release credentials and CI validation.
-6. The terminal path now has documented native profiles, safe probes, and a schema-versioned profile JSON contract, but still needs a richer TUI, shell completion, and cross-platform smoke tests.
+6. The terminal path now has documented native profiles, safe probes, a schema-versioned profile JSON contract, and built-in bash/zsh/fish completion output, but still needs a richer TUI and cross-platform smoke tests.
 7. The gateway now persists terminal task snapshots through migration-managed SQLite with provider/profile/workspace metadata. Workspace ownership, replay retention, active-run recovery, and multi-user tenancy remain.
 
 ### Increment delivered in this repository

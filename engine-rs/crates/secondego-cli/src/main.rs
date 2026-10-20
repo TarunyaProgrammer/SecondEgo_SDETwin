@@ -63,6 +63,16 @@ fn main() {
         print_help();
         return;
     }
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == "completion" || argument == "completions")
+    {
+        if let Err(error) = print_completion(arguments.get(1).map(String::as_str)) {
+            eprintln!("SecondEgo completion error: {error}");
+            std::process::exit(2);
+        }
+        return;
+    }
     let gc = collect_garbage();
     if gc.deleted > 0 {
         eprintln!(
@@ -301,6 +311,7 @@ fn print_help() {
     println!("  secondego provider profile list [--json] Show saved profile metadata");
     println!("  secondego provider profile add PROVIDER --key-stdin");
     println!("  secondego provider models [--json]       Discover models for the active key");
+    println!("  secondego completion SHELL               Print bash, zsh, or fish completion");
     println!("  secondego help                           Show this command guide");
     println!();
     println!("DISCOVERY SHOWCASE");
@@ -328,6 +339,60 @@ fn print_help() {
         "  4. Explain each finding through its path, line range, confidence, and verification plan."
     );
     println!("  5. Re-run and show the target Git diff is unchanged.");
+}
+
+fn print_completion(shell: Option<&str>) -> Result<(), &'static str> {
+    match shell.unwrap_or("zsh").to_ascii_lowercase().as_str() {
+        "bash" => println!(
+            "{}",
+            r#"_secondego() {
+  local cur="${COMP_WORDS[COMP_CWORD]}"
+  local commands="launch preflight discover provider providers completion completions help"
+  if [[ ${COMP_CWORD} -eq 1 ]]; then
+    COMPREPLY=( $(compgen -W "${commands}" -- "${cur}") )
+    return
+  fi
+  if [[ ${COMP_WORDS[1]} == "provider" || ${COMP_WORDS[1]} == "providers" ]]; then
+    local provider_commands="list status models test profile add use remove help"
+    if [[ ${COMP_CWORD} -eq 2 ]]; then
+      COMPREPLY=( $(compgen -W "${provider_commands}" -- "${cur}") )
+      return
+    fi
+  fi
+}
+complete -F _secondego secondego
+"#
+        ),
+        "zsh" => println!(
+            "{}",
+            r#"#compdef secondego
+
+_secondego() {
+  _arguments '1:command:(launch preflight discover provider providers completion completions help)' \
+    '*::argument:->args'
+  case "$words[2]" in
+    provider|providers)
+      _arguments '2:provider command:(list status models test profile add use remove help)'
+      ;;
+    completion|completions)
+      _arguments '2:shell:(bash zsh fish)'
+      ;;
+  esac
+}
+
+_secondego "$@"
+"#
+        ),
+        "fish" => println!(
+            "{}",
+            r#"complete -c secondego -f -n '__fish_use_subcommand' -a 'launch preflight discover provider providers completion completions help'
+complete -c secondego -f -n '__fish_seen_subcommand_from provider providers; and test (count (commandline -opc)) -eq 2' -a 'list status models test profile add use remove help'
+complete -c secondego -f -n '__fish_seen_subcommand_from completion completions; and test (count (commandline -opc)) -eq 2' -a 'bash zsh fish'
+"#
+        ),
+        _ => return Err("shell must be bash, zsh, or fish"),
+    }
+    Ok(())
 }
 
 fn run_provider_command(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {

@@ -54,6 +54,14 @@ The profile JSON contract never contains a key or vault value. Use it from
 launchers, shell integrations, or the desktop bridge when they need to render
 profile selection without parsing human-oriented output.
 
+The CLI also emits dependency-free shell completion scripts:
+
+```bash
+secondego completion zsh > "${fpath[1]}/_secondego"
+secondego completion bash > ~/.local/share/bash-completion/completions/secondego
+secondego completion fish > ~/.config/fish/completions/secondego.fish
+```
+
 On macOS, secrets are stored in Keychain. On Windows, terminal profiles use
 Windows Credential Manager. On Linux, secrets are stored in Secret
 Service/libsecret through `secret-tool`. `profiles.json` contains only
