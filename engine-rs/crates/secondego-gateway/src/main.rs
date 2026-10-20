@@ -491,6 +491,10 @@ fn create_run(
         return respond(stream, 400, serde_json::json!({"error":error.to_string()}));
     }
     let is_discovery = request.mode.as_deref() == Some("discover");
+    // Capture the session before deriving any run metadata. Provider, model,
+    // profile id, and the worker credential must all come from one coherent
+    // point in time, even if the user switches profiles concurrently.
+    let run_session = session_snapshot(credentials);
     if let Some(profile_id) = request.profile_id.as_deref()
         && !valid_profile_id(profile_id)
     {
@@ -501,7 +505,7 @@ fn create_run(
         );
     }
     if let Some(profile_id) = request.profile_id.as_deref()
-        && active_profile_id(credentials).as_deref() != Some(profile_id)
+        && run_session.as_ref().map(|session| session.profile_id.as_str()) != Some(profile_id)
         && env::var("SECONDEGO_PROFILE_ID").ok().as_deref() != Some(profile_id)
     {
         return respond(
@@ -513,7 +517,11 @@ fn create_run(
     let model = match request.model.filter(|model| !model.trim().is_empty()) {
         Some(model) => model,
         None if is_discovery => "deterministic-discovery".into(),
-        None => match active_model(credentials).or_else(|| configured_model().ok()) {
+        None => match run_session
+            .as_ref()
+            .map(|session| session.model.clone())
+            .or_else(|| configured_model().ok())
+        {
             Some(model) => model,
             None => {
                 return respond(
@@ -527,14 +535,14 @@ fn create_run(
     let profile_id = request
         .profile_id
         .clone()
-        .or_else(|| active_profile_id(credentials))
+        .or_else(|| run_session.as_ref().map(|session| session.profile_id.clone()))
         .or_else(|| env::var("SECONDEGO_PROFILE_ID").ok());
     let provider = if is_discovery {
         "discovery".to_owned()
     } else {
-        active_provider_kind(credentials)
-            .ok()
-            .map(|provider| provider.name().to_owned())
+        run_session
+            .as_ref()
+            .map(|session| session.provider.name().to_owned())
             .or_else(|| secondego_model::ProviderKind::from_environment().ok().map(|provider| provider.name().to_owned()))
             .unwrap_or_else(|| "unknown".into())
     };
@@ -587,10 +595,6 @@ fn create_run(
     let run_cancellation = cancellation.clone();
     let run_voice = voice.clone();
     let run_store = store.clone();
-    // Freeze the credential session at enqueue time. A later profile switch
-    // must affect only later runs; an in-flight run must never change model
-    // or credentials halfway through its isolated attempt.
-    let run_session = session_snapshot(credentials);
     thread::spawn(move || {
         let resolved =
             match resolve_repository_with_cancellation(&record_repository, Some(&run_cancellation))
