@@ -1,6 +1,6 @@
 # SecondEgo product site
 
-Static product and documentation site built with Vite, React, TypeScript, and Framer Motion. It ships as a dark, red-black product surface with route-aware Home, Docs, Download, About, and Terms pages.
+Static product and documentation site built with Vite, React, and TypeScript. It ships as a dark, red-black product surface with route-aware Home, Docs, Download, About, Troubleshooting, and Terms pages.
 
 ## Run locally
 
@@ -11,9 +11,9 @@ npm install
 npm run dev
 ```
 
-The static bundle is written to `dist/` by `npm run build`. The site uses Manrope, DM Sans, and Instrument Serif with system fallbacks; there is no terminal-style font in the product UI. If a deployment must be fully offline, remove the Google Fonts import in `src/styles.css` and provide local font assets.
+The static bundle is written to `dist/` by `npm run build`. The site uses Manrope, DM Sans, and Cormorant Garamond with system fallbacks; there is no terminal-style font in the product UI. If a deployment must be fully offline, remove the Google Fonts import in `src/styles.css` and provide local font assets.
 
-Routes are handled by the lightweight client router in `src/App.tsx`: `/`, `/docs`, `/download`, `/about`, `/terms`, and `/terms-and-conditions`. The download page detects macOS, Windows, or Linux from the browser user agent and highlights the matching release card. The website is the only public download gateway; a platform is enabled only when its exact signed artifact URL is configured at build time.
+Routes are handled by the lightweight client router in `src/App.tsx`: `/`, `/docs`, `/download`, `/about`, `/troubleshooting`, `/terms`, and `/terms-and-conditions`. The download page detects macOS, Windows, or Linux from the browser user agent and highlights the matching release card. The website is the only public download gateway; a platform is enabled only when its exact signed artifact URL is configured at build time.
 
 Published deployments can promote exact artifact links without changing the UI:
 
