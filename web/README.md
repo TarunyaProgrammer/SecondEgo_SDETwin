@@ -15,6 +15,19 @@ The static bundle is written to `dist/` by `npm run build`. The site uses Manrop
 
 Routes are handled by the lightweight client router in `src/App.tsx`: `/`, `/docs`, `/download`, `/about`, and `/terms`. The download page detects macOS, Windows, or Linux from the browser user agent and highlights the matching release card. GitHub Releases remains the source of truth for artifact availability.
 
+Published deployments can promote exact artifact links without changing the UI:
+
+```bash
+VITE_DOWNLOAD_MAC_URL="https://.../SecondEgo-arm64.dmg" \\
+VITE_DOWNLOAD_WINDOWS_URL="https://.../SecondEgo-x64.exe" \\
+VITE_DOWNLOAD_LINUX_URL="https://.../SecondEgo-x64.AppImage" \\
+npm run build
+```
+
+When a URL is absent, the platform card stays honest and links to the project
+release/source page instead of fabricating a download. This lets the website
+remain deployable before the first signed artifacts exist.
+
 The included `public/_redirects` and `vercel.json` keep those history routes working on common static hosts. Configure an equivalent SPA fallback if deploying elsewhere.
 
 ## Production deployment & canonical domain

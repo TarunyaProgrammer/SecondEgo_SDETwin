@@ -86,6 +86,16 @@ export const siteConfig = {
   ],
 } as const;
 
+// Release jobs can provide exact artifact URLs at build time. Until they do,
+// the download page deliberately falls back to the public release index rather
+// than inventing a file that may not exist.
+const releaseEnv = typeof import.meta !== "undefined" ? import.meta.env : undefined;
+export const downloadConfig = {
+  macOS: releaseEnv?.VITE_DOWNLOAD_MAC_URL || "",
+  windows: releaseEnv?.VITE_DOWNLOAD_WINDOWS_URL || "",
+  linux: releaseEnv?.VITE_DOWNLOAD_LINUX_URL || "",
+} as const;
+
 /**
  * Returns an absolute canonical URL for a given path.
  */
