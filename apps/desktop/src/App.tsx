@@ -659,7 +659,7 @@ function App() {
           <header><span>Companion settings</span><button type="button" onClick={() => setShowSettings(false)} aria-label="Close companion settings">×</button></header>
           <section className="provider-settings">
             <strong>Model provider</strong>
-            <p>Keys are encrypted with the operating system vault. They never enter the gateway API, SQLite, or React state.</p>
+            <p>Keys are stored in the operating system vault. The selected key is sent once through an authenticated local session and held in gateway memory only; it never enters SQLite, logs, or React state.</p>
             <div className="provider-form-grid">
               <label><span>Provider</span><select value={providerChoice} onChange={(event) => setProviderChoice(event.target.value)} disabled={providerBusy}><option value="deepseek">DeepSeek</option><option value="gemini">Gemini</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="openrouter">OpenRouter</option><option value="groq">Groq</option></select></label>
               <label><span>Profile</span><input value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="default" disabled={providerBusy} /></label>
